@@ -1,0 +1,95 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-12-24 06:57:45.724748",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "attribute",
+  "value",
+  "numeric_value",
+  "display_value",
+  "affects_naming",
+  "affects_code",
+  "searchable",
+  "sequence",
+  "is_active"
+ ],
+ "fields": [
+  {
+   "fieldname": "attribute",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Attribute",
+   "options": "Textile Attribute",
+   "reqd": 1
+  },
+  {
+   "fieldname": "value",
+   "fieldtype": "Link",
+   "label": "Value",
+   "options": "Textile Attribute Value"
+  },
+  {
+   "fieldname": "numeric_value",
+   "fieldtype": "Float",
+   "label": "Numeric Value"
+  },
+  {
+   "fieldname": "display_value",
+   "fieldtype": "Data",
+   "label": "Display Value",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "affects_naming",
+   "fieldtype": "Check",
+   "label": "Affects Naming",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "affects_code",
+   "fieldtype": "Check",
+   "label": "Affects Code",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "searchable",
+   "fieldtype": "Check",
+   "label": "Searchable",
+   "read_only": 1
+  },
+  {
+   "fieldname": "sequence",
+   "fieldtype": "Int",
+   "label": "Sequence",
+   "read_only": 1
+  },
+  {
+   "default": "0",
+   "fieldname": "is_active",
+   "fieldtype": "Check",
+   "label": "Is Active",
+   "read_only": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2025-12-24 07:02:38.384124",
+ "modified_by": "Administrator",
+ "module": "Kniterp",
+ "name": "Item Textile Attribute",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
