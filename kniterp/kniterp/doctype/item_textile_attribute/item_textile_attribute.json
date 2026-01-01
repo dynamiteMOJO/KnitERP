@@ -6,19 +6,21 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "attribute",
-  "value",
-  "numeric_value",
-  "display_value",
-  "affects_naming",
-  "affects_code",
-  "searchable",
-  "sequence",
-  "is_active"
+  "kniterp_attribute",
+  "kniterp_value",
+  "kniterp_numeric_value",
+  "kniterp_display_value",
+  "kniterp_affects_naming",
+  "kniterp_affects_code",
+  "kniterp_searchable",
+  "kniterp_sequence",
+  "kniterp_is_active",
+  "kniterp_short_code",
+  "kniterp_field_type"
  ],
  "fields": [
   {
-   "fieldname": "attribute",
+   "fieldname": "kniterp_attribute",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Attribute",
@@ -26,54 +28,67 @@
    "reqd": 1
   },
   {
-   "fieldname": "value",
+   "fieldname": "kniterp_value",
    "fieldtype": "Link",
    "label": "Value",
+   "link_filters": "[[\"Textile Attribute Value\",\"kniterp_attribute\",\"=\",\"eval: doc.kniterp_attribute\"]]",
    "options": "Textile Attribute Value"
   },
   {
-   "fieldname": "numeric_value",
+   "fieldname": "kniterp_numeric_value",
    "fieldtype": "Float",
    "label": "Numeric Value"
   },
   {
-   "fieldname": "display_value",
+   "fieldname": "kniterp_display_value",
    "fieldtype": "Data",
    "label": "Display Value",
    "read_only": 1
   },
   {
    "default": "0",
-   "fieldname": "affects_naming",
+   "fieldname": "kniterp_affects_naming",
    "fieldtype": "Check",
    "label": "Affects Naming",
    "read_only": 1
   },
   {
    "default": "0",
-   "fieldname": "affects_code",
+   "fieldname": "kniterp_affects_code",
    "fieldtype": "Check",
    "label": "Affects Code",
    "read_only": 1
   },
   {
    "default": "0",
-   "fieldname": "searchable",
+   "fieldname": "kniterp_searchable",
    "fieldtype": "Check",
    "label": "Searchable",
    "read_only": 1
   },
   {
-   "fieldname": "sequence",
+   "fieldname": "kniterp_sequence",
    "fieldtype": "Int",
    "label": "Sequence",
    "read_only": 1
   },
   {
    "default": "0",
-   "fieldname": "is_active",
+   "fieldname": "kniterp_is_active",
    "fieldtype": "Check",
    "label": "Is Active",
+   "read_only": 1
+  },
+  {
+   "fieldname": "kniterp_short_code",
+   "fieldtype": "Data",
+   "label": "Short Code",
+   "read_only": 1
+  },
+  {
+   "fieldname": "kniterp_field_type",
+   "fieldtype": "Data",
+   "label": "Field Type",
    "read_only": 1
   }
  ],
@@ -81,7 +96,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-12-24 07:02:38.384124",
+ "modified": "2025-12-28 08:57:55.090120",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "Item Textile Attribute",

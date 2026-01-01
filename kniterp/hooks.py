@@ -28,6 +28,11 @@ app_license = "mit"
 # app_include_css = "/assets/kniterp/css/kniterp.css"
 # app_include_js = "/assets/kniterp/js/kniterp.js"
 
+app_include_js = [
+    "/assets/kniterp/js/item_selector_dialog.js",
+    "/assets/kniterp/js/item_selector_form_botton.js"
+]
+
 # include js, css files in header of web template
 # web_include_css = "/assets/kniterp/css/kniterp.css"
 # web_include_js = "/assets/kniterp/js/kniterp.js"
@@ -132,6 +137,10 @@ app_license = "mit"
 # override_doctype_class = {
 # 	"ToDo": "custom_app.overrides.CustomToDo"
 # }
+
+override_doctype_class = {
+    "Item": "kniterp.kniterp.overrides.item.CustomItem"
+}
 
 # Document Events
 # ---------------
