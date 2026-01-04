@@ -33,6 +33,16 @@ app_include_js = [
     "/assets/kniterp/js/item_selector_form_botton.js"
 ]
 
+override_doctype_class = {
+    "Item": "kniterp.kniterp.overrides.item.CustomItem"
+}
+
+fixtures = [
+        "Textile Attribute",
+        "Textile Attribute Value",
+        "Item Attribute Applies To Values",
+]
+
 # include js, css files in header of web template
 # web_include_css = "/assets/kniterp/css/kniterp.css"
 # web_include_js = "/assets/kniterp/js/kniterp.js"
@@ -138,9 +148,7 @@ app_include_js = [
 # 	"ToDo": "custom_app.overrides.CustomToDo"
 # }
 
-override_doctype_class = {
-    "Item": "kniterp.kniterp.overrides.item.CustomItem"
-}
+
 
 # Document Events
 # ---------------

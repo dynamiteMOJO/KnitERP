@@ -1,0 +1,16 @@
+[
+ {
+  "docstatus": 0,
+  "doctype": "Item Attribute Applies To Values",
+  "modified": "2025-12-23 16:15:31.362424",
+  "name": "Yarn",
+  "type_of_item": "Yarn"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Item Attribute Applies To Values",
+  "modified": "2025-12-23 16:15:25.128356",
+  "name": "Fabric",
+  "type_of_item": "Fabric"
+ }
+]
