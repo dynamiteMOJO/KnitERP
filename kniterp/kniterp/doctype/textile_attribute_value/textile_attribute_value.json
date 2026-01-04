@@ -1,21 +1,21 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "format:{value}",
+ "autoname": "format:{kniterp_value}",
  "creation": "2025-12-23 16:21:56.074051",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "attribute",
-  "value",
-  "short_code",
-  "sort_order",
-  "is_active",
-  "description"
+  "kniterp_attribute",
+  "kniterp_value",
+  "kniterp_short_code",
+  "kniterp_sort_order",
+  "kniterp_is_active",
+  "kniterp_description"
  ],
  "fields": [
   {
-   "fieldname": "attribute",
+   "fieldname": "kniterp_attribute",
    "fieldtype": "Link",
    "in_list_view": 1,
    "label": "Attribute",
@@ -23,32 +23,32 @@
    "reqd": 1
   },
   {
-   "fieldname": "value",
+   "fieldname": "kniterp_value",
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Value",
    "reqd": 1
   },
   {
-   "fieldname": "short_code",
+   "fieldname": "kniterp_short_code",
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Short Code"
   },
   {
    "default": "10",
-   "fieldname": "sort_order",
+   "fieldname": "kniterp_sort_order",
    "fieldtype": "Int",
    "label": "Sort Order"
   },
   {
    "default": "1",
-   "fieldname": "is_active",
+   "fieldname": "kniterp_is_active",
    "fieldtype": "Check",
    "label": "Is Active"
   },
   {
-   "fieldname": "description",
+   "fieldname": "kniterp_description",
    "fieldtype": "Small Text",
    "label": "Description"
   }

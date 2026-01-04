@@ -1,27 +1,27 @@
 {
  "actions": [],
  "allow_rename": 1,
- "autoname": "format:{attribute_name}",
+ "autoname": "format:{kniterp_attribute_name}",
  "creation": "2025-12-23 14:50:14.724566",
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "attribute_name",
-  "attribute_code",
-  "applies_to",
-  "field_type",
-  "use_value_master",
-  "is_mandatory",
-  "affects_naming",
-  "affects_code",
-  "searchable",
-  "sequence",
-  "is_active",
-  "description"
+  "kniterp_attribute_name",
+  "kniterp_attribute_code",
+  "kniterp_applies_to",
+  "kniterp_field_type",
+  "kniterp_use_value_master",
+  "kniterp_is_mandatory",
+  "kniterp_affects_naming",
+  "kniterp_affects_code",
+  "kniterp_searchable",
+  "kniterp_sequence",
+  "kniterp_is_active",
+  "kniterp_description"
  ],
  "fields": [
   {
-   "fieldname": "attribute_name",
+   "fieldname": "kniterp_attribute_name",
    "fieldtype": "Data",
    "in_list_view": 1,
    "label": "Attribute Name",
@@ -29,7 +29,7 @@
    "unique": 1
   },
   {
-   "fieldname": "attribute_code",
+   "fieldname": "kniterp_attribute_code",
    "fieldtype": "Data",
    "label": "Attribute Code",
    "reqd": 1,
@@ -37,14 +37,14 @@
   },
   {
    "default": "0",
-   "fieldname": "applies_to",
+   "fieldname": "kniterp_applies_to",
    "fieldtype": "Table MultiSelect",
    "label": "Applies To",
    "options": "Item Attribute Applies To",
    "reqd": 1
   },
   {
-   "fieldname": "field_type",
+   "fieldname": "kniterp_field_type",
    "fieldtype": "Select",
    "label": "Field Type",
    "options": "Select\nInt\nFloat\nData",
@@ -52,48 +52,48 @@
   },
   {
    "default": "0",
-   "fieldname": "use_value_master",
+   "fieldname": "kniterp_use_value_master",
    "fieldtype": "Check",
    "label": "Use Value Master"
   },
   {
    "default": "0",
-   "fieldname": "is_mandatory",
+   "fieldname": "kniterp_is_mandatory",
    "fieldtype": "Check",
    "label": "Is Mandatory"
   },
   {
    "default": "0",
-   "fieldname": "affects_naming",
+   "fieldname": "kniterp_affects_naming",
    "fieldtype": "Check",
    "label": "Affects Naming"
   },
   {
    "default": "0",
-   "fieldname": "affects_code",
+   "fieldname": "kniterp_affects_code",
    "fieldtype": "Check",
    "label": "Affects Code"
   },
   {
    "default": "0",
-   "fieldname": "searchable",
+   "fieldname": "kniterp_searchable",
    "fieldtype": "Check",
    "label": "Searchable"
   },
   {
-   "fieldname": "sequence",
+   "fieldname": "kniterp_sequence",
    "fieldtype": "Int",
    "label": "Sequence",
    "reqd": 1
   },
   {
    "default": "1",
-   "fieldname": "is_active",
+   "fieldname": "kniterp_is_active",
    "fieldtype": "Check",
    "label": "Is Active"
   },
   {
-   "fieldname": "description",
+   "fieldname": "kniterp_description",
    "fieldtype": "Small Text",
    "label": "Description"
   }

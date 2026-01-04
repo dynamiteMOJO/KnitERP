@@ -1,0 +1,36 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-12-23 16:01:41.980494",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "item_attribute_applies_to"
+ ],
+ "fields": [
+  {
+   "fieldname": "item_attribute_applies_to",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Item Attribute Applies To",
+   "options": "Item Attribute Applies To - Values",
+   "reqd": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-01-04 08:10:52.734663",
+ "modified_by": "Administrator",
+ "module": "Kniterp",
+ "name": "Item Attribute Applies To",
+ "owner": "Administrator",
+ "permissions": [],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
