@@ -41,7 +41,8 @@ fixtures = [
         "Textile Attribute",
         "Textile Attribute Value",
         "Item Attribute Applies To Values",
-        "Client Script"
+        "Client Script",
+        "Property Setter"
 ]
 
 # include js, css files in header of web template
