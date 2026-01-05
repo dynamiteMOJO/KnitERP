@@ -5,5 +5,5 @@
 from frappe.model.document import Document
 
 
-class ItemAttributeValue(Document):
+class TextileAttributeValue(Document):
 	pass
