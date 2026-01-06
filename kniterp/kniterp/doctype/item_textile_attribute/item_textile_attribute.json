@@ -30,6 +30,7 @@
   {
    "fieldname": "kniterp_value",
    "fieldtype": "Link",
+   "in_list_view": 1,
    "label": "Value",
    "link_filters": "[[\"Textile Attribute Value\",\"kniterp_attribute\",\"=\",\"eval: doc.kniterp_attribute\"]]",
    "options": "Textile Attribute Value"
@@ -37,11 +38,13 @@
   {
    "fieldname": "kniterp_numeric_value",
    "fieldtype": "Float",
+   "in_list_view": 1,
    "label": "Numeric Value"
   },
   {
    "fieldname": "kniterp_display_value",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Display Value",
    "read_only": 1
   },
@@ -96,7 +99,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-12-28 08:57:55.090120",
+ "modified": "2026-01-05 13:49:16.410963",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "Item Textile Attribute",

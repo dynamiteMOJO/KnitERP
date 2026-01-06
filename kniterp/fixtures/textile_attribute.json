@@ -44,41 +44,10 @@
   "kniterp_is_active": 1,
   "kniterp_is_mandatory": 1,
   "kniterp_searchable": 1,
-  "kniterp_sequence": 20,
+  "kniterp_sequence": 50,
   "kniterp_use_value_master": 1,
-  "modified": "2025-12-26 15:49:25.797079",
+  "modified": "2026-01-05 18:40:52.710152",
   "name": "Fabric Structure"
- },
- {
-  "docstatus": 0,
-  "doctype": "Textile Attribute",
-  "kniterp_affects_code": 1,
-  "kniterp_affects_naming": 1,
-  "kniterp_applies_to": [
-   {
-    "item_attribute_applies_to": "Fabric",
-    "parent": "Composition (Fiber / Blend)",
-    "parentfield": "kniterp_applies_to",
-    "parenttype": "Textile Attribute"
-   },
-   {
-    "item_attribute_applies_to": "Yarn",
-    "parent": "Composition (Fiber / Blend)",
-    "parentfield": "kniterp_applies_to",
-    "parenttype": "Textile Attribute"
-   }
-  ],
-  "kniterp_attribute_code": "cmp",
-  "kniterp_attribute_name": "Composition (Fiber / Blend)",
-  "kniterp_description": null,
-  "kniterp_field_type": "Select",
-  "kniterp_is_active": 1,
-  "kniterp_is_mandatory": 0,
-  "kniterp_searchable": 1,
-  "kniterp_sequence": 20,
-  "kniterp_use_value_master": 1,
-  "modified": "2025-12-26 15:49:12.981122",
-  "name": "Composition (Fiber / Blend)"
  },
  {
   "docstatus": 0,
@@ -197,5 +166,92 @@
   "kniterp_use_value_master": 1,
   "modified": "2025-12-26 15:31:56.864245",
   "name": "Yarn Spec"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Textile Attribute",
+  "kniterp_affects_code": 1,
+  "kniterp_affects_naming": 1,
+  "kniterp_applies_to": [
+   {
+    "item_attribute_applies_to": "Fabric",
+    "parent": "Knit Structure",
+    "parentfield": "kniterp_applies_to",
+    "parenttype": "Textile Attribute"
+   }
+  ],
+  "kniterp_attribute_code": "KNTSTR",
+  "kniterp_attribute_name": "Knit Structure",
+  "kniterp_description": null,
+  "kniterp_field_type": "Select",
+  "kniterp_is_active": 1,
+  "kniterp_is_mandatory": 0,
+  "kniterp_searchable": 1,
+  "kniterp_sequence": 40,
+  "kniterp_use_value_master": 1,
+  "modified": "2026-01-05 18:45:36.446754",
+  "name": "Knit Structure"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Textile Attribute",
+  "kniterp_affects_code": 1,
+  "kniterp_affects_naming": 1,
+  "kniterp_applies_to": [
+   {
+    "item_attribute_applies_to": "Fabric",
+    "parent": "Composition (Fiber / Blend)",
+    "parentfield": "kniterp_applies_to",
+    "parenttype": "Textile Attribute"
+   },
+   {
+    "item_attribute_applies_to": "Yarn",
+    "parent": "Composition (Fiber / Blend)",
+    "parentfield": "kniterp_applies_to",
+    "parenttype": "Textile Attribute"
+   }
+  ],
+  "kniterp_attribute_code": "cmp",
+  "kniterp_attribute_name": "Composition (Fiber / Blend)",
+  "kniterp_description": null,
+  "kniterp_field_type": "Select",
+  "kniterp_is_active": 1,
+  "kniterp_is_mandatory": 0,
+  "kniterp_searchable": 1,
+  "kniterp_sequence": 20,
+  "kniterp_use_value_master": 1,
+  "modified": "2025-12-26 15:49:12.981122",
+  "name": "Composition (Fiber / Blend)"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Textile Attribute",
+  "kniterp_affects_code": 1,
+  "kniterp_affects_naming": 1,
+  "kniterp_applies_to": [
+   {
+    "item_attribute_applies_to": "Fabric",
+    "parent": "Elastane",
+    "parentfield": "kniterp_applies_to",
+    "parenttype": "Textile Attribute"
+   },
+   {
+    "item_attribute_applies_to": "Yarn",
+    "parent": "Elastane",
+    "parentfield": "kniterp_applies_to",
+    "parenttype": "Textile Attribute"
+   }
+  ],
+  "kniterp_attribute_code": "ELTN",
+  "kniterp_attribute_name": "Elastane",
+  "kniterp_description": null,
+  "kniterp_field_type": "Select",
+  "kniterp_is_active": 1,
+  "kniterp_is_mandatory": 0,
+  "kniterp_searchable": 0,
+  "kniterp_sequence": 30,
+  "kniterp_use_value_master": 1,
+  "modified": "2026-01-05 18:38:15.258099",
+  "name": "Elastane"
  }
 ]
