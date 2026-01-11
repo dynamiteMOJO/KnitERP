@@ -37,6 +37,13 @@ override_doctype_class = {
     "Item": "kniterp.kniterp.overrides.item.CustomItem"
 }
 
+doc_events = {
+    "Salary Slip": {
+        "before_save": "kniterp.payroll.calculate_variable_pay"
+    }
+}
+
+
 fixtures = [
         "Textile Attribute",
         "Textile Attribute Value",
