@@ -51,6 +51,7 @@ fixtures = [
         "Machine Attendance Tool",
         "Machine Attendance",
         "Monthly Conveyance",
+        "Designation",
         "Client Script",
         "Property Setter",
 
