@@ -20,7 +20,6 @@
    "reqd": 1
   },
   {
-   "default": "Omesta",
    "fieldname": "company",
    "fieldtype": "Link",
    "label": "Company",
@@ -42,7 +41,7 @@
  "hide_toolbar": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-01-10 06:53:26.594698",
+ "modified": "2026-01-12 21:19:37.932046",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "Machine Attendance Tool",

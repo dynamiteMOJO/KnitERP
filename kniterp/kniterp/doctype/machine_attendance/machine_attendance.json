@@ -43,7 +43,6 @@
    "reqd": 1
   },
   {
-   "default": "Omesta",
    "fieldname": "company",
    "fieldtype": "Link",
    "label": "Company",
@@ -59,7 +58,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-01-09 07:44:20.319898",
+ "modified": "2026-01-12 21:19:20.832861",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "Machine Attendance",
