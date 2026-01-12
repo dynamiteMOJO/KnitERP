@@ -446,6 +446,30 @@
  {
   "docstatus": 0,
   "doctype": "Textile Attribute Value",
+  "kniterp_attribute": "Yarn Spec",
+  "kniterp_description": null,
+  "kniterp_is_active": 1,
+  "kniterp_short_code": "70DN",
+  "kniterp_sort_order": 10,
+  "kniterp_value": "70DN",
+  "modified": "2026-01-06 20:41:56.599051",
+  "name": "70DN"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Textile Attribute Value",
+  "kniterp_attribute": "Yarn Spec",
+  "kniterp_description": null,
+  "kniterp_is_active": 1,
+  "kniterp_short_code": "90DN",
+  "kniterp_sort_order": 10,
+  "kniterp_value": "90 DN",
+  "modified": "2026-01-06 20:43:34.952131",
+  "name": "90 DN"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Textile Attribute Value",
   "kniterp_attribute": "Composition (Fiber / Blend)",
   "kniterp_description": null,
   "kniterp_is_active": 1,
