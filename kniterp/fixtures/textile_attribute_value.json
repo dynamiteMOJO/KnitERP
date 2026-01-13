@@ -2,6 +2,18 @@
  {
   "docstatus": 0,
   "doctype": "Textile Attribute Value",
+  "kniterp_attribute": "Composition (Fiber / Blend)",
+  "kniterp_description": null,
+  "kniterp_is_active": 1,
+  "kniterp_short_code": "CTN ORG",
+  "kniterp_sort_order": 10,
+  "kniterp_value": "Cotton Organic",
+  "modified": "2026-01-13 12:07:24.410364",
+  "name": "Cotton Organic"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Textile Attribute Value",
   "kniterp_attribute": "Yarn Spec",
   "kniterp_description": null,
   "kniterp_is_active": 1,
