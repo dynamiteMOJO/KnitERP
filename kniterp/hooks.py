@@ -33,6 +33,10 @@ app_include_js = [
     "/assets/kniterp/js/item_selector_form_botton.js"
 ]
 
+app_include_css = [
+    "/assets/kniterp/css/kniterp.css"
+]
+
 override_doctype_class = {
     "Item": "kniterp.kniterp.overrides.item.CustomItem"
 }

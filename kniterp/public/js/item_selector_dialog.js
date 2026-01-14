@@ -1,334 +1,294 @@
-// ===============================
-// 1️⃣ STATE
-// ===============================
-let kniterp_selector_state = {
-    classification: null,
-    attributes: {}
+// ======================================================
+// KNITERP ITEM SELECTOR (TABLE + QUICK ADD)
+// ======================================================
+
+window.kniterp_open_item_selector = function (opts = {}) {
+
+    const state = {
+        classification: null,
+        attributes: []   // same structure as Item Textile Attribute
+    };
+
+    const dialog = new frappe.ui.Dialog({
+        title: __("Select Item by Attributes"),
+        size: "large",
+        fields: [
+            {
+                fieldtype: "Select",
+                fieldname: "classification",
+                label: __("Item Classification"),
+                options: ["Fabric", "Yarn"],
+                reqd: 1,
+                onchange() {
+                    state.classification = dialog.get_value("classification");
+                    state.attributes = [];
+                    dialog.get_field("selected_attrs").$wrapper.html("");
+                }
+            },
+            {
+                fieldtype: "Data",
+                fieldname: "add_attribute",
+                label: __("Add Attribute"),
+                placeholder: __("Type 30, ctn, lyc…")
+            },
+
+            // 👇 ADD THIS
+            {
+                fieldtype: "Section Break",
+                label: __("Selected Attributes Preview")
+            },
+            {
+                fieldtype: "HTML",
+                fieldname: "selected_attrs"
+            },
+
+            {
+                fieldtype: "Section Break",
+                label: __("Matching Items")
+            },
+            {
+                fieldtype: "HTML",
+                fieldname: "results_area"
+            }
+        ],
+        primary_action_label: __("Search"),
+        primary_action() {
+            search_items(state, dialog);
+        }
+    });
+
+    dialog._kniterp_opts = opts;
+
+    dialog.show();
+    setup_selector_autocomplete(dialog, state);
 };
 
-// ===============================
-// 2️⃣ HELPER FUNCTIONS (DECLARE FIRST)
-// ===============================
+// ======================================================
+// AUTOCOMPLETE (same behavior as Item form)
+// ======================================================
+function setup_selector_autocomplete(dialog, state) {
 
-function render_attribute_inputs(dialog, attributes) {
-    if (!attributes.length) {
-        dialog.fields_dict.attribute_area.$wrapper.html(
-            `<div class="text-muted">No attributes found</div>`
+    const field = dialog.get_field("add_attribute");
+    if (field._awesomplete) return;
+
+    field._awesomplete = new Awesomplete(
+        field.$input.get(0),
+        { minChars: 1, autoFirst: true }
+    );
+
+    field.$input.on("input", frappe.utils.debounce(() => {
+        const txt = field.get_value();
+        if (!txt || !state.classification) return;
+
+        frappe.call({
+            method: "kniterp.api.item_selector.search_textile_attribute_values",
+            args: {
+                txt,
+                classification: state.classification
+            },
+            callback: r => {
+                field._awesomplete._map = {};
+                field._awesomplete.list = (r.message || []).map(d => {
+                    const key = `${d.kniterp_value} (${d.kniterp_attribute_name})`;
+                    field._awesomplete._map[key] = d;
+                    return { label: key, value: key };
+                });
+            }
+        });
+    }, 300));
+
+    field.$input.on("awesomplete-selectcomplete", e => {
+        const s = e.originalEvent?.text;
+        if (!s) return;
+
+        const d = field._awesomplete._map[s.value];
+        if (!d) return;
+
+        // prevent duplicate attribute
+        if (state.attributes.some(a => a.kniterp_attribute === d.attribute)) {
+            frappe.msgprint("Attribute already added");
+            return;
+        }
+
+        state.attributes.push({
+            kniterp_attribute: d.attribute,
+            kniterp_value: d.name,
+            kniterp_numeric_value: null,
+            kniterp_display_value: d.kniterp_value,
+            kniterp_sequence: d.kniterp_sequence,
+            kniterp_affects_naming: d.kniterp_affects_naming
+        });
+
+        console.log("STATE ATTRIBUTES:", state.attributes);
+
+        render_selected_attrs(dialog, state);
+        auto_search_items(state, dialog);
+
+        field.$input.val("");
+        field._awesomplete.list = [];
+        field.$input.focus();
+    });
+}
+
+const auto_search_items = frappe.utils.debounce(
+    (state, dialog) => {
+        search_items(state, dialog);
+    },
+    300
+);
+
+function render_selected_attrs(dialog, state) {
+
+    const sorted = state.attributes
+        .filter(a => a.kniterp_affects_naming && a.kniterp_display_value)
+        .sort((a, b) => (a.kniterp_sequence || 0) - (b.kniterp_sequence || 0));
+
+    if (!sorted.length) {
+        dialog.get_field("selected_attrs").$wrapper.html(
+            `<div class="text-muted">Select attributes</div>`
         );
         return;
     }
 
-    let html = `<div class="kniterp-attr-grid">`;
-
-    attributes.forEach(attr => {
-        html += `
-            <div class="form-group">
-                <label class="control-label">
-                    ${attr.kniterp_attribute_name}
-                </label>
-                ${render_input_for_type(attr)}
+    const html = `
+        <div class="mb-2">
+            <small class="text-muted">Preview Item Name</small>
+            <div class="kniterp-preview-name">
+                ${sorted.map(a => `
+                    <span class="kniterp-attr-pill" data-attr="${a.kniterp_attribute}">
+                        ${a.kniterp_display_value}
+                        <span class="kniterp-remove-attr">✕</span>
+                    </span>
+                `).join(" ")}
             </div>
-        `;
-    });
+        </div>
+    `;
 
-    html += `</div>`;
+    const wrapper = dialog.get_field("selected_attrs").$wrapper;
+    wrapper.html(html);
 
-    dialog.fields_dict.attribute_area.$wrapper.html(html);
-
-    attributes.forEach(attr => {
-        bind_attribute_change(dialog, attr);
-    });
-}
-
-function render_input_for_type(attr) {
-    if (attr.kniterp_field_type === "Select") {
-        return `
-            <select class="form-control"
-                data-attribute="${attr.name}">
-                <option value="">Select</option>
-            </select>
-        `;
-    }
-
-    if (["Int", "Float"].includes(attr.kniterp_field_type)) {
-        return `
-            <input type="number"
-                class="form-control"
-                data-attribute="${attr.name}" />
-        `;
-    }
-
-    return `<input type="text" class="form-control" disabled />`;
-}
-
-function populate_select_options(attr_name, select_el) {
-    frappe.call({
-        method: "kniterp.api.textile_attributes.get_attribute_values",
-        args: { attribute: attr_name },
-        callback(r) {
-            (r.message || []).forEach(v => {
-                select_el.append(
-                    `<option value="${v.name}"
-                        data-short-code="${v.kniterp_short_code || ""}">
-                        ${v.kniterp_value}
-                    </option>`
-                );
-            });
-        }
+    // 🔴 bind remove
+    wrapper.find(".kniterp-remove-attr").on("click", function (e) {
+        e.stopPropagation();
+        const attr = $(this).closest(".kniterp-attr-pill").data("attr");
+        remove_selected_attribute(attr, state, dialog);
     });
 }
 
+function remove_selected_attribute(attribute, state, dialog) {
 
-function bind_attribute_change(dialog, attr) {
-    const el = dialog.fields_dict.attribute_area.$wrapper
-        .find(`[data-attribute="${attr.name}"]`);
-
-    if (attr.kniterp_field_type === "Select") {
-        populate_select_options(attr.name, el);
-    }
-
-    el.on("change", function () {
-        kniterp_selector_state.attributes[attr.name] = {
-            attribute: attr.name,
-            field_type: attr.kniterp_field_type,
-            value: $(this).val() || null
-        };
-
-        update_selector_preview(dialog);
-    });
-}
-
-function update_selector_preview(dialog) {
-    const parts = [];
-
-    Object.values(kniterp_selector_state.attributes).forEach(a => {
-        if (a.value) parts.push(a.value);
-    });
-
-    dialog.set_value("preview_name", parts.join(" "));
-    dialog.set_value("preview_code", "");
-    search_exact_items(dialog);
-}
-
-// ===============================
-// 3️⃣ SERVER LOADER
-// ===============================
-function load_textile_attributes(dialog, classification) {
-
-    kniterp_selector_state.attributes = {};
-    kniterp_selector_state.classification = classification;
-
-    dialog.fields_dict.attribute_area.$wrapper.html(
-        `<div class="text-muted">Loading attributes…</div>`
+    state.attributes = state.attributes.filter(
+        a => a.kniterp_attribute !== attribute
     );
 
-    frappe.call({
-        method: "kniterp.api.textile_attributes.get_textile_attributes_for",
-        args: { classification },
-        callback(r) {
-            render_attribute_inputs(dialog, r.message || []);
-        }
-    });
+    render_selected_attrs(dialog, state);
+    auto_search_items(state, dialog);
 }
 
+function search_items(state, dialog) {
 
-function search_exact_items(dialog) {
-
-    const attrs = [];
-
-    Object.values(kniterp_selector_state.attributes).forEach(a => {
-        if (!a.value) return;
-
-        if (a.field_type === "Select") {
-            attrs.push({
-                attribute: a.attribute,
-                value: a.value
-            });
-        } else {
-            attrs.push({
-                attribute: a.attribute,
-                numeric_value: a.value
-            });
-        }
-    });
-
-    if (!attrs.length) {
-        dialog.fields_dict.results_area.$wrapper.html(
-            `<div class="text-muted">Select attributes to search</div>`
-        );
+    if (!state.attributes.length) {
+        frappe.msgprint("Add at least one attribute");
         return;
     }
 
     frappe.call({
         method: "kniterp.api.item_selector.find_exact_items",
         args: {
-            classification: kniterp_selector_state.classification,
-            attributes: attrs
+            classification: state.classification,
+            attributes: state.attributes.map(a => ({
+                attribute: a.kniterp_attribute,
+                value: a.kniterp_value
+            }))
         },
-        callback(r) {
-            render_search_results(dialog, r.message || []);
+        callback: r => {
+            render_results(dialog, r.message || [], state);
         }
     });
 }
 
-function create_new_item_from_selector(dialog) {
 
-    const attrs = [];
 
-    Object.values(kniterp_selector_state.attributes).forEach(a => {
-        if (!a.value) return;
+// ======================================================
+// RENDER RESULTS + CREATE ITEM
+// ======================================================
+function render_results(dialog, items, state) {
 
-        if (a.field_type === "Select") {
-            attrs.push({
-                kniterp_attribute: a.attribute,
-                kniterp_value: a.value
-            });
-        } else {
-            attrs.push({
-                kniterp_attribute: a.attribute,
-                kniterp_numeric_value: a.value
-            });
-        }
-    });
-
-    const payload = {
-        classification: kniterp_selector_state.classification,
-        textile_attributes: attrs
-    };
-
-    // console.log("KNITERP FINAL PAYLOAD:", payload);
-
-    // 🔐 STORE SAFELY
-    sessionStorage.setItem(
-        "kniterp_new_item_payload",
-        JSON.stringify(payload)
-    );
-
-    dialog.hide();
-    frappe.set_route("Form", "Item", "new-item");
-}
-
-function render_search_results(dialog, items) {
-
-    const wrapper = dialog.fields_dict.results_area.$wrapper;
-
-    if (!items.length) {
-        wrapper.html(`
-            <div class="text-muted mb-2">
-                No exact match found
-            </div>
-            <button class="btn btn-sm btn-primary kniterp-create-item">
-                Create New Item
-            </button>
-        `);
-
-        wrapper.find(".kniterp-create-item").on("click", () => {
-            create_new_item_from_selector(dialog);
-        });
-
-        return;
-    }
-
-    if (!items.length) {
-        dialog.fields_dict.results_area.$wrapper.html(
-            `<div class="text-muted">No exact match found</div>`
-        );
-        return;
-    }
+    const wrapper = dialog.get_field("results_area").$wrapper;
 
     let html = `
-        <table class="table table-bordered">
-            <thead>
-                <tr>
-                    <th>Item Code</th>
-                    <th>Item Name</th>
-                </tr>
-            </thead>
-            <tbody>
+        <div class="mb-2">
+            <button class="btn btn-primary btn-sm kniterp-create-item">
+                Create New Item
+            </button>
+        </div>
     `;
 
-    items.forEach(it => {
+    if (!items.length) {
+        html += `<div class="text-muted">No matching items</div>`;
+    } else {
         html += `
-            <tr class="kniterp-item-row" data-item="${it.item_code}">
-                <td>${it.item_code}</td>
-                <td>${it.item_name}</td>
-            </tr>
+            <table class="table table-sm table-hover">
+                <thead>
+                    <tr>
+                        <th>Item Code</th>
+                        <th>Item Name</th>
+                        <th>Match</th>
+                    </tr>
+                </thead>
+                <tbody>
         `;
+
+        items.forEach(it => {
+            html += `
+                <tr class="kniterp-item-row"
+                    data-item="${it.item_code}">
+                    <td>${it.item_code}</td>
+                    <td>${it.item_name}</td>
+                    <td>
+                        ${it.match_count === state.attributes.length && it.total_attr_count === state.attributes.length
+                            ? '<span class="badge badge-success">Exact</span>'
+                            : '<span class="badge badge-warning">Partial</span>'
+                        }
+                    </td>
+                </tr>
+            `;
+        });
+
+        html += `</tbody></table>`;
+    }
+
+    wrapper.html(html);
+
+    // create always available
+    wrapper.find(".kniterp-create-item").on("click", () => {
+        create_item_from_selector(state);
+        dialog.hide();
     });
 
-    html += `</tbody></table>`;
-
-    dialog.fields_dict.results_area.$wrapper.html(html);
-
-    // click to select
-    dialog.fields_dict.results_area.$wrapper
-        .find(".kniterp-item-row")
-        .on("click", function () {
-            const item = $(this).data("item");
-            dialog.selected_item = item;
-            $(this).addClass("table-active").siblings().removeClass("table-active");
-        });
-}
-
-// ===============================
-// 4️⃣ DIALOG OPENER (LAST)
-// ===============================
-window.kniterp_open_item_selector = function (opts = {}) {
-
-    const dialog = new frappe.ui.Dialog({
-        title: "Select Item by Attributes",
-        size: "extra-large",
-        fields: [
-            {
-                fieldtype: "Select",
-                label: "Item Classification",
-                fieldname: "classification",
-                options: ["Fabric", "Yarn"],
-                reqd: 1,
-                onchange() {
-                    load_textile_attributes(
-                        dialog,
-                        dialog.get_value("classification")
-                    );
-                }
-            },
-            { fieldtype: "Section Break", label: "Attributes" },
-            { fieldtype: "HTML", fieldname: "attribute_area" },
-            { fieldtype: "Section Break", label: "Preview" },
-            {
-                fieldtype: "Data",
-                fieldname: "preview_name",
-                label: "Preview Item Name",
-                read_only: 1
-            },
-            {
-                fieldtype: "Data",
-                fieldname: "preview_code",
-                label: "Preview Item Code",
-                read_only: 1
-            },
-
-            { fieldtype: "Section Break", label: "Matching Items" },
-            {
-                fieldtype: "HTML",
-                fieldname: "results_area"
-            }
-        ],
-        primary_action_label: "Select Item",
-        primary_action() {
-
-            if (!dialog.selected_item) {
-                frappe.msgprint("Please select an item from the list");
-                return;
-            }
-
-            if (opts.on_select) {
-                opts.on_select(dialog.selected_item);
-            }
-
-            dialog.hide();
+    // select item
+    wrapper.find(".kniterp-item-row").on("click", function () {
+        const item = $(this).data("item");
+        dialog.hide();
+        if (dialog._kniterp_opts?.on_select) {
+            dialog._kniterp_opts.on_select(item);
         }
     });
+}
 
-    dialog.show();
-};
+// ======================================================
+// CREATE ITEM (reuse your existing preload logic)
+// ======================================================
+function create_item_from_selector(state) {
+
+    // 🔑 Use your existing preload mechanism
+    sessionStorage.setItem(
+        "kniterp_new_item_payload",
+        JSON.stringify({
+            classification: state.classification,
+            textile_attributes: state.attributes
+        })
+    );
+
+    frappe.set_route("Form", "Item", "new-item");
+}

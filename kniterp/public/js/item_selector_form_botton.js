@@ -5,9 +5,18 @@ frappe.ui.form.on("Sales Order", {
             () => {
                 kniterp_open_item_selector({
                     on_select(item_code) {
-                        let row = frm.add_child("items");
-                        row.item_code = item_code;
-                        frm.refresh_field("items");
+                        let row = frm.doc.items.find(r => !r.item_code);
+
+                        if (!row) {
+                            row = frm.add_child("items");
+                        }
+
+                        frappe.model.set_value(
+                            row.doctype,
+                            row.name,
+                            "item_code",
+                            item_code
+                        );
                     }
                 });
             }
@@ -22,9 +31,18 @@ frappe.ui.form.on("Purchase Order", {
             () => {
                 kniterp_open_item_selector({
                     on_select(item_code) {
-                        let row = frm.add_child("items");
-                        row.item_code = item_code;
-                        frm.refresh_field("items");
+                        let row = frm.doc.items.find(r => !r.item_code);
+
+                        if (!row) {
+                            row = frm.add_child("items");
+                        }
+
+                        frappe.model.set_value(
+                            row.doctype,
+                            row.name,
+                            "item_code",
+                            item_code
+                        );
                     }
                 });
             }

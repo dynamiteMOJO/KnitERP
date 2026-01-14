@@ -1,0 +1,43 @@
+/* ===== Selected Attribute Pills ===== */
+
+.kniterp-preview-name {
+    font-weight: 600;
+    color: var(--text-color);
+}
+
+/* Force high-contrast pill text */
+.kniterp-attr-pill {
+    display: inline-flex;
+    align-items: center;
+
+    background: #2b2b2b;              /* explicit dark bg */
+    color: #ffffff !important;        /* FORCE visible text */
+
+    border: 1px solid #444;
+    border-radius: 14px;
+
+    padding: 4px 10px;
+    margin-right: 6px;
+    margin-bottom: 4px;
+
+    font-weight: 600;
+}
+
+/* Ensure inner text never inherits muted styles */
+.kniterp-attr-pill *,
+.kniterp-attr-pill span {
+    color: #ff4040 !important;
+}
+
+/* Remove (×) icon */
+.kniterp-remove-attr {
+    cursor: pointer;
+    margin-left: 6px;
+    color: #ff6b6b !important; /* visible red */
+    font-weight: bold;
+}
+
+/* Hover feedback */
+.kniterp-attr-pill:hover {
+    background: #3a3a3a;
+}
