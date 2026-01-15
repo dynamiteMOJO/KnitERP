@@ -30,7 +30,8 @@ app_license = "mit"
 
 app_include_js = [
     "/assets/kniterp/js/item_selector_dialog.js",
-    "/assets/kniterp/js/item_selector_form_botton.js"
+    "/assets/kniterp/js/item_selector_form_botton.js",
+    "/assets/kniterp/js/item_client_script.js"
 ]
 
 app_include_css = [
