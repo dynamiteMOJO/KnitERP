@@ -12,6 +12,11 @@ class CustomItem(Item):
             # item_code IS the name
             self.item_code = strip(self.item_code)
             self.name = self.item_code
+            
+            if self.is_customer_provided_item:
+                if not self.item_code.endswith(" - CP"):
+                    self.item_code = strip(f"{self.item_code} - CP")
+                    self.name = self.item_code
         else:
             super().autoname()
 
@@ -103,3 +108,60 @@ class CustomItem(Item):
                 parts.append(str(int(row.kniterp_numeric_value)))
 
         self.item_code = f"{prefix}-" + "-".join(parts)
+
+
+    def after_insert(self):
+        # Create purchase item only for CP item
+        if self.is_customer_provided_item:
+            self.create_purchase_item()
+
+    def create_purchase_item(self):
+        base_code = self.item_code.replace(" - CP", "").strip()
+
+        # Safety: don’t duplicate
+        if frappe.db.exists("Item", base_code):
+            return
+
+        purchase_item = frappe.get_doc({
+            "doctype": "Item",
+            "item_code": base_code,
+            "item_name": self.item_name,
+            "item_group": self.item_group,
+            "stock_uom": self.stock_uom,
+            "gst_hsn_code": self.gst_hsn_code,
+            "include_item_in_manufacturing": self.include_item_in_manufacturing,
+            "is_sales_item": self.is_sales_item,
+
+            # very important
+            "is_customer_provided_item": 0,
+            "is_stock_item": self.is_stock_item,
+            "default_material_request_type": "Purchase",
+
+            # buying enabled
+            "is_purchase_item": 1,
+            "is_sales_item": 0,
+
+            # copy anything else you need
+            "custom_item_classification": self.custom_item_classification,
+            "end_of_life": self.end_of_life,
+        })
+
+        # ----------------------------
+        # COPY TEXTILE ATTRIBUTES
+        # ----------------------------
+        for row in self.custom_textile_attributes:
+            purchase_item.append("custom_textile_attributes", {
+                "kniterp_attribute": row.kniterp_attribute,
+                "kniterp_value": row.kniterp_value,
+                "kniterp_numeric_value": row.kniterp_numeric_value,
+                "kniterp_display_value": row.kniterp_display_value,
+                "kniterp_affects_naming": row.kniterp_affects_naming,
+                "kniterp_affects_code": row.kniterp_affects_code,
+                "kniterp_searchable": row.kniterp_searchable,
+                "kniterp_sequence": row.kniterp_sequence,
+                "kniterp_is_active": row.kniterp_is_active,
+                "kniterp_short_code": row.kniterp_short_code,
+                "kniterp_field_type": row.kniterp_field_type,
+            })
+
+        purchase_item.insert(ignore_permissions=True)

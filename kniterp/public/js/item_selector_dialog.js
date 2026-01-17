@@ -4,13 +4,18 @@
 
 window.kniterp_open_item_selector = function (opts = {}) {
 
+    const {
+        title = __("Select Item by Attributes"),
+        mode = "item"   // "item" | "fg"
+    } = opts;
+
     const state = {
         classification: null,
         attributes: []   // same structure as Item Textile Attribute
     };
 
     const dialog = new frappe.ui.Dialog({
-        title: __("Select Item by Attributes"),
+        title,
         size: "large",
         fields: [
             {
@@ -58,6 +63,7 @@ window.kniterp_open_item_selector = function (opts = {}) {
     });
 
     dialog._kniterp_opts = opts;
+    dialog._kniterp_mode = mode;
 
     dialog.show();
     setup_selector_autocomplete(dialog, state);
@@ -119,7 +125,6 @@ function setup_selector_autocomplete(dialog, state) {
             kniterp_affects_naming: d.kniterp_affects_naming
         });
 
-        console.log("STATE ATTRIBUTES:", state.attributes);
 
         render_selected_attrs(dialog, state);
         auto_search_items(state, dialog);
