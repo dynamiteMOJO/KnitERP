@@ -123,31 +123,6 @@
   "kniterp_applies_to": [
    {
     "item_attribute_applies_to": "Fabric"
-   },
-   {
-    "item_attribute_applies_to": "Yarn"
-   }
-  ],
-  "kniterp_attribute_code": "YS",
-  "kniterp_attribute_name": "Yarn Spec",
-  "kniterp_description": null,
-  "kniterp_field_type": "Select",
-  "kniterp_is_active": 1,
-  "kniterp_is_mandatory": 0,
-  "kniterp_searchable": 1,
-  "kniterp_sequence": 10,
-  "kniterp_use_value_master": 1,
-  "modified": "2025-12-26 15:31:56.864245",
-  "name": "Yarn Spec"
- },
- {
-  "docstatus": 0,
-  "doctype": "Textile Attribute",
-  "kniterp_affects_code": 1,
-  "kniterp_affects_naming": 1,
-  "kniterp_applies_to": [
-   {
-    "item_attribute_applies_to": "Fabric"
    }
   ],
   "kniterp_attribute_code": "KNTSTR",
@@ -211,5 +186,30 @@
   "kniterp_use_value_master": 1,
   "modified": "2026-01-05 18:38:15.258099",
   "name": "Elastane"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Textile Attribute",
+  "kniterp_affects_code": 1,
+  "kniterp_affects_naming": 1,
+  "kniterp_applies_to": [
+   {
+    "item_attribute_applies_to": "Fabric"
+   },
+   {
+    "item_attribute_applies_to": "Yarn"
+   }
+  ],
+  "kniterp_attribute_code": "YS",
+  "kniterp_attribute_name": "Yarn Spec",
+  "kniterp_description": null,
+  "kniterp_field_type": "Select",
+  "kniterp_is_active": 1,
+  "kniterp_is_mandatory": 0,
+  "kniterp_searchable": 1,
+  "kniterp_sequence": 10,
+  "kniterp_use_value_master": 1,
+  "modified": "2025-12-26 15:31:56.864245",
+  "name": "Yarn Spec"
  }
 ]
