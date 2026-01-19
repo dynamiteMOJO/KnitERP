@@ -57,6 +57,7 @@ fixtures = [
         "Designation",
         "Client Script",
         "Property Setter",
+        "Workspace"
 
 ]
 
