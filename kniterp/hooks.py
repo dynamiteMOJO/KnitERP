@@ -32,7 +32,8 @@ app_include_js = [
     "/assets/kniterp/js/item_selector_dialog.js",
     "/assets/kniterp/js/item_selector_form_botton.js",
     "/assets/kniterp/js/item_client_script.js",
-    "/assets/kniterp/js/sales_order_subcontracting_fix.js"
+    "/assets/kniterp/js/sales_order_subcontracting_fix.js",
+    "/assets/kniterp/js/sales_order.js"
 ]
 
 app_include_css = [
@@ -57,7 +58,8 @@ fixtures = [
         "Designation",
         "Client Script",
         "Property Setter",
-        "Workspace"
+        "Workspace",
+        "Workspace Sidebar"
 
 ]
 
