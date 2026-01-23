@@ -1,3 +1,6 @@
+import kniterp.kniterp.overrides.subcontracting_receipt
+import kniterp.kniterp.overrides.job_card
+
 app_name = "kniterp"
 app_title = "Kniterp"
 app_publisher = "Kartik"
@@ -44,6 +47,10 @@ override_doctype_class = {
     "Item": "kniterp.kniterp.overrides.item.CustomItem"
 }
 
+override_whitelisted_methods = {
+    "erpnext.manufacturing.doctype.job_card.job_card.make_subcontracting_po": "kniterp.kniterp.overrides.job_card.make_subcontracting_po"
+}
+
 doc_events = {
     "Salary Slip": {
         "before_save": "kniterp.payroll.calculate_variable_pay"
@@ -52,6 +59,7 @@ doc_events = {
 
 
 fixtures = [
+        "Page",  
         "Textile Attribute",
         "Textile Attribute Value",
         "Item Attribute Applies To Values",
