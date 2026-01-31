@@ -52,6 +52,9 @@ class ProductionWizard {
     }
 
     make_filters() {
+        // Clear anything in sidebar just in case
+        this.page.sidebar.empty();
+
         // Customer filter
         this.customer_filter = this.page.add_field({
             fieldname: 'customer',
@@ -98,10 +101,20 @@ class ProductionWizard {
                 this.refresh_pending_items();
             }
         });
+
+        // Ensure the fields are styled correctly for the top bar
+        this.page.page_form.css({
+            'padding': '10px 15px',
+            'background': 'var(--subtle-fg)',
+            'border-bottom': '1px solid var(--border-color)',
+            'margin-bottom': '10px'
+        });
     }
 
     make_layout() {
-        this.page.main.html(`
+        if (this.page.main.find('.production-wizard-container').length) return;
+
+        this.page.main.append(`
 			<div class="production-wizard-container">
 				<div class="row">
 					<div class="col-md-5">
