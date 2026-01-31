@@ -1,0 +1,459 @@
+[
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2017-05-03 05:59:33.702308",
+  "module": "Printing",
+  "name": "print-format-builder",
+  "page_name": "print-format-builder",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "System Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Print Format Builder"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2015-09-24 01:26:06.225378",
+  "module": "Desk",
+  "name": "backups",
+  "page_name": "backups",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "System Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Download Backups"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2016-07-14 06:39:09.096256",
+  "module": "Stock",
+  "name": "stock-balance",
+  "page_name": "stock-balance",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "Stock User"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Stock Summary"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2017-01-31 11:25:01.983200",
+  "module": "HR",
+  "name": "team-updates",
+  "page_name": "team-updates",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "Employee"
+   },
+   {
+    "role": "System Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Team Updates"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2020-12-16 12:29:08.610352",
+  "module": "Core",
+  "name": "dashboard-view",
+  "page_name": "dashboard-view",
+  "restrict_to_domain": null,
+  "roles": [],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Dashboard"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2019-07-29 13:24:38.201981",
+  "module": "Manufacturing",
+  "name": "bom-comparison-tool",
+  "page_name": "bom-comparison-tool",
+  "restrict_to_domain": "Manufacturing",
+  "roles": [
+   {
+    "role": "System Manager"
+   },
+   {
+    "role": "Manufacturing User"
+   },
+   {
+    "role": "Manufacturing Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "BOM Comparison Tool"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2020-06-01 15:41:06.348380",
+  "module": "Selling",
+  "name": "point-of-sale",
+  "page_name": "point-of-sale",
+  "restrict_to_domain": "Retail",
+  "roles": [
+   {
+    "role": "Accounts User"
+   },
+   {
+    "role": "Accounts Manager"
+   },
+   {
+    "role": "Sales User"
+   },
+   {
+    "role": "Sales Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Point Of Sale"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2020-10-09 17:23:15.163030",
+  "module": "Printing",
+  "name": "print",
+  "page_name": "print",
+  "restrict_to_domain": null,
+  "roles": [],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": null
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2020-11-25 11:07:54.056208",
+  "module": "Stock",
+  "name": "warehouse-capacity-summary",
+  "page_name": "warehouse-capacity-summary",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "Stock User"
+   },
+   {
+    "role": "Stock Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Warehouse Capacity Summary"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2021-05-25 10:53:18.201931",
+  "module": "HR",
+  "name": "organizational-chart",
+  "page_name": "organizational-chart",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "HR User"
+   },
+   {
+    "role": "HR Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Organizational Chart"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2021-07-10 12:22:16.138485",
+  "module": "Printing",
+  "name": "print-format-builder-beta",
+  "page_name": "print-format-builder-beta",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "System Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": null
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2022-08-03 20:09:15.429993",
+  "module": "GST India",
+  "name": "india-compliance-account",
+  "page_name": "india-compliance-account",
+  "restrict_to_domain": "",
+  "roles": [
+   {
+    "role": "System Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "India Compliance Account"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2023-05-01 13:02:17.223595",
+  "module": "Workflow",
+  "name": "workflow-builder",
+  "page_name": "workflow-builder",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "System Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Workflow Builder"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2023-10-06 15:18:00.622073",
+  "module": "Manufacturing",
+  "name": "visual-plant-floor",
+  "page_name": "visual-plant-floor",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "Manufacturing User"
+   },
+   {
+    "role": "Manufacturing Manager"
+   },
+   {
+    "role": "Operator"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Visual Plant Floor"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": "",
+  "modified": "2025-10-08 13:31:06.525425",
+  "module": "Desk",
+  "name": "desktop",
+  "page_name": "desktop",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "All"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 1,
+  "title": "Desktop"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": "fa fa-industry",
+  "modified": "2026-01-25 07:20:00",
+  "module": "Kniterp",
+  "name": "production-wizard",
+  "page_name": "production-wizard",
+  "restrict_to_domain": "",
+  "roles": [
+   {
+    "role": "Manufacturing User"
+   },
+   {
+    "role": "Manufacturing Manager"
+   },
+   {
+    "role": "System Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Production Wizard"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": "fa fa-home",
+  "modified": "2026-01-28 15:15:00",
+  "module": "Kniterp",
+  "name": "kniterp-home",
+  "page_name": "kniterp-home",
+  "restrict_to_domain": "",
+  "roles": [
+   {
+    "role": "System Manager"
+   },
+   {
+    "role": "Manufacturing Manager"
+   },
+   {
+    "role": "Manufacturing User"
+   },
+   {
+    "role": "All"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Home"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": "fa fa-lock",
+  "modified": "2013-07-11 14:43:43",
+  "module": "Core",
+  "name": "permission-manager",
+  "page_name": "permission-manager",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "System Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Role Permissions Manager"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": "fa fa-filter",
+  "modified": "2013-10-04 13:17:18",
+  "module": "Selling",
+  "name": "sales-funnel",
+  "page_name": "sales-funnel",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "Sales Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 0,
+  "title": "Sales Funnel"
+ },
+ {
+  "content": null,
+  "docstatus": 0,
+  "doctype": "Page",
+  "icon": null,
+  "modified": "2017-04-12 18:45:00.774654",
+  "module": "Desk",
+  "name": "setup-wizard",
+  "page_name": "setup-wizard",
+  "restrict_to_domain": null,
+  "roles": [
+   {
+    "role": "System Manager"
+   }
+  ],
+  "script": null,
+  "standard": "Yes",
+  "style": null,
+  "system_page": 1,
+  "title": "Setup Wizard"
+ }
+]

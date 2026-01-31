@@ -1,4 +1,33 @@
 frappe.ui.form.on("Item", {
+    onload(frm) {
+        if (frm.is_new()) {
+            const raw = sessionStorage.getItem("kniterp_new_item_payload");
+            console.log("Checking for kniterp_new_item_payload...", raw ? "Found" : "Not Found");
+            if (raw) {
+                try {
+                    const payload = JSON.parse(raw);
+                    console.log("Payload content:", payload);
+                    sessionStorage.removeItem("kniterp_new_item_payload");
+
+                    if (payload.classification) {
+                        frm.set_value("custom_item_classification", payload.classification);
+                    }
+
+                    if (payload.textile_attributes) {
+                        payload.textile_attributes.forEach(attr => {
+                            console.log("Adding attribute:", attr);
+                            const row = frm.add_child("custom_textile_attributes");
+                            frappe.model.set_value(row.doctype, row.name, "kniterp_attribute", attr.kniterp_attribute);
+                            frappe.model.set_value(row.doctype, row.name, "kniterp_value", attr.kniterp_value);
+                        });
+                        frm.refresh_field("custom_textile_attributes");
+                    }
+                } catch (e) {
+                    console.error("Failed to parse kniterp_new_item_payload", e);
+                }
+            }
+        }
+    },
     refresh(frm) {
         const field = frm.get_field("custom_add_attribute");
         if (!field || field._awesomplete) return;

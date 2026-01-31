@@ -1,0 +1,352 @@
+:root {
+    --bg-dark: #121212;
+    --card-dark: #1e1e1e;
+    --border-dark: #333333;
+    --text-main: #e0e0e0;
+    --text-muted: #9e9e9e;
+    --primary-glow: rgba(78, 115, 223, 0.2);
+
+    --yarn-bg: #2d2a1e;
+    --yarn-header: #3d3a2a;
+    --yarn-accent: #f6ad55;
+
+    --knit-bg: #1a2a3a;
+    --knit-header: #2a3a4a;
+    --knit-accent: #63b3ed;
+
+    --dye-bg: #2d1a3a;
+    --dye-header: #3d2a4a;
+    --dye-accent: #b794f4;
+}
+
+.bom-designer-container {
+    background-color: var(--bg-dark);
+    color: var(--text-main);
+    padding: 24px;
+    min-height: 100vh;
+}
+
+.header-card {
+    background: var(--card-dark);
+    border: 1px solid var(--border-dark);
+    border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+}
+
+.bom-designer-container .section-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--text-muted);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-bottom: 8px;
+    display: block;
+    line-height: 1.2;
+}
+
+.sequence-bar {
+    background: rgba(42, 42, 42, 0.5);
+    border: 1px dashed var(--border-dark);
+    border-radius: 12px;
+    padding: 16px;
+    backdrop-filter: blur(8px);
+}
+
+.op-pill {
+    border-radius: 8px;
+    padding: 10px 18px;
+    font-weight: 600;
+    font-size: 13px;
+    border: 1px solid transparent;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    background: #2a2a2a;
+    color: var(--text-main);
+}
+
+.pill-yarn:hover {
+    border-color: var(--yarn-accent);
+    box-shadow: 0 0 15px var(--yarn-accent);
+}
+
+.pill-knit:hover {
+    border-color: var(--knit-accent);
+    box-shadow: 0 0 15px var(--knit-accent);
+}
+
+.pill-dye:hover {
+    border-color: var(--dye-accent);
+    box-shadow: 0 0 15px var(--dye-accent);
+}
+
+.op-card {
+    border-radius: 14px;
+    border: 1px solid var(--border-dark);
+    /* overflow: hidden removed to prevent dropdown clipping */
+    background: var(--card-dark);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
+}
+
+.op-card-header {
+    padding: 12px 20px;
+    background: rgba(255, 255, 255, 0.03);
+    border-bottom: 1px solid var(--border-dark);
+}
+
+.step-label {
+    font-size: 10px;
+    font-weight: 900;
+    padding: 3px 10px;
+    border-radius: 4px;
+    margin-right: 12px;
+    background: #333;
+    color: #fff;
+}
+
+/* Card Themes */
+.card-yarn-processing {
+    border-left: 4px solid var(--yarn-accent);
+}
+
+.card-yarn-processing .step-label {
+    background: var(--yarn-accent);
+    color: #000;
+}
+
+.card-knitting {
+    border-left: 4px solid var(--knit-accent);
+}
+
+.card-knitting .step-label {
+    background: var(--knit-accent);
+    color: #000;
+}
+
+.card-dyeing {
+    border-left: 4px solid var(--dye-accent);
+}
+
+.card-dyeing .step-label {
+    background: var(--dye-accent);
+    color: #000;
+}
+
+.io-box {
+    border-radius: 10px;
+    padding: 16px;
+    transition: all 0.3s;
+}
+
+.input-box {
+    border: 1px solid var(--border-dark);
+    background: rgba(0, 0, 0, 0.2);
+}
+
+.output-box {
+    background: rgba(72, 187, 120, 0.1);
+    border: 1px solid rgba(72, 187, 120, 0.3);
+    color: #9ae6b4;
+}
+
+.col-label {
+    font-size: 11px;
+    font-weight: 800;
+    text-transform: uppercase;
+    margin-bottom: 12px;
+    letter-spacing: 0.05em;
+}
+
+.card-yarn-processing .col-label {
+    color: var(--yarn-accent);
+}
+
+.card-knitting .col-label {
+    color: var(--knit-accent);
+}
+
+.card-dyeing .col-label {
+    color: var(--dye-accent);
+}
+
+/* Form Fixes for Dark Mode - Scoped to avoid leakage */
+.bom-designer-container .form-control,
+.bom-designer-container .frappe-control input:not([type="checkbox"]),
+.bom-designer-container .link-field input {
+    background-color: #262626 !important;
+    border: 1px solid #404040 !important;
+    color: #fff !important;
+    border-radius: 6px !important;
+    height: 38px !important;
+}
+
+/* Fix checkbox deformation and label */
+.bom-designer-container input[type="checkbox"] {
+    height: 16px !important;
+    width: 16px !important;
+    margin: 0 !important;
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+.bom-designer-container .checkbox {
+    margin: 0 !important;
+    display: flex;
+    align-items: center;
+}
+
+.bom-designer-container .checkbox label {
+    margin-bottom: 0 !important;
+    display: flex;
+    align-items: center;
+}
+
+.bom-designer-container .checkbox .label-area {
+    display: inline-block !important;
+    color: var(--text-muted) !important;
+    font-size: 13px !important;
+    margin-left: 8px !important;
+    line-height: 1 !important;
+}
+
+/* Reset for controls inside target containers - ISOLATED TO HEADER vs CARDS */
+.bom-designer-container .header-card .fg-selector-target,
+.bom-designer-container .header-card .frappe-control,
+.bom-designer-container .header-card .form-group {
+    margin: 0 !important;
+    padding: 0 !important;
+}
+
+/* Restoring spacing for Card-based Link selectors */
+.bom-designer-container .op-card .sfg-output-target,
+.bom-designer-container .op-card .item-link-target {
+    margin-bottom: 8px !important;
+}
+
+.bom-designer-container .op-card .frappe-control,
+.bom-designer-container .op-card .form-group {
+    margin-bottom: 0 !important;
+    padding: 0 !important;
+}
+
+.bom-designer-container .frappe-control .clearfix {
+    display: none !important;
+}
+
+.bom-designer-container .unit-input-group {
+    position: relative;
+    display: flex;
+    align-items: center;
+    height: 38px;
+}
+
+.bom-designer-container .unit-input-group .form-control {
+    padding-right: 40px !important;
+}
+
+.bom-designer-container .unit-label {
+    position: absolute;
+    right: 12px;
+    top: 50%;
+    transform: translateY(-50%);
+    color: var(--text-muted);
+    font-size: 11px;
+    pointer-events: none;
+    z-index: 5;
+}
+
+/* Ensure Link Field Input is visible and on top in BOM Designer */
+.bom-designer-container .fg-selector-target .frappe-control,
+.bom-designer-container .fg-selector-target .awesomplete,
+.bom-designer-container .fg-selector-target .control-input,
+.bom-designer-container .sfg-output-target .frappe-control,
+.bom-designer-container .item-link-target .frappe-control {
+    width: 100% !important;
+    display: block !important;
+}
+
+.bom-designer-container input.form-control {
+    background-color: #262626 !important;
+    color: #fff !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    z-index: 10;
+    cursor: text !important;
+    user-select: text !important;
+}
+
+.bom-designer-container .form-control:focus,
+.bom-designer-container .frappe-control input:focus {
+    border-color: #666 !important;
+    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1) !important;
+}
+
+.bom-designer-container .arrow-icon {
+    color: #444;
+    font-size: 28px;
+    margin: -8px 0 12px 0;
+    filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.05));
+    animation: none;
+    /* Removed bounce to keep it clean */
+}
+
+.btn-add-mini {
+    background: transparent;
+    border: 1px dashed #444;
+    color: var(--text-muted);
+    transition: all 0.2s;
+}
+
+.btn-add-mini:hover {
+    border-color: #666;
+    color: #fff;
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.input-row-mini {
+    background: rgba(0, 0, 0, 0.15);
+    border: 1px solid #2d2d2d;
+    border-radius: 8px;
+    padding: 12px;
+    position: relative;
+    z-index: 1;
+}
+
+.bom-designer-container .input-row-mini:focus-within {
+    z-index: 100 !important;
+}
+
+/* Ensure Awesomplete dropdown stays on top */
+.bom-designer-container .awesomplete>ul {
+    z-index: 1000 !important;
+    background: #1e1e1e !important;
+    border: 1px solid #444 !important;
+}
+
+/* Fix for Link fields in custom containers in BOM Designer */
+.bom-designer-container .fg-selector-target,
+.bom-designer-container .sfg-output-target,
+.bom-designer-container .row-item-target {
+    min-height: 38px;
+}
+
+/* Hide labels only for injected Link fields */
+.bom-designer-container .fg-selector-target .label-area,
+.bom-designer-container .sfg-output-target .label-area,
+.bom-designer-container .item-link-target .label-area {
+    display: none !important;
+}
+
+/* Alignment Fixes for Header */
+.bom-designer-container .header-card .row {
+    align-items: flex-end !important;
+}
+
+.bom-designer-container .header-card .col-md-7,
+.bom-designer-container .header-card .col-md-3,
+.bom-designer-container .header-card .col-md-2 {
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+}

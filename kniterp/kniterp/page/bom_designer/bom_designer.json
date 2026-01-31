@@ -1,0 +1,26 @@
+{
+    "content": null,
+    "creation": "2026-01-29 13:00:00.000000",
+    "docstatus": 0,
+    "doctype": "Page",
+    "icon": "fa fa-puzzle-piece",
+    "modified": "2026-01-31 05:40:00.000000",
+    "modified_by": "Administrator",
+    "module": "Kniterp",
+    "name": "bom_designer",
+    "owner": "Administrator",
+    "page_name": "bom_designer",
+    "roles": [
+        {
+            "role": "System Manager"
+        },
+        {
+            "role": "Manufacturing Manager"
+        }
+    ],
+    "script": null,
+    "standard": "Yes",
+    "style": null,
+    "system_page": 0,
+    "title": "BOM Designer"
+}

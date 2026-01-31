@@ -1,0 +1,274 @@
+.kniterp-home-container {
+    background-color: #0c0c0d;
+    color: #ffffff;
+    padding: 30px;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+.kniterp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 40px;
+    position: relative;
+}
+
+.greeting-text {
+    font-size: 32px;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: #ffffff;
+}
+
+.sub-greeting {
+    font-size: 16px;
+    color: #9499a1;
+    margin: 0;
+}
+
+.show-reports-btn {
+    background-color: #316ce6;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 24px;
+    font-weight: 600;
+    font-size: 14px;
+    transition: background-color 0.2s;
+}
+
+.show-reports-btn:hover {
+    background-color: #2659c2;
+}
+
+/* Dashboard Grid */
+.dashboard-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 24px;
+}
+
+/* Dashboard Card */
+.dashboard-card {
+    background-color: #1a1a1c;
+    border: 1px solid #2d2d30;
+    border-radius: 16px;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    transition: transform 0.2s, background-color 0.2s;
+}
+
+.dashboard-card:hover {
+    background-color: #212124;
+}
+
+.card-header {
+    display: flex;
+    align-items: center;
+    margin-bottom: 24px;
+}
+
+.icon-bg {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-right: 12px;
+}
+
+.icon-bg i {
+    font-size: 18px;
+    color: #ffffff;
+}
+
+.icon-sales {
+    background-color: #316ce6;
+}
+
+.icon-purchase {
+    background-color: #8e54e9;
+}
+
+.icon-jobwork {
+    background-color: #f7941d;
+}
+
+.icon-items {
+    background-color: #4caf50;
+}
+
+.icon-bom {
+    background-color: #3f51b5;
+}
+
+.icon-employees {
+    background-color: #e91e63;
+}
+
+.card-title {
+    font-size: 18px;
+    font-weight: 600;
+    color: #ffffff;
+    flex-grow: 1;
+}
+
+.btn-create {
+    background-color: #2d2d30;
+    border: none;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    color: #ffffff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.btn-create:hover {
+    background-color: #424245;
+}
+
+.card-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+/* Metric Blocks */
+.metric-row {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 24px;
+    margin-bottom: 24px;
+    text-align: center;
+}
+
+.metric-btn {
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.metric-block {
+    cursor: pointer;
+}
+
+.metric-value {
+    font-size: 36px;
+    font-weight: 700;
+    margin-bottom: 4px;
+    color: #ffffff;
+}
+
+.metric-label {
+    font-size: 14px;
+    color: #9499a1;
+}
+
+/* Urgent Row & Footer Styling */
+.urgent-row,
+.card-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid #2d2d30;
+    padding-top: 20px;
+    margin-top: auto;
+}
+
+.urgent-text {
+    color: #f7941d;
+    font-size: 14px;
+    font-weight: 500;
+    display: flex;
+    align-items: center;
+}
+
+.urgent-text i {
+    margin-right: 6px;
+}
+
+.view-all {
+    color: #316ce6;
+    font-size: 14px;
+    font-weight: 600;
+    text-decoration: none;
+}
+
+.view-all:hover {
+    text-decoration: underline;
+}
+
+/* Job Work Card Special Layout */
+.jw-body {
+    display: flex;
+    flex-direction: row !important;
+    gap: 0;
+}
+
+.jw-column {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+}
+
+.jw-label {
+    font-size: 14px;
+    color: #9499a1;
+    margin-bottom: 16px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.jw-divider {
+    width: 1px;
+    background-color: #2d2d30;
+    margin: 0 24px;
+    height: 100%;
+}
+
+.quick-links {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.quick-btn {
+    background-color: #2d2d30;
+    border: none;
+    color: #ffffff;
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: background-color 0.2s;
+}
+
+.quick-btn:hover {
+    background-color: #424245;
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+    .dashboard-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    .dashboard-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .kniterp-header {
+        flex-direction: column;
+        gap: 20px;
+    }
+}

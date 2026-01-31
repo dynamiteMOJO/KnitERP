@@ -1,0 +1,27 @@
+{
+    "creation": "2026-01-25 07:20:00.000000",
+    "doctype": "Page",
+    "icon": "fa fa-industry",
+    "idx": 0,
+    "modified": "2026-01-25 07:20:00.000000",
+    "modified_by": "Administrator",
+    "module": "Kniterp",
+    "name": "production-wizard",
+    "owner": "Administrator",
+    "page_name": "production-wizard",
+    "restrict_to_domain": "",
+    "roles": [
+        {
+            "role": "Manufacturing User"
+        },
+        {
+            "role": "Manufacturing Manager"
+        },
+        {
+            "role": "System Manager"
+        }
+    ],
+    "standard": "Yes",
+    "system_page": 0,
+    "title": "Production Wizard"
+}

@@ -252,9 +252,9 @@ function render_results(dialog, items, state) {
                     <td>${it.item_name}</td>
                     <td>
                         ${it.match_count === state.attributes.length && it.total_attr_count === state.attributes.length
-                            ? '<span class="badge badge-success">Exact</span>'
-                            : '<span class="badge badge-warning">Partial</span>'
-                        }
+                    ? '<span class="badge badge-success">Exact</span>'
+                    : '<span class="badge badge-warning">Partial</span>'
+                }
                     </td>
                 </tr>
             `;
@@ -267,13 +267,14 @@ function render_results(dialog, items, state) {
 
     // create always available
     wrapper.find(".kniterp-create-item").on("click", () => {
+        console.log("Kniterp: Create New Item clicked", state);
         create_item_from_selector(state);
-        dialog.hide();
     });
 
     // select item
     wrapper.find(".kniterp-item-row").on("click", function () {
         const item = $(this).data("item");
+        console.log("Kniterp: Item selected", item);
         dialog.hide();
         if (dialog._kniterp_opts?.on_select) {
             dialog._kniterp_opts.on_select(item);
@@ -285,6 +286,7 @@ function render_results(dialog, items, state) {
 // CREATE ITEM (reuse your existing preload logic)
 // ======================================================
 function create_item_from_selector(state) {
+    console.log("Kniterp: Preparing payload for new item", state);
 
     // 🔑 Use your existing preload mechanism
     sessionStorage.setItem(
@@ -295,5 +297,7 @@ function create_item_from_selector(state) {
         })
     );
 
+    console.log("Kniterp: Opening new item form in new tab");
+    frappe.open_in_new_tab = true;
     frappe.set_route("Form", "Item", "new-item");
 }

@@ -32,7 +32,7 @@ app_license = "mit"
 # app_include_js = "/assets/kniterp/js/kniterp.js"
 
 app_include_js = [
-    "/assets/kniterp/js/item_selector_dialog.js",
+    "/assets/kniterp/js/kniterp_item_selector.js",
     "/assets/kniterp/js/item_selector_form_botton.js",
     "/assets/kniterp/js/item_client_script.js",
     "/assets/kniterp/js/sales_order_subcontracting_fix.js",
@@ -44,7 +44,8 @@ app_include_css = [
 ]
 
 override_doctype_class = {
-    "Item": "kniterp.kniterp.overrides.item.CustomItem"
+    "Item": "kniterp.kniterp.overrides.item.CustomItem",
+    "Job Card": "kniterp.kniterp.overrides.job_card.CustomJobCard"
 }
 
 override_whitelisted_methods = {
@@ -54,6 +55,18 @@ override_whitelisted_methods = {
 doc_events = {
     "Salary Slip": {
         "before_save": "kniterp.payroll.calculate_variable_pay"
+    },
+    "Work Order": {
+        "before_submit": "kniterp.kniterp.overrides.work_order.set_planned_qty_on_work_order"
+    },
+    "Job Card": {
+        "before_insert": "kniterp.kniterp.overrides.job_card.set_job_card_qty_from_planned_qty",
+    },
+    "Purchase Receipt": {
+        "on_submit": "kniterp.subcontracting.on_pr_submit_complete_job_cards"
+    },
+    "Subcontracting Receipt": {
+        "on_submit": "kniterp.kniterp.overrides.subcontracting_receipt.on_submit_complete_job_cards"
     }
 }
 
@@ -66,6 +79,24 @@ fixtures = [
         "Designation",
         "Client Script",
         "Property Setter",
+        {
+            "doctype": "Custom Field",
+            "filters": [
+                ["dt", "=", "Work Order Operation"]
+            ]
+        },
+        {
+            "doctype": "Property Setter",
+            "filters": [
+                ["doc_type", "in", [
+                    "Employee",
+                    "Machine Attendance",
+                    "Item",
+                    "Item Textile Attribute"
+                      ]
+                ]
+            ]
+        },
         "Workspace",
         "Workspace Sidebar"
 

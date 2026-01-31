@@ -1,0 +1,30 @@
+{
+    "creation": "2026-01-28 15:15:00.000000",
+    "doctype": "Page",
+    "icon": "fa fa-home",
+    "idx": 0,
+    "modified": "2026-01-28 15:15:00.000000",
+    "modified_by": "Administrator",
+    "module": "Kniterp",
+    "name": "kniterp-home",
+    "owner": "Administrator",
+    "page_name": "kniterp-home",
+    "restrict_to_domain": "",
+    "roles": [
+        {
+            "role": "System Manager"
+        },
+        {
+            "role": "Manufacturing Manager"
+        },
+        {
+            "role": "Manufacturing User"
+        },
+        {
+            "role": "All"
+        }
+    ],
+    "standard": "Yes",
+    "system_page": 0,
+    "title": "Home"
+}
