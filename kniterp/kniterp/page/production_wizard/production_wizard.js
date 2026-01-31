@@ -310,7 +310,12 @@ class ProductionWizard {
 						<i class="fa fa-sitemap"></i>
 						<div>
 							<div class="label">${__('BOM')}</div>
-							<a href="/app/bom/${details.bom_no}">${details.bom_no}</a>
+							${details.bom_no ?
+                `<a href="/app/bom/${details.bom_no}">${details.bom_no}</a>` :
+                `<button class="btn btn-xs btn-primary btn-create-bom-designer" data-item="${details.item_code}">
+									<i class="fa fa-plus"></i> ${__('Create BOM')}
+								</button>`
+            }
 						</div>
 					</div>
 					<div class="info-card">
@@ -334,7 +339,7 @@ class ProductionWizard {
 
 				<!-- Primary Actions -->
 				<div class="primary-actions">
-					${this.get_primary_action_buttons(details)}
+					${details.bom_no ? this.get_primary_action_buttons(details) : ''}
 				</div>
 
 				<!-- Operations Section -->
@@ -342,7 +347,7 @@ class ProductionWizard {
 					<h5><i class="fa fa-tasks"></i> ${__('Operations')}</h5>
 				</div>
 				<div class="operations-list">
-					${this.render_operations(details)}
+					${details.bom_no ? this.render_operations(details) : `<div class="text-muted p-3">${__('Please create a BOM to view operations')}</div>`}
 				</div>
 
 				<!-- Raw Materials Section -->
@@ -766,6 +771,12 @@ class ProductionWizard {
         this.$details_content.find('.create-pr-btn').on('click', function () {
             const po_name = $(this).data('po');
             self.create_purchase_receipt(po_name);
+        });
+
+        // Create BOM Designer
+        this.$details_content.find('.btn-create-bom-designer').on('click', function () {
+            const item_code = $(this).data('item');
+            window.open(`/app/bom_designer?item_code=${encodeURIComponent(item_code)}`, '_blank');
         });
     }
 

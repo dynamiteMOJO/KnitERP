@@ -12,6 +12,11 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             this.body = this.page.main;
             this.PRECISION = 3;
             this.operations = [];
+
+            // Check for pre-populated item from URL
+            const url_params = new URLSearchParams(window.location.search);
+            this.initial_item = url_params.get('item_code');
+
             this.setup_ui();
         }
 
@@ -122,6 +127,12 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                     if (this.fg_item_select) {
                         this.fg_item_select.make();
                         this.fg_item_select.refresh();
+
+                        // Handle initial item from URL
+                        if (this.initial_item) {
+                            this.fg_item_select.set_value(this.initial_item);
+                        }
+
                         this.bind_item_selector_dblclick(this.fg_item_select, $fg_target);
                         console.log("FG Control successfully created and refreshed. Parent innerHTML length:", $fg_target[0].innerHTML.length);
                     } else {
