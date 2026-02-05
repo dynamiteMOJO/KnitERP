@@ -62,8 +62,11 @@
 
 .pending-item-card.selected {
 	border-color: var(--primary);
-	border-width: 2px;
-	background: rgba(var(--primary-rgb), 0.05);
+	border-left-width: 8px;
+	background: var(--control-bg);
+	/* Use a standard non-transparent background */
+	box-shadow: 4px 4px 15px rgba(0, 0, 0, 0.2);
+	transform: translateX(6px);
 }
 
 .pending-item-card .item-header {
@@ -430,7 +433,12 @@ html[data-theme="dark"] .pending-item-card {
 }
 
 html[data-theme="dark"] .pending-item-card.selected {
-	background: rgba(var(--primary-rgb), 0.1);
+	background: rgba(255, 255, 255, 0.15) !important;
+	/* Lighter gray accent */
+	border: 1px solid var(--primary);
+	border-left: 8px solid var(--primary);
+	box-shadow: 0 5px 15px rgba(0, 0, 0, 0.5);
+	/* Stronger shadow/glow */
 }
 
 html[data-theme="dark"] .operation-card.completed {
