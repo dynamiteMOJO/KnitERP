@@ -148,9 +148,21 @@ class ProductionWizard {
 				<div class="row">
 					<div class="col-md-5">
 						<div class="pending-items-panel">
-							<div class="panel-header">
-								<h5>${__('Pending Production Items')}</h5>
-								<span class="item-count badge badge-secondary">0</span>
+							<div class="panel-header d-flex justify-content-between align-items-center pr-2">
+                                <div class="d-flex align-items-center">
+								    <h5 class="mb-0 mr-2">${__('Pending Production Items')}</h5>
+								    <span class="item-count badge badge-secondary">0</span>
+                                </div>
+                                <div class="dropdown">
+                                    <button class="btn btn-xs btn-default dropdown-toggle" type="button" data-toggle="dropdown">
+                                        ${__('Sort')}
+                                    </button>
+                                    <div class="dropdown-menu dropdown-menu-right">
+                                        <a class="dropdown-item sort-action" data-sort="customer_name" href="#">${__('Party')}</a>
+                                        <a class="dropdown-item sort-action" data-sort="delivery_date" href="#">${__('Delivery Date')}</a>
+                                        <a class="dropdown-item sort-action" data-sort="sales_order" href="#">${__('Sales Order')}</a>
+                                    </div>
+                                </div>
 							</div>
 							<div class="pending-items-list"></div>
 						</div>
@@ -175,6 +187,30 @@ class ProductionWizard {
         this.$pending_list = this.page.main.find('.pending-items-list');
         this.$details_content = this.page.main.find('.details-content');
         this.$item_count = this.page.main.find('.item-count');
+
+        // Sort Listener
+        this.page.main.on('click', '.sort-action', (e) => {
+            e.preventDefault();
+            const field = $(e.currentTarget).data('sort');
+            const label = $(e.currentTarget).text();
+            this.page.main.find('.dropdown-toggle').text(`${__('Sort')}: ${label}`);
+            this.sort_pending_items(field);
+        });
+    }
+
+    sort_pending_items(field) {
+        if (!this.pending_items || !this.pending_items.length) return;
+        this.current_sort_field = field;
+
+        this.pending_items.sort((a, b) => {
+            const valA = a[field] || '';
+            const valB = b[field] || '';
+            if (valA < valB) return -1;
+            if (valA > valB) return 1;
+            return 0;
+        });
+
+        this.render_pending_items();
     }
 
     refresh() {
@@ -201,7 +237,11 @@ class ProductionWizard {
             },
             callback: (r) => {
                 this.pending_items = r.message || [];
-                this.render_pending_items();
+                if (this.current_sort_field) {
+                    this.sort_pending_items(this.current_sort_field);
+                } else {
+                    this.render_pending_items();
+                }
             }
         });
     }
@@ -227,22 +267,20 @@ class ProductionWizard {
             html += `
 				<div class="pending-item-card ${this.selected_item === item.sales_order_item ? 'selected' : ''}"
 					 data-item="${item.sales_order_item}">
-					<div class="item-header">
-						<span class="so-number">${item.sales_order}</span>
+					<div class="d-flex justify-content-between align-items-start mb-1">
+						<span class="font-weight-bold text-truncate" style="font-size: 14px; max-width: 65%; color: var(--text-color);" title="${item.customer_name}">
+                            ${item.customer_name}
+                        </span>
 						<span class="status-badge ${status_class}">${status_label}</span>
 					</div>
-					<div class="item-details">
-						<div class="item-name">${item.item_name}</div>
-						<div class="item-qty">
-							<strong>${item.pending_qty}</strong> ${__('pending')}
-							<span class="text-muted">/ ${item.qty} ${__('total')}</span>
-						</div>
+					<div class="item-details mb-1">
+						<div class="item-name text-truncate" title="${item.item_name}" style="font-size: 13px; margin-bottom: 2px;">${item.item_name}</div>
+                        <div class="d-flex justify-content-between align-items-center">
+                            <span class="text-muted small">${item.sales_order}</span>
+                        </div>
 					</div>
-					<div class="item-footer">
-						<span class="customer-name">
-							<i class="fa fa-user"></i> ${item.customer_name}
-						</span>
-						<span class="delivery-date">
+					<div class="item-footer mt-2 pt-2 border-top">
+						<span class="delivery-date small text-muted">
 							<i class="fa fa-calendar"></i> ${frappe.datetime.str_to_user(item.delivery_date)}
 						</span>
 					</div>
