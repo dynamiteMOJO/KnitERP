@@ -49,6 +49,10 @@ class ProductionWizard {
         this.page.add_menu_item(__('Dashboard'), () => {
             this.show_dashboard();
         });
+
+        this.page.add_inner_button(__('Consolidated Procurement'), () => {
+            this.show_consolidated_wizard();
+        });
     }
 
     make_filters() {
@@ -665,6 +669,10 @@ class ProductionWizard {
                         <i class="fa fa-download"></i> ${__('Create PR')}
                     </button>`;
                 }
+            } else if (m.shortage > 0) {
+                actions_html = `<button class="btn btn-xs btn-primary create-item-po-btn" data-item="${m.item_code}">
+                    <i class="fa fa-shopping-cart"></i> ${__('Create PO')}
+                </button>`;
             }
 
             html += `
@@ -773,6 +781,12 @@ class ProductionWizard {
             self.create_purchase_receipt(po_name);
         });
 
+        // Create PO for individual item
+        this.$details_content.find('.create-item-po-btn').on('click', function () {
+            const item_code = $(this).data('item');
+            self.create_po_for_item(details, item_code);
+        });
+
         // Create BOM Designer
         this.$details_content.find('.btn-create-bom-designer').on('click', function () {
             const item_code = $(this).data('item');
@@ -797,6 +811,18 @@ class ProductionWizard {
                 }
             }
         });
+    }
+
+    create_po_for_item(details, item_code) {
+        const item = details.raw_materials.find(m => m.item_code === item_code);
+        if (!item) return;
+
+        // Pass sales_order and sales_order_item from details to item for linking
+        item.sales_order = details.sales_order;
+        item.sales_order_item = details.sales_order_item;
+
+        // Reuse the logic from create_shortage_po but for a single item
+        this.__show_po_dialog(details, [item], __('Create PO for {0}', [item_code]));
     }
 
     create_work_order(details) {
@@ -1161,18 +1187,27 @@ class ProductionWizard {
     }
 
     create_shortage_po(details) {
-        const shortage_items = details.raw_materials.filter(m => m.shortage > 0);
+        // Prepare items with sales_order for linking
+        const shortage_items = details.raw_materials.filter(m => m.shortage > 0).map(m => {
+            m.sales_order = details.sales_order;
+            m.sales_order_item = details.sales_order_item;
+            return m;
+        });
 
         if (!shortage_items.length) {
             frappe.msgprint(__('No shortages to order'));
             return;
         }
 
+        this.__show_po_dialog(details, shortage_items, __('Create Purchase Order for Shortages'));
+    }
+
+    __show_po_dialog(details, shortage_items, title) {
         const self = this;
         const default_warehouse = details.work_order?.source_warehouse || 'Stores - O';
 
         const d = new frappe.ui.Dialog({
-            title: __('Create Purchase Order for Shortages'),
+            title: title,
             size: 'large',
             fields: [
                 {
@@ -1224,7 +1259,7 @@ class ProductionWizard {
 
         // Render editable items table
         let items_html = `
-                    < table class="table table-sm table-bordered" >
+            <table class="table table-sm table-bordered">
                 <thead>
                     <tr>
                         <th>${__('Item')}</th>
@@ -1278,7 +1313,9 @@ class ProductionWizard {
                     item_code: shortage_items[idx].item_code,
                     qty: qty,
                     rate: rate > 0 ? rate : null,
-                    warehouse: values.warehouse || shortage_items[idx].warehouse
+                    warehouse: values.warehouse || shortage_items[idx].warehouse,
+                    sales_order: shortage_items[idx].sales_order || null,
+                    sales_order_item: shortage_items[idx].sales_order_item || null
                 });
             }
         });
@@ -1357,5 +1394,277 @@ class ProductionWizard {
                 }
             }
         });
+    }
+
+    show_consolidated_wizard() {
+        const d = new frappe.ui.Dialog({
+            title: __('Consolidated Procurement Wizard'),
+            size: 'extra-large',
+            fields: [
+                {
+                    fieldname: 'customer',
+                    fieldtype: 'Link',
+                    options: 'Customer',
+                    label: __('Filter by Customer'),
+                    description: __('Select customer to aggregate shortages for')
+                },
+                {
+                    fieldname: 'col_break_1',
+                    fieldtype: 'Column Break'
+                },
+                {
+                    fieldname: 'item_group',
+                    fieldtype: 'Link',
+                    options: 'Item Group',
+                    label: __('Filter by Item Group'),
+                    description: __('e.g., Yarn, Buttons')
+                },
+                {
+                    fieldname: 'sec_dates',
+                    fieldtype: 'Section Break',
+                    label: __('Date Range')
+                },
+                {
+                    fieldname: 'from_date',
+                    fieldtype: 'Date',
+                    label: __('From Delivery Date'),
+                    default: frappe.datetime.add_months(frappe.datetime.nowdate(), -1)
+                },
+                {
+                    fieldname: 'col_break_2',
+                    fieldtype: 'Column Break'
+                },
+                {
+                    fieldname: 'to_date',
+                    fieldtype: 'Date',
+                    label: __('To Delivery Date'),
+                    default: frappe.datetime.add_months(frappe.datetime.nowdate(), 1)
+                },
+                {
+                    fieldname: 'sec_action',
+                    fieldtype: 'Section Break'
+                },
+                {
+                    fieldname: 'get_btn',
+                    fieldtype: 'Button',
+                    label: __('Get Shortages'),
+                    click: () => {
+                        this.get_consolidated_shortages(d);
+                    }
+                },
+                {
+                    fieldname: 'results_section',
+                    fieldtype: 'Section Break',
+                    label: __('Shortage Summary'),
+                    hidden: 1
+                },
+                {
+                    fieldname: 'shortages_html',
+                    fieldtype: 'HTML'
+                }
+            ]
+        });
+
+        d.show();
+    }
+
+    get_consolidated_shortages(dialog) {
+        const values = dialog.get_values();
+        if (!values) return;
+
+        dialog.get_field('shortages_html').$wrapper.html(`
+            <div class="text-center p-4">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="sr-only">${__('Loading...')}</span>
+                </div>
+            </div>
+        `);
+        dialog.set_df_property('results_section', 'hidden', 0);
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.get_consolidated_shortages',
+            args: {
+                filters: values
+            },
+            callback: (r) => {
+                const shortages = r.message || {};
+                this.render_consolidated_shortages(dialog, shortages);
+            }
+        });
+    }
+
+    render_consolidated_shortages(dialog, shortages) {
+        if (Object.keys(shortages).length === 0) {
+            dialog.get_field('shortages_html').$wrapper.html(`
+                <div class="text-muted text-center p-4">${__('No shortages found based on current filters.')}</div>
+            `);
+            return;
+        }
+
+        let html = `
+            <div class="consolidated-table-wrapper" style="max-height: 400px; overflow-y: auto;">
+                <table class="table table-bordered table-sm">
+                    <thead>
+                        <tr class="thead-light">
+                            <th style="width: 40px"><input type="checkbox" class="select-all-shortages"></th>
+                            <th>${__('Item')}</th>
+                            <th class="text-right">${__('Total Required')}</th>
+                            <th class="text-right">${__('Total Shortage')}</th>
+                            <th class="text-right" style="width: 120px">${__('Order Qty')}</th>
+                            <th>${__('Details')}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+        `;
+
+        for (const [item_code, data] of Object.entries(shortages)) {
+            // Build tooltip or expand/collapse details
+            const breakdown_info = data.breakdown.map(b =>
+                `<div>${b.sales_order}: ${parseFloat(b.shortage).toFixed(3)}</div>`
+            ).join('');
+
+            html += `
+                <tr data-item-code="${item_code}">
+                    <td><input type="checkbox" class="select-shortage" checked></td>
+                    <td>
+                        <strong>${item_code}</strong>
+                        <div class="small text-muted">${data.item_name || ''}</div>
+                    </td>
+                    <td class="text-right">${parseFloat(data.total_required).toFixed(3)} ${data.uom}</td>
+                    <td class="text-right text-danger font-weight-bold">${parseFloat(data.total_shortage).toFixed(3)} ${data.uom}</td>
+                    <td>
+                        <input type="number" class="form-control form-control-sm text-right order-qty" 
+                            value="${parseFloat(data.total_shortage).toFixed(3)}" step="0.001">
+                    </td>
+                    <td>
+                         <button class="btn btn-xs btn-default btn-view-breakdown" data-toggle="popover" title="${__('Demand Breakdown')}" data-content="${breakdown_info}" data-html="true" data-trigger="focus">
+                            <i class="fa fa-list"></i> ${data.breakdown.length} ${__('Orders')}
+                         </button>
+                    </td>
+                </tr>
+            `;
+        }
+
+        html += `</tbody></table></div>`;
+
+        // Add Create PO Button at the bottom
+        html += `
+            <div class="mt-3 text-right">
+                <button class="btn btn-primary btn-create-consolidated-po">
+                    <i class="fa fa-shopping-cart"></i> ${__('Create Consolidated PO')}
+                </button>
+            </div>
+        `;
+
+        const wrapper = dialog.get_field('shortages_html').$wrapper;
+        wrapper.html(html);
+
+        // Initialize popovers
+        wrapper.find('[data-toggle="popover"]').popover();
+
+        // Bind Select All
+        wrapper.find('.select-all-shortages').on('change', function () {
+            wrapper.find('.select-shortage').prop('checked', $(this).is(':checked'));
+        });
+
+        // Bind Create PO
+        wrapper.find('.btn-create-consolidated-po').on('click', () => {
+            this.create_consolidated_po(dialog, shortages);
+        });
+    }
+
+    create_consolidated_po(dialog, shortages) {
+        const wrapper = dialog.get_field('shortages_html').$wrapper;
+        const selected_items = [];
+
+        wrapper.find('.select-shortage:checked').each(function () {
+            const row = $(this).closest('tr');
+            const item_code = row.data('item-code');
+            const custom_qty = parseFloat(row.find('.order-qty').val()) || 0;
+
+            if (custom_qty > 0 && shortages[item_code]) {
+                const data = shortages[item_code];
+                // Logic to distribute custom_qty among the breakdown
+                // If custom_qty == total_shortage, we take everything.
+                // If custom_qty != total_shortage, we assume proportional or FIFO?
+                // For simplicity, let's assume we fulfill shortages in order until qty runs out.
+
+                let remaining_to_order = custom_qty;
+
+                for (let b of data.breakdown) {
+                    if (remaining_to_order <= 0) break;
+
+                    const needed = flt(b.shortage);
+                    const take = Math.min(remaining_to_order, needed);
+
+                    selected_items.push({
+                        item_code: item_code,
+                        qty: take,
+                        sales_order: b.sales_order,
+                        sales_order_item: b.sales_order_item,
+                        warehouse: b.warehouse
+                    });
+
+                    remaining_to_order -= take;
+                }
+
+                // If there is still remaining qty (user ordered EXTRA), add a line without SO
+                if (remaining_to_order > 0.001) {
+                    selected_items.push({
+                        item_code: item_code,
+                        qty: remaining_to_order,
+                        sales_order: null, // Extra stock
+                        warehouse: data.breakdown[0].warehouse // Default to first warehouse
+                    });
+                }
+            }
+        });
+
+        if (selected_items.length === 0) {
+            frappe.msgprint(__('Please select items to order'));
+            return;
+        }
+
+        // Now prompt for Supplier
+        const d = new frappe.ui.Dialog({
+            title: __('Select Supplier'),
+            fields: [
+                {
+                    fieldname: 'supplier',
+                    fieldtype: 'Link',
+                    options: 'Supplier',
+                    label: __('Supplier'),
+                    reqd: 1
+                }
+            ],
+            primary_action_label: __('Create Sales Orders'),
+            primary_action: (values) => {
+                frappe.call({
+                    method: 'kniterp.api.production_wizard.create_purchase_orders_for_shortage',
+                    args: {
+                        items: JSON.stringify(selected_items),
+                        supplier: values.supplier,
+                        submit: 0 // Draft mode
+                    },
+                    freeze: true,
+                    callback: (r) => {
+                        if (r.message) {
+                            d.hide();
+                            dialog.hide();
+                            frappe.show_alert({
+                                message: __('Purchase Order created successfully: <a href="/app/purchase-order/{0}">{0}</a>', [r.message.name]),
+                                indicator: 'green'
+                            }, 5);
+                            this.refresh_pending_items();
+                            if (this.selected_item) this.load_production_details(this.selected_item);
+                        }
+                    }
+                });
+            }
+        });
+
+        // Only change label if we are creating PO
+        d.set_primary_action(__('Create Purchase Order'), d.primary_action);
+        d.show();
     }
 }

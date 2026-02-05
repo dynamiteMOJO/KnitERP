@@ -374,21 +374,28 @@ def get_production_details(sales_order_item):
             else:
                 status = "shortage"
             
-            # Get ordered qty from pending Purchase Orders (for this item, any warehouse)
+            # Get ordered qty from pending Purchase Orders (for this item, specifically for this SO Item if reserved, or SO-level reservation, or Global pool)
             po_data = frappe.db.sql("""
                 SELECT 
                     po.name as po_name,
                     po.status as po_status,
                     poi.qty as ordered_qty,
                     poi.received_qty,
-                    poi.warehouse
+                    poi.warehouse,
+                    poi.sales_order,
+                    poi.sales_order_item
                 FROM `tabPurchase Order Item` poi
                 INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
                 WHERE poi.item_code = %s
+                AND (
+                    poi.sales_order_item = %s 
+                    OR ( (poi.sales_order_item IS NULL OR poi.sales_order_item = '') AND poi.sales_order = %s )
+                    OR ( (poi.sales_order IS NULL OR poi.sales_order = '') )
+                )
                 AND po.docstatus = 1
                 AND po.status NOT IN ('Closed', 'Cancelled')
                 ORDER BY po.creation DESC
-            """, (item.item_code,), as_dict=True)
+            """, (item.item_code, soi.name, soi.parent), as_dict=True)
             
             # Calculate totals and build PO list
             linked_pos = []
@@ -964,6 +971,14 @@ def create_purchase_orders_for_shortage(items, supplier, schedule_date=None, war
             "warehouse": item_warehouse,
             "schedule_date": req_date
         }
+
+        # Link to Sales Order if provided
+        if item.get("sales_order"):
+            row_data["sales_order"] = item.get("sales_order")
+        
+        # Link to Sales Order Item if provided
+        if item.get("sales_order_item"):
+            row_data["sales_order_item"] = item.get("sales_order_item")
         
         # Set rate if provided
         if item.get("rate"):
@@ -1135,3 +1150,73 @@ def create_delivery_note(sales_order, items=None):
     frappe.msgprint(_("Delivery Note {0} created").format(dn.name))
     
     return dn.name
+
+
+@frappe.whitelist()
+def get_consolidated_shortages(filters=None):
+    """
+    Get aggregated raw material shortages for multiple Sales Orders based on filters.
+    Returns a dictionary grouped by Item Code with breakdown by Sales Order.
+    """
+    if isinstance(filters, str):
+        filters = json.loads(filters)
+    filters = filters or {}
+    
+    # Reuse get_pending_production_items logic to find relevant SO items
+    # We can pass the filters directly as they share structure (customer, from_date, to_date)
+    # We might need to add 'item_group' support to get_pending_production_items or filter here
+    
+    pending_items = get_pending_production_items(filters)
+    
+    consolidated_shortages = {}
+    
+    for item in pending_items:
+        # Get details for this item (BOM, raw materials)
+        # This calls get_production_details which does the heavy lifting of BOM traversal and Stock checks
+        try:
+            details = get_production_details(item.sales_order_item)
+            
+            for rm in details.get("raw_materials", []):
+                # We only care about shortages
+                if rm.get("shortage", 0) > 0:
+                    item_code = rm["item_code"]
+                    
+                    if item_code not in consolidated_shortages:
+                        consolidated_shortages[item_code] = {
+                            "item_code": item_code,
+                            "item_name": rm["item_name"],
+                            "description": rm.get("description"),
+                            "uom": rm["uom"],
+                            "total_required": 0.0,
+                            "total_shortage": 0.0,
+                            "breakdown": []
+                        }
+                    
+                    # Add to consolidated record
+                    shortage_qty = flt(rm["shortage"])
+                    consolidated_shortages[item_code]["total_required"] += flt(rm["required_qty"])
+                    consolidated_shortages[item_code]["total_shortage"] += shortage_qty
+                    
+                    consolidated_shortages[item_code]["breakdown"].append({
+                        "sales_order": item.sales_order,
+                        "sales_order_item": item.sales_order_item,
+                        "required_qty": flt(rm["required_qty"]),
+                        "shortage": shortage_qty,
+                        "warehouse": rm.get("warehouse")
+                    })
+                    
+        except Exception as e:
+            frappe.log_error(f"Error calculating shortage for {item.sales_order_item}: {str(e)}")
+            continue
+
+    # Filter by Item Group if specified
+    if filters.get("item_group"):
+        item_group = filters.get("item_group")
+        filtered_shortages = {}
+        for code, data in consolidated_shortages.items():
+            db_group = frappe.get_cached_value("Item", code, "item_group")
+            if db_group == item_group:
+                filtered_shortages[code] = data
+        return filtered_shortages
+
+    return consolidated_shortages
