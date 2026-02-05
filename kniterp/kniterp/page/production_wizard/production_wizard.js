@@ -41,6 +41,9 @@ class ProductionWizard {
         if (this.filters.urgent) {
             this.urgent_filter.set_value(this.filters.urgent);
         }
+        if (this.filters.invoice_status) {
+            this.status_filter.set_value(this.filters.invoice_status);
+        }
     }
 
     setup_page() {
@@ -105,6 +108,28 @@ class ProductionWizard {
                 this.refresh_pending_items();
             }
         });
+
+        // Invoice Status filter
+        this.status_filter = this.page.add_field({
+            fieldname: 'status_filter',
+            label: __('View Items'),
+            fieldtype: 'Select',
+            options: [
+                { 'label': __('Pending Production'), 'value': 'Pending Production' },
+                { 'label': __('Ready to Invoice'), 'value': 'Ready to Invoice' },
+                { 'label': __('All Active'), 'value': 'All' }
+            ],
+            default: 'Pending Production',
+            change: () => {
+                this.filters.invoice_status = this.status_filter.get_value();
+                this.refresh_pending_items();
+            }
+        });
+
+        // Set default filter if not present
+        if (!this.filters.invoice_status) {
+            this.filters.invoice_status = 'Pending Production';
+        }
 
         // Ensure the fields are styled correctly for the top bar
         this.page.page_form.css({
@@ -346,14 +371,6 @@ class ProductionWizard {
 					${details.bom_no ? this.get_primary_action_buttons(details) : ''}
 				</div>
 
-				<!-- Operations Section -->
-				<div class="section-header">
-					<h5><i class="fa fa-tasks"></i> ${__('Operations')}</h5>
-				</div>
-				<div class="operations-list">
-					${details.bom_no ? this.render_operations(details) : `<div class="text-muted p-3">${__('Please create a BOM to view operations')}</div>`}
-				</div>
-
 				<!-- Raw Materials Section -->
 				<div class="section-header">
 					<h5><i class="fa fa-cube"></i> ${__('Raw Materials')}</h5>
@@ -366,6 +383,14 @@ class ProductionWizard {
 				<div class="materials-list">
 					${this.render_raw_materials(details.raw_materials)}
 				</div>
+
+				<!-- Operations Section -->
+				<div class="section-header">
+					<h5><i class="fa fa-tasks"></i> ${__('Operations')}</h5>
+				</div>
+				<div class="operations-list">
+					${details.bom_no ? this.render_operations(details) : `<div class="text-muted p-3">${__('Please create a BOM to view operations')}</div>`}
+				</div>
 			</div>
 		`;
 
@@ -376,12 +401,16 @@ class ProductionWizard {
     get_primary_action_buttons(details) {
         let buttons = [];
 
+        const all_rm_available = !details.raw_materials || details.raw_materials.length === 0 || details.raw_materials.every(m => (m.available_qty || 0) > 0);
+
         if (!details.work_order) {
-            buttons.push(`
+            if (all_rm_available) {
+                buttons.push(`
 				<button class="btn btn-primary btn-create-wo">
 					<i class="fa fa-plus"></i> ${__('Create Work Order')}
 				</button>
 			`);
+            }
         } else if (details.work_order.status === 'Draft') {
             buttons.push(`
 				<button class="btn btn-primary btn-start-wo">
@@ -389,11 +418,19 @@ class ProductionWizard {
 				</button>
 			`);
         } else if (details.work_order.status === 'Completed') {
-            buttons.push(`
+            if (details.pending_qty > 0) {
+                buttons.push(`
 				<button class="btn btn-success btn-create-delivery">
 					<i class="fa fa-truck"></i> ${__('Create Delivery Note')}
 				</button>
 			`);
+            } else {
+                buttons.push(`
+				<button class="btn btn-success btn-create-invoice">
+					<i class="fa fa-file-text"></i> ${__('Create Sales Invoice')}
+				</button>
+			`);
+            }
         }
 
         return buttons.join('');
@@ -734,8 +771,14 @@ class ProductionWizard {
         });
 
         // Create Delivery Note
+        // Create Delivery Note
         this.$details_content.find('.btn-create-delivery').on('click', () => {
             this.create_delivery_note(details);
+        });
+
+        // Create Sales Invoice
+        this.$details_content.find('.btn-create-invoice').on('click', () => {
+            this.create_sales_invoice(details);
         });
 
         // Create Subcontracting Order
@@ -1365,6 +1408,22 @@ class ProductionWizard {
             callback: (r) => {
                 if (r.message) {
                     frappe.set_route('Form', 'Delivery Note', r.message);
+                }
+            }
+        });
+    }
+
+    create_sales_invoice(details) {
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_sales_invoice',
+            args: {
+                sales_order: details.sales_order
+            },
+            freeze: true,
+            freeze_message: __('Creating Sales Invoice...'),
+            callback: (r) => {
+                if (r.message) {
+                    frappe.set_route('Form', 'Sales Invoice', r.message);
                 }
             }
         });

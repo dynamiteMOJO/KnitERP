@@ -32,7 +32,7 @@ def get_pending_production_items(filters=None):
     # Base conditions
     conditions.append("so.docstatus = %(docstatus)s")
     conditions.append("so.status NOT IN ('Closed', 'Completed')")
-    conditions.append("soi.qty > soi.delivered_qty")
+    conditions.append("(soi.qty > soi.delivered_qty OR soi.billed_amt < soi.amount)")
     
     # Optional filters
     if filters.get("customer"):
@@ -54,6 +54,12 @@ def get_pending_production_items(filters=None):
     if filters.get("urgent"):
         conditions.append("soi.delivery_date < %(today)s")
         values["today"] = nowdate()
+
+    invoice_status = filters.get("invoice_status")
+    if invoice_status == "Pending Production":
+        conditions.append("soi.qty > soi.delivered_qty")
+    elif invoice_status == "Ready to Invoice":
+        conditions.append("soi.qty <= soi.delivered_qty")
     
     where_clause = " AND ".join(conditions)
     
@@ -67,6 +73,8 @@ def get_pending_production_items(filters=None):
             soi.item_code,
             soi.item_name,
             soi.qty,
+            soi.billed_amt,
+            soi.amount,
             soi.delivered_qty,
             soi.work_order_qty,
             (soi.qty - soi.delivered_qty) as pending_qty,
@@ -1070,10 +1078,14 @@ def get_status_summary():
     Get dashboard summary of all pending production.
     """
     # Pending items (no work order)
-    pending_items = frappe.db.count("Sales Order Item", {
-        "docstatus": 1,
-        "qty": [">", "delivered_qty"]
-    })
+    pending_items = frappe.db.sql("""
+        SELECT COUNT(*) 
+        FROM `tabSales Order Item` soi
+        INNER JOIN `tabSales Order` so ON so.name = soi.parent
+        WHERE so.docstatus = 1 
+        AND so.status NOT IN ('Closed', 'Completed')
+        AND (soi.qty > soi.delivered_qty OR soi.billed_amt < soi.amount)
+    """)[0][0]
     
     # Work orders by status
     wo_status = frappe.db.sql("""
@@ -1220,3 +1232,18 @@ def get_consolidated_shortages(filters=None):
         return filtered_shortages
 
     return consolidated_shortages
+
+
+@frappe.whitelist()
+def create_sales_invoice(sales_order):
+    """
+    Create Sales Invoice for a Sales Order.
+    """
+    from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+    
+    si = make_sales_invoice(sales_order)
+    si.insert()
+    
+    frappe.msgprint(_("Sales Invoice {0} created").format(si.name))
+    
+    return si.name
