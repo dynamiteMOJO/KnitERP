@@ -62,17 +62,20 @@ class ProductionWizard {
         // Clear anything in sidebar just in case
         this.page.sidebar.empty();
 
-        // Customer filter
+        // Party Name filter (Select)
         this.customer_filter = this.page.add_field({
             fieldname: 'customer',
-            label: __('Customer'),
-            fieldtype: 'Link',
-            options: 'Customer',
+            label: __('Party Name'),
+            fieldtype: 'Select',
+            options: [{ 'label': __('All Parties'), 'value': '' }],
             change: () => {
                 this.filters.customer = this.customer_filter.get_value();
                 this.refresh_pending_items();
             }
         });
+
+        // Load parties initial - moved to end
+
 
         // From Date filter
         this.from_date_filter = this.page.add_field({
@@ -82,6 +85,7 @@ class ProductionWizard {
             default: frappe.datetime.add_months(frappe.datetime.nowdate(), -1),
             change: () => {
                 this.filters.from_date = this.from_date_filter.get_value();
+                this.load_party_options();
                 this.refresh_pending_items();
             }
         });
@@ -94,6 +98,7 @@ class ProductionWizard {
             default: frappe.datetime.add_months(frappe.datetime.nowdate(), 1),
             change: () => {
                 this.filters.to_date = this.to_date_filter.get_value();
+                this.load_party_options();
                 this.refresh_pending_items();
             }
         });
@@ -105,6 +110,7 @@ class ProductionWizard {
             fieldtype: 'Check',
             change: () => {
                 this.filters.urgent = this.urgent_filter.get_value();
+                this.load_party_options();
                 this.refresh_pending_items();
             }
         });
@@ -122,6 +128,7 @@ class ProductionWizard {
             default: 'Pending Production',
             change: () => {
                 this.filters.invoice_status = this.status_filter.get_value();
+                this.load_party_options();
                 this.refresh_pending_items();
             }
         });
@@ -137,6 +144,63 @@ class ProductionWizard {
             'background': 'var(--subtle-fg)',
             'border-bottom': '1px solid var(--border-color)',
             'margin-bottom': '10px'
+        });
+
+        // Load parties initial (after fields are created)
+        this.load_party_options();
+    }
+
+    load_party_options() {
+        // Synchronize filters with UI fields if not already set (handles initialization)
+        if (this.from_date_filter && !this.filters.from_date) {
+            this.filters.from_date = this.from_date_filter.get_value();
+        }
+        if (this.to_date_filter && !this.filters.to_date) {
+            this.filters.to_date = this.to_date_filter.get_value();
+        }
+        if (this.urgent_filter && this.filters.urgent === undefined) {
+            this.filters.urgent = this.urgent_filter.get_value();
+        }
+
+        // Create a copy of filters but exclude the customer filter itself
+        // We want to see ALL parties that match the DATE/STATUS criteria, 
+        // not just the one currently selected (if any)
+        const query_filters = Object.assign({}, this.filters);
+        delete query_filters.customer;
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.get_unique_parties',
+            args: {
+                filters: query_filters
+            },
+            callback: (r) => {
+                if (r.message) {
+                    const options = [{ 'label': __('All Parties'), 'value': '' }]
+                        .concat(r.message.map(p => ({
+                            'label': p.customer_name,
+                            'value': p.customer
+                        })));
+
+                    const current_selection = this.filters.customer;
+
+                    // Update options
+                    this.customer_filter.df.options = options;
+                    this.customer_filter.refresh();
+
+                    // Restore or Reset Logic
+                    if (current_selection) {
+                        const still_valid = options.find(o => o.value === current_selection);
+                        if (still_valid) {
+                            this.customer_filter.set_value(current_selection);
+                        } else {
+                            // Invalid, reset
+                            this.customer_filter.set_value('');
+                            this.filters.customer = '';
+                            this.refresh_pending_items();
+                        }
+                    }
+                }
+            }
         });
     }
 

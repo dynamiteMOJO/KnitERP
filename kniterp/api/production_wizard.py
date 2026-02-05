@@ -11,6 +11,57 @@ from frappe.utils import flt, nowdate, getdate, add_days, cint
 import json
 
 
+
+@frappe.whitelist()
+def get_unique_parties(filters=None):
+    """
+    Fetch unique customers who have pending production items, respecting current filters.
+    """
+    if filters and isinstance(filters, str):
+        filters = json.loads(filters)
+    
+    filters = filters or {}
+    
+    conditions = []
+    values = {"docstatus": 1}
+    
+    # Base conditions
+    conditions.append("so.docstatus = %(docstatus)s")
+    conditions.append("so.status NOT IN ('Closed', 'Completed')")
+    conditions.append("(soi.qty > soi.delivered_qty OR soi.billed_amt < soi.amount)")
+    
+    # Apply other filters from the wizard
+    if filters.get("from_date"):
+        conditions.append("so.transaction_date >= %(from_date)s")
+        values["from_date"] = filters.get("from_date")
+    
+    if filters.get("to_date"):
+        conditions.append("so.transaction_date <= %(to_date)s")
+        values["to_date"] = filters.get("to_date")
+    
+    if filters.get("urgent"):
+        conditions.append("soi.delivery_date < %(today)s")
+        values["today"] = nowdate()
+
+    invoice_status = filters.get("invoice_status")
+    if invoice_status == "Pending Production":
+        conditions.append("soi.qty > soi.delivered_qty")
+    elif invoice_status == "Ready to Invoice":
+        conditions.append("soi.qty <= soi.delivered_qty")
+    
+    where_clause = " AND ".join(conditions)
+
+    parties = frappe.db.sql("""
+        SELECT DISTINCT so.customer, so.customer_name
+        FROM `tabSales Order` so
+        INNER JOIN `tabSales Order Item` soi ON so.name = soi.parent
+        WHERE {where_clause}
+        ORDER BY so.customer_name ASC
+    """.format(where_clause=where_clause), values, as_dict=True)
+    
+    return parties
+
+
 @frappe.whitelist()
 def get_pending_production_items(filters=None):
     """
