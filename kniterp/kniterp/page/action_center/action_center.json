@@ -1,0 +1,24 @@
+{
+    "code": "action-center",
+    "doctype": "Page",
+    "icon": "fa fa-flag",
+    "module": "Kniterp",
+    "name": "action-center",
+    "page_name": "action-center",
+    "roles": [
+        {
+            "role": "Manufacturing Manager"
+        },
+        {
+            "role": "Manufacturing User"
+        },
+        {
+            "role": "System Manager"
+        },
+        {
+            "role": "Stock Manager"
+        }
+    ],
+    "standard": "Yes",
+    "title": "Action Center"
+}

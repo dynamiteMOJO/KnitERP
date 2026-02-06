@@ -44,6 +44,9 @@ class ProductionWizard {
         if (this.filters.invoice_status) {
             this.status_filter.set_value(this.filters.invoice_status);
         }
+        if (this.filters.materials_status) {
+            this.materials_filter.set_value(this.filters.materials_status);
+        }
     }
 
     setup_page() {
@@ -129,6 +132,22 @@ class ProductionWizard {
             change: () => {
                 this.filters.invoice_status = this.status_filter.get_value();
                 this.load_party_options();
+                this.refresh_pending_items();
+            }
+        });
+
+        // Materials Status filter (Action Center support)
+        this.materials_filter = this.page.add_field({
+            fieldname: 'materials_status',
+            label: __('Materials'),
+            fieldtype: 'Select',
+            options: [
+                { 'label': __('All'), 'value': '' },
+                { 'label': __('Ready for Production'), 'value': 'Ready' },
+                { 'label': __('Material Shortage'), 'value': 'Shortage' }
+            ],
+            change: () => {
+                this.filters.materials_status = this.materials_filter.get_value();
                 this.refresh_pending_items();
             }
         });
@@ -278,14 +297,46 @@ class ProductionWizard {
     }
 
     refresh() {
-        // Refresh both panels
-        this.refresh_pending_items();
-        if (this.selected_item) {
-            this.load_production_details(this.selected_item);
+        let selected_item = null;
+
+        // Check for new route options (from deep linking)
+        if (frappe.route_options) {
+            // Extract selected_item target specifically BEFORE merging
+            if (frappe.route_options.selected_item) {
+                selected_item = frappe.route_options.selected_item;
+                delete frappe.route_options.selected_item; // Remove before merge
+            }
+
+            // Merge other filters (selected_item already removed)
+            this.filters = Object.assign(this.filters, frappe.route_options);
+
+            frappe.route_options = null;
+
+            // Update UI without triggering another refresh call
+            this.suppress_refresh = true;
+            this.apply_filters();
+            this.suppress_refresh = false;
+        }
+
+        // If we have a specific target from navigation, clear any old selection state
+        if (selected_item) {
+            this.selected_item = null;
+            this.$details_content.empty();
+            // Refresh list with the new target
+            this.refresh_pending_items(selected_item);
+        } else {
+            // No new target - just refresh the list
+            this.refresh_pending_items();
+            // Reload existing selection if any
+            if (this.selected_item) {
+                this.load_production_details(this.selected_item);
+            }
         }
     }
 
-    refresh_pending_items() {
+    refresh_pending_items(item_to_select = null) {
+        if (this.suppress_refresh) return;
+
         this.$pending_list.html(`
 			<div class="text-center p-4">
 				<div class="spinner-border text-primary" role="status">
@@ -305,6 +356,25 @@ class ProductionWizard {
                     this.sort_pending_items(this.current_sort_field);
                 } else {
                     this.render_pending_items();
+                }
+
+                // Auto-select item if passed in route options (Action Center deep link)
+                const target = item_to_select || this.filters.selected_item;
+                if (target) {
+                    // Check if item exists in the list
+                    const exists = this.pending_items.find(i => i.sales_order_item === target);
+                    if (exists) {
+                        this.select_item(target);
+
+                        // Scroll to item
+                        setTimeout(() => {
+                            const $item = this.$pending_list.find(`[data-item="${target}"]`);
+                            if ($item.length) {
+                                $item[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
+                            }
+                        }, 500); // Small delay to render
+                    }
+                    if (this.filters.selected_item) delete this.filters.selected_item; // Clear to avoid re-selecting on manual refresh
                 }
             }
         });

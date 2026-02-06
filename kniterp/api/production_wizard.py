@@ -10,6 +10,32 @@ from frappe import _
 from frappe.utils import flt, nowdate, getdate, add_days, cint
 import json
 
+def check_rm_availability(item_code, required_qty):
+    """
+    Checks if RM is available for the given FG item and qty.
+    Returns True if available, False otherwise.
+    """
+    # Get BOM
+    bom = frappe.db.get_value('BOM', {'item': item_code, 'is_active': 1, 'is_default': 1}, 'name')
+    if not bom:
+        return False # No BOM means we can't determine, treat as shortage/issue
+        
+    # Get RMs from BOM
+    rms = frappe.db.get_all('BOM Item', filters={'parent': bom}, fields=['item_code', 'qty', 'uom'])
+    
+    for rm in rms:
+        needed = flt(rm.qty) * flt(required_qty)
+        
+        # Simple stock balance check
+        bal = frappe.db.sql("SELECT sum(actual_qty) FROM `tabBin` WHERE item_code = %s", (rm.item_code,))
+        actual = flt(bal[0][0]) if bal and bal[0][0] else 0.0
+        
+        if actual < needed:
+            return False
+            
+    return True
+
+
 
 
 @frappe.whitelist()
@@ -143,7 +169,7 @@ def get_pending_production_items(filters=None):
         ORDER BY soi.delivery_date ASC, so.name ASC
     """.format(where_clause=where_clause), values, as_dict=True)
     
-    # Get linked work orders for each item
+    # Get linked work orders for each item FIRST (before filtering)
     for item in items:
         # Get work order if exists
         work_order = frappe.db.get_value(
@@ -167,7 +193,33 @@ def get_pending_production_items(filters=None):
             item.work_order_status = None
             item.produced_qty = 0
     
-    return items
+    # Post-query filtering for materials_status
+    materials_status = filters.get("materials_status")
+    
+    final_items = items
+    if materials_status:
+        filtered_items = []
+        for item in items:
+            # We only check availability if work order is not started
+            if not item.work_order or item.work_order_status in ['Draft', 'Not Started']:
+                is_ready = check_rm_availability(item.item_code, item.pending_qty)
+                
+                if materials_status == 'Ready':
+                    if is_ready:
+                        filtered_items.append(item)
+                elif materials_status == 'Shortage':
+                    if not is_ready:
+                         filtered_items.append(item)
+            else:
+                # If WO started, we generally consider it 'handled' for this specific filter purpose
+                # or we exclude it. For now, let's include it only if 'All' (which is the default branch)
+                # If specific status requested for *Production Planning*, started ones are usually ignored or separate.
+                pass
+        
+        final_items = filtered_items
+    
+    return final_items
+
 
 
 @frappe.whitelist()
