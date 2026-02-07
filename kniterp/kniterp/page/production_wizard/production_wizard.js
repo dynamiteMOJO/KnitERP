@@ -29,22 +29,22 @@ class ProductionWizard {
     }
 
     apply_filters() {
-        if (this.filters.customer) {
+        if (this.filters.customer !== undefined) {
             this.customer_filter.set_value(this.filters.customer);
         }
-        if (this.filters.from_date) {
+        if (this.filters.from_date !== undefined) {
             this.from_date_filter.set_value(this.filters.from_date);
         }
-        if (this.filters.to_date) {
+        if (this.filters.to_date !== undefined) {
             this.to_date_filter.set_value(this.filters.to_date);
         }
-        if (this.filters.urgent) {
+        if (this.filters.urgent !== undefined) {
             this.urgent_filter.set_value(this.filters.urgent);
         }
-        if (this.filters.invoice_status) {
+        if (this.filters.invoice_status !== undefined) {
             this.status_filter.set_value(this.filters.invoice_status);
         }
-        if (this.filters.materials_status) {
+        if (this.filters.materials_status !== undefined) {
             this.materials_filter.set_value(this.filters.materials_status);
         }
     }
@@ -307,6 +307,18 @@ class ProductionWizard {
                 selected_item = frappe.route_options.selected_item;
                 delete frappe.route_options.selected_item; // Remove before merge
             }
+
+            // First, reset all mutable filters to defaults to avoid carry-over from previous navigation
+            this.filters = {
+                'invoice_status': 'Pending Production', // Reset view filter
+                'materials_status': '',                 // Reset materials filter
+                'customer': '',                         // Reset customer
+                'urgent': 0                             // Reset urgent
+            };
+
+            // Preserve current date filters if they exist (usually we want to keep date range or use defaults from UI)
+            if (this.from_date_filter) this.filters.from_date = this.from_date_filter.get_value();
+            if (this.to_date_filter) this.filters.to_date = this.to_date_filter.get_value();
 
             // Merge other filters (selected_item already removed)
             this.filters = Object.assign(this.filters, frappe.route_options);
