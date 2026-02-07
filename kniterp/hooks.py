@@ -72,34 +72,33 @@ doc_events = {
 
 
 fixtures = [
-        "Page",  
-        "Textile Attribute",
-        "Textile Attribute Value",
-        "Item Attribute Applies To Values",
-        "Designation",
-        "Client Script",
-        "Property Setter",
-        {
-            "doctype": "Custom Field",
-            "filters": [
-                ["dt", "=", "Work Order Operation"]
-            ]
-        },
-        {
-            "doctype": "Property Setter",
-            "filters": [
-                ["doc_type", "in", [
-                    "Employee",
-                    "Machine Attendance",
-                    "Item",
-                    "Item Textile Attribute"
-                      ]
-                ]
-            ]
-        },
-        "Workspace",
-        "Workspace Sidebar"
-
+    {
+        "doctype": "Page",
+        "filters": [["module", "=", "Kniterp"]]
+    },
+    "Textile Attribute",
+    "Textile Attribute Value",
+    "Item Attribute Applies To Values",
+    {
+        "doctype": "Designation",
+        "filters": [["name", "in", ["Master", "Helper", "Operator"]]]
+    },
+    {
+        "doctype": "Client Script",
+        "filters": [["module", "=", "Kniterp"]]
+    },
+    {
+        "doctype": "Property Setter",
+        "filters": [["module", "=", "Kniterp"]]
+    },
+    {
+        "doctype": "Custom Field",
+        "filters": [["module", "=", "Kniterp"]]
+    },
+    {
+        "doctype": "Workspace",
+        "filters": [["module", "=", "Kniterp"]]
+    }
 ]
 
 # include js, css files in header of web template
