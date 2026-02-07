@@ -70,7 +70,7 @@ def get_unique_parties(filters=None):
         values["today"] = nowdate()
 
     invoice_status = filters.get("invoice_status")
-    if invoice_status == "Pending Production":
+    if invoice_status in ["Pending Production", "Ready to Deliver"]:
         conditions.append("soi.qty > soi.delivered_qty")
     elif invoice_status == "Ready to Invoice":
         conditions.append("soi.qty <= soi.delivered_qty")
@@ -133,7 +133,7 @@ def get_pending_production_items(filters=None):
         values["today"] = nowdate()
 
     invoice_status = filters.get("invoice_status")
-    if invoice_status == "Pending Production":
+    if invoice_status in ["Pending Production", "Ready to Deliver"]:
         conditions.append("soi.qty > soi.delivered_qty")
     elif invoice_status == "Ready to Invoice":
         conditions.append("soi.qty <= soi.delivered_qty")
@@ -144,6 +144,7 @@ def get_pending_production_items(filters=None):
         SELECT
             soi.name as sales_order_item,
             so.name as sales_order,
+            so.status as sales_order_status,
             so.customer,
             so.customer_name,
             so.transaction_date,
@@ -193,13 +194,23 @@ def get_pending_production_items(filters=None):
             item.work_order_status = None
             item.produced_qty = 0
     
-    # Post-query filtering for materials_status
+    # Post-query filtering for materials_status and invoice_status (Ready to Deliver)
     materials_status = filters.get("materials_status")
     
     final_items = items
+    
+    # Filter for Ready to Deliver (Completed WO but not delivered OR SO Status indicates readiness)
+    if invoice_status == "Ready to Deliver":
+        items = [
+            i for i in items 
+            if i.work_order_status == "Completed" 
+            or i.sales_order_status in ['To Deliver and Bill', 'To Deliver']
+        ]
+        final_items = items
+
     if materials_status:
         filtered_items = []
-        for item in items:
+        for item in final_items:
             # We only check availability if work order is not started
             if not item.work_order or item.work_order_status in ['Draft', 'Not Started']:
                 is_ready = check_rm_availability(item.item_code, item.pending_qty)

@@ -125,6 +125,7 @@ class ProductionWizard {
             fieldtype: 'Select',
             options: [
                 { 'label': __('Pending Production'), 'value': 'Pending Production' },
+                { 'label': __('Ready to Deliver'), 'value': 'Ready to Deliver' },
                 { 'label': __('Ready to Invoice'), 'value': 'Ready to Invoice' },
                 { 'label': __('All Active'), 'value': 'All' }
             ],

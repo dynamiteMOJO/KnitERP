@@ -134,6 +134,12 @@ class ActionCenter {
         } else if (data.label === 'Ready for Knitting') {
             view_all_link = 'production-wizard';
             view_all_options = JSON.stringify({ 'materials_status': 'Ready' });
+        } else if (data.label === 'Pending Delivery to Customer') {
+            view_all_link = 'production-wizard';
+            view_all_options = JSON.stringify({ 'invoice_status': 'Ready to Deliver' });
+        } else if (data.label === 'Pending Sales Invoices') {
+            view_all_link = 'production-wizard';
+            view_all_options = JSON.stringify({ 'invoice_status': 'Ready to Invoice' });
         }
 
         return `
