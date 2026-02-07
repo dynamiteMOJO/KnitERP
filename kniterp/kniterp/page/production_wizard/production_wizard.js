@@ -14,7 +14,7 @@ class ProductionWizard {
         this.page = frappe.ui.make_app_page({
             parent: wrapper,
             title: __('Production Wizard'),
-            single_column: false
+            single_column: true
         });
 
         this.selected_item = null;
@@ -622,6 +622,16 @@ class ProductionWizard {
 					<i class="fa fa-file-text-o"></i> ${__('Create Inward Order')}
 				</button>
 			`);
+        } else if (details.is_subcontracted && details.subcontracting_inward_order) {
+            // Check if we can deliver (produced > delivered)
+            // Or just show the button if WO exists
+            if (details.work_order && (details.work_order.produced_qty > 0)) {
+                buttons.push(`
+				<button class="btn btn-success btn-send-delivery mr-2" data-sio="${details.subcontracting_inward_order}">
+					<i class="fa fa-truck"></i> ${__('Send Delivery')}
+				</button>
+			`);
+            }
         }
 
         if (!details.work_order) {
@@ -905,8 +915,18 @@ class ProductionWizard {
             const shortage_display = m.status === 'consumed'
                 ? '-'
                 : parseFloat(m.shortage || 0).toFixed(3);
-            const shortage_class = (m.status !== 'consumed' && m.shortage > 0) ? 'text-danger font-weight-bold' : '';
+
+            let shortage_class = (m.status !== 'consumed' && m.shortage > 0) ? 'text-danger font-weight-bold' : '';
             const consumed_class = m.status === 'consumed' ? 'text-info font-weight-bold' : '';
+
+            // Adjust status/class for customer provided items
+            if (m.is_customer_provided) {
+                if (m.status === 'available_cust') {
+                    shortage_class = 'text-success'; // Available
+                } else if (m.status === 'shortage_cust') {
+                    shortage_class = 'text-danger font-weight-bold';
+                }
+            }
 
             // Ordered column with PO links
             let ordered_html = '-';
@@ -920,7 +940,21 @@ class ProductionWizard {
 
             // Actions column
             let actions_html = '';
-            if (m.linked_pos && m.linked_pos.length > 0) {
+
+            // Subcontracting Inward Logic
+            if (m.is_customer_provided) {
+                if (m.sio_received_qty < m.sio_required_qty) {
+                    actions_html = `<button class="btn btn-xs btn-warning btn-receive-customer-rm" 
+                        data-sio="${details.subcontracting_inward_order}" 
+                        data-item="${m.item_code}">
+                        <i class="fa fa-download"></i> ${__('Receive RM')}
+                    </button>`;
+                } else {
+                    actions_html = `<span class="text-success"><i class="fa fa-check-circle"></i> ${__('Received')}</span>`;
+                }
+            }
+            // Standard PO Logic
+            else if (m.linked_pos && m.linked_pos.length > 0) {
                 const first_po = m.linked_pos[0];
                 if (first_po.status === 'To Receive and Bill' || first_po.status === 'To Receive') {
                     actions_html = `<button class="btn btn-xs btn-success create-pr-btn" data-po="${first_po.po_name}">
@@ -933,11 +967,23 @@ class ProductionWizard {
                 </button>`;
             }
 
+            const customer_badge = m.is_customer_provided ?
+                `<span class="badge badge-warning ml-1" style="font-size: 9px;">${__('Customer Provided')}</span>` : '';
+
+            // Update ordered html for customer provided
+            if (m.is_customer_provided) {
+                ordered_html = `<div>
+                    <span class="font-weight-bold">${parseFloat(m.sio_received_qty || 0).toFixed(3)}</span> 
+                    <span class="text-muted">/ ${parseFloat(m.sio_required_qty || 0).toFixed(3)}</span>
+                 </div>`;
+            }
+
             html += `
 				<tr class="material-row ${m.status}">
 					<td>
 						<a href="/app/item/${m.item_code}">${m.item_code}</a>
 						<div class="text-muted small">${m.item_name}</div>
+                        ${customer_badge}
 					</td>
 					<td class="text-right">${parseFloat(m.required_qty || 0).toFixed(3)} ${m.uom}</td>
 					<td class="text-right">${parseFloat(m.available_qty || 0).toFixed(3)} ${m.uom}</td>
@@ -954,28 +1000,33 @@ class ProductionWizard {
         return html;
     }
 
-    get_material_status_badge(material) {
-        if (material.status === 'consumed') {
-            return `<span class="badge badge-info">✓ ${__('Consumed')}</span>`;
-        } else if (material.status === 'available') {
-            return `<span class="badge badge-success">✓ ${__('Available')}</span>`;
-        } else if (material.linked_pos && material.linked_pos.length > 0) {
-            // Has pending POs
-            const first_po = material.linked_pos[0];
-            if (first_po.status === 'To Receive and Bill' || first_po.status === 'To Receive') {
-                return `<span class="badge badge-primary">📦 ${__('Awaiting PR')}</span>`;
-            } else {
-                return `<span class="badge badge-info">📋 ${__('PO Created')}</span>`;
+    get_material_status_badge(m) {
+        if (m.is_customer_provided) {
+            if (m.status === 'pending_receipt') {
+                return `<span class="badge badge-warning">${__('Pending Receipt')}</span>`;
+            } else if (m.status === 'available_cust') {
+                return `<span class="badge badge-success">${__('Available')}</span>`;
+            } else if (m.status === 'shortage_cust') {
+                return `<span class="badge badge-danger">${__('Shortage')}</span>`;
+            } else if (m.status === 'partial_cust') {
+                return `<span class="badge badge-warning">${__('Partial')}</span>`;
             }
-        } else if (material.status === 'low') {
-            return `<span class="badge badge-warning">⚠ ${__('Low Stock')}</span>`;
-        } else {
-            return `<span class="badge badge-danger">✗ ${__('Shortage')}</span>`;
+            return `<span class="badge badge-success">${__('Received')}</span>`;
         }
+
+        if (m.status === 'consumed') {
+            return `<span class="badge badge-info">${__('Consumed')}</span>`;
+        } else if (m.status === 'shortage') {
+            return `<span class="badge badge-danger">${__('Shortage')}</span>`;
+        } else if (m.status === 'low') {
+            return `<span class="badge badge-warning">${__('Low Stock')}</span>`;
+        }
+        return `<span class="badge badge-success">${__('Available')}</span>`;
     }
 
     has_shortages(materials) {
-        return materials && materials.some(m => m.shortage > 0);
+        // Only return true if there are purchasable items with shortage
+        return materials && materials.some(m => !m.is_customer_provided && m.shortage > 0);
     }
 
     bind_action_events(details) {
@@ -1072,10 +1123,68 @@ class ProductionWizard {
             self.create_po_for_item(details, item_code);
         });
 
+        // Receive Customer RM
+        this.$details_content.find('.btn-receive-customer-rm').on('click', function () {
+            const sio_name = $(this).data('sio');
+            self.receive_customer_rm(sio_name);
+        });
+
+        // Send Delivery
+        this.$details_content.find('.btn-send-delivery').on('click', function () {
+            const sio_name = $(this).data('sio');
+            self.send_subcontracting_delivery(sio_name);
+        });
+
         // Create BOM Designer
         this.$details_content.find('.btn-create-bom-designer').on('click', function () {
             const item_code = $(this).data('item');
             window.open(`/app/bom_designer?item_code=${encodeURIComponent(item_code)}`, '_blank');
+        });
+    }
+
+    receive_customer_rm(sio_name) {
+        frappe.model.open_mapped_doc({
+            method: "erpnext.subcontracting.doctype.subcontracting_inward_order.subcontracting_inward_order.make_rm_stock_entry_inward",
+            frm: { doc: { name: sio_name, doctype: 'Subcontracting Inward Order' } } // Mocking frm somewhat
+        });
+        // The open_mapped_doc implementation usually expects frm.doc.name. 
+        // If frm is passed, it uses frm.doc.name as source_name.
+        // Let's check if we can pass source_name directly in args if we call make_mapped_doc manually.
+        /* 
+           Actually, the standard way in a page is to call frappe.model.mapper.make_mapped_doc directly.
+        */
+        return frappe.call({
+            type: "POST",
+            method: "frappe.model.mapper.make_mapped_doc",
+            args: {
+                method: "erpnext.subcontracting.doctype.subcontracting_inward_order.subcontracting_inward_order.make_rm_stock_entry_inward",
+                source_name: sio_name,
+            },
+            freeze: true,
+            callback: function (r) {
+                if (!r.exc) {
+                    var doc = frappe.model.sync(r.message);
+                    frappe.set_route("Form", doc[0].doctype, doc[0].name);
+                }
+            }
+        });
+    }
+
+    send_subcontracting_delivery(sio_name) {
+        return frappe.call({
+            type: "POST",
+            method: "frappe.model.mapper.make_mapped_doc",
+            args: {
+                method: "erpnext.subcontracting.doctype.subcontracting_inward_order.subcontracting_inward_order.make_subcontracting_delivery",
+                source_name: sio_name,
+            },
+            freeze: true,
+            callback: function (r) {
+                if (!r.exc) {
+                    var doc = frappe.model.sync(r.message);
+                    frappe.set_route("Form", doc[0].doctype, doc[0].name);
+                }
+            }
         });
     }
 

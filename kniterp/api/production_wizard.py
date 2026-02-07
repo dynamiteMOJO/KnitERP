@@ -352,6 +352,17 @@ def get_production_details(sales_order_item):
         if sio_item:
             sio_name = sio_item.parent
             sio_status = frappe.db.get_value("Subcontracting Inward Order", sio_name, "status")
+            
+            # Fetch SIO received items (Customer Provided Items)
+            sio_received_items = frappe.get_all(
+                "Subcontracting Inward Order Received Item",
+                filters={"parent": sio_name, "is_customer_provided_item": 1},
+                fields=["rm_item_code", "required_qty", "received_qty", "returned_qty", "warehouse"]
+            )
+            
+            # Store in dict for easy lookup
+            # Assume one entry per item code for simplicity, though could be multiple? usually one per item
+            sio_received_map = {item.rm_item_code: item for item in sio_received_items}
     
     # Build operations list from BOM
     operations = []
@@ -590,7 +601,7 @@ def get_production_details(sales_order_item):
                     })
                 total_received += flt(po.received_qty)
             
-            raw_materials.append({
+            rm_data = {
                 "item_code": item.item_code,
                 "item_name": item.item_name,
                 "required_qty": required_qty,
@@ -605,9 +616,61 @@ def get_production_details(sales_order_item):
                 "consumed_qty": consumed_qty,
                 "ordered_qty": total_ordered,
                 "linked_pos": linked_pos,
-                "operation": item.operation,
-                "operation_row_id": item.operation_row_id
-            })
+                "operation_next": item.operation, # Using operation as existing field
+                "operation_row_id": item.operation_row_id,
+                "is_customer_provided": 0,
+                "sio_received_qty": 0,
+                "sio_required_qty": 0
+            }
+            
+            # Check if Customer Provided via SIO
+            if is_subcontracted and sio_name and item.item_code in sio_received_map:
+                sio_data = sio_received_map[item.item_code]
+                rm_data["is_customer_provided"] = 1
+                rm_data["sio_required_qty"] = flt(sio_data.required_qty)
+                rm_data["sio_received_qty"] = flt(sio_data.received_qty)
+                
+                # Fetch availability from Customer Warehouse
+                cust_wh = sio_data.warehouse
+                if cust_wh:
+                    bin_data_cust = frappe.db.get_value(
+                        "Bin",
+                        {"item_code": item.item_code, "warehouse": cust_wh},
+                        ["actual_qty", "projected_qty", "reserved_qty"],
+                        as_dict=True
+                    ) or {}
+                    
+                    actual_qty = flt(bin_data_cust.get("actual_qty", 0), 3)
+                    projected_qty = flt(bin_data_cust.get("projected_qty", 0), 3)
+                    reserved_qty = flt(bin_data_cust.get("reserved_qty", 0), 3)
+                    
+                    available_qty = actual_qty - reserved_qty
+                    shortage = max(0, required_qty - available_qty)
+                    
+                    rm_data["available_qty"] = available_qty
+                    rm_data["actual_qty"] = actual_qty
+                    rm_data["projected_qty"] = projected_qty
+                    rm_data["reserved_qty"] = reserved_qty
+                    rm_data["shortage"] = shortage
+                    rm_data["warehouse"] = cust_wh
+                
+                # If fully received, assume available for production if in customer warehouse
+                if rm_data["sio_received_qty"] < rm_data["sio_required_qty"]:
+                     rm_data["status"] = "pending_receipt"
+                else:
+                     rm_data["status"] = "received"
+                     # If status is received, check if it's available
+                     if shortage <= 0:
+                        rm_data["status"] = "available_cust" # Special status for clarity? Or just use available
+                        # Re-evaluate logic: if received, it should be available.
+                        # If available_qty is still low, maybe it's reserved elsewhere?
+                        # For now, let's stick to received if available
+                     elif available_qty > 0:
+                        rm_data["status"] = "partial_cust"
+                     else:
+                        rm_data["status"] = "shortage_cust" # Should ideally be received if sio_received >= sio_required
+            
+            raw_materials.append(rm_data)
     
     return {
         "sales_order": soi.parent,
