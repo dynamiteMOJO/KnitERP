@@ -411,6 +411,15 @@ class ProductionWizard {
             const status_class = this.get_status_class(item);
             const status_label = this.get_status_label(item);
 
+            // Subcontracting UX
+            const is_subcontracted = item.is_subcontracted;
+            const display_item_code = is_subcontracted ? (item.fg_item || item.item_code) : item.item_code;
+            const display_item_name = is_subcontracted ? (item.fg_item || item.item_name) : item.item_name;
+            const service_name = is_subcontracted ? item.item_name : '';
+
+            const badge_html = is_subcontracted ?
+                `<span class="badge badge-warning ml-1" style="font-size: 10px;">${__('Subcontract')}</span>` : '';
+
             html += `
 				<div class="pending-item-card ${this.selected_item === item.sales_order_item ? 'selected' : ''}"
 					 data-item="${item.sales_order_item}">
@@ -421,9 +430,14 @@ class ProductionWizard {
 						<span class="status-badge ${status_class}">${status_label}</span>
 					</div>
 					<div class="item-details mb-1">
-						<div class="item-name text-truncate" title="${item.item_name}" style="font-size: 13px; margin-bottom: 2px;">${item.item_name}</div>
-                        <div class="d-flex justify-content-between align-items-center">
+						<div class="item-name text-truncate" title="${display_item_name}" style="font-size: 13px; margin-bottom: 2px;">
+                            ${is_subcontracted ? `<i class="fa fa-industry text-muted mr-1"></i>` : ''} 
+                            ${display_item_name} ${badge_html}
+                        </div>
+                        ${is_subcontracted ? `<div class="text-muted small text-truncate" title="${service_name}"><i class="fa fa-wrench mr-1"></i> ${service_name}</div>` : ''}
+                        <div class="d-flex justify-content-between align-items-center mt-1">
                             <span class="text-muted small">${item.sales_order}</span>
+                             ${item.fg_item_qty && is_subcontracted ? `<span class="badge badge-light" title="${__('FG Qty')}">${frappe.format(item.fg_item_qty, { fieldtype: 'Float', precision: 2 })}</span>` : ''}
                         </div>
 					</div>
 					<div class="item-footer mt-2 pt-2 border-top">
@@ -502,8 +516,12 @@ class ProductionWizard {
 				<!-- Header -->
 				<div class="details-header">
 					<div class="item-info">
-						<h4>${details.item_name}</h4>
-						<span class="text-muted">${details.item_code}</span>
+                        ${details.is_subcontracted ? `<div class="mb-1"><span class="badge badge-warning">${__('Subcontracting Inward')}</span></div>` : ''}
+						<h4>${details.production_item || details.item_name}</h4>
+						<span class="text-muted">
+                            ${details.production_item ? details.production_item : details.item_code}
+                            ${details.is_subcontracted ? `<br><small class="text-muted">${__('Service')}: ${details.item_name}</small>` : ''}
+                        </span>
 					</div>
 					<div class="qty-info">
 						<div class="big-number">${frappe.format(details.projected_qty, { fieldtype: 'Float', precision: 2 })}</div>
@@ -526,7 +544,7 @@ class ProductionWizard {
 							<div class="label">${__('BOM')}</div>
 							${details.bom_no ?
                 `<a href="/app/bom/${details.bom_no}">${details.bom_no}</a>` :
-                `<button class="btn btn-xs btn-primary btn-create-bom-designer" data-item="${details.item_code}">
+                `<button class="btn btn-xs btn-primary btn-create-bom-designer" data-item="${details.production_item || details.item_code}">
 									<i class="fa fa-plus"></i> ${__('Create BOM')}
 								</button>`
             }
@@ -539,6 +557,16 @@ class ProductionWizard {
 							<span>${frappe.datetime.str_to_user(details.delivery_date)}</span>
 						</div>
 					</div>
+                    ${details.subcontracting_inward_order ? `
+					<div class="info-card">
+						<i class="fa fa-share-square-o"></i>
+						<div>
+							<div class="label">${__('Inward Order')}</div>
+							<a href="/app/subcontracting-inward-order/${details.subcontracting_inward_order}">${details.subcontracting_inward_order}</a>
+							<span class="badge badge-info ml-1">${details.sio_status}</span>
+						</div>
+					</div>
+					` : ''}
 					${details.work_order ? `
 					<div class="info-card">
 						<i class="fa fa-cogs"></i>
@@ -587,6 +615,14 @@ class ProductionWizard {
         let buttons = [];
 
         const all_rm_available = !details.raw_materials || details.raw_materials.length === 0 || details.raw_materials.every(m => (m.available_qty || 0) > 0);
+
+        if (details.is_subcontracted && !details.subcontracting_inward_order) {
+            buttons.push(`
+				<button class="btn btn-primary btn-create-sio mr-2">
+					<i class="fa fa-file-text-o"></i> ${__('Create Inward Order')}
+				</button>
+			`);
+        }
 
         if (!details.work_order) {
             if (all_rm_available) {
@@ -996,6 +1032,27 @@ class ProductionWizard {
             const operation = $(this).data('operation');
             const job_card = $(this).data('job-card');
             self.complete_job_card(details, operation, job_card);
+        });
+
+        // Create SIO
+        this.$details_content.find('.btn-create-sio').on('click', () => {
+            frappe.confirm(__('Create Subcontracting Inward Order for {0}?', [details.production_item || details.item_code]), () => {
+                frappe.call({
+                    method: 'kniterp.api.production_wizard.create_subcontracting_inward_order',
+                    args: {
+                        sales_order: details.sales_order,
+                        sales_order_item: details.sales_order_item
+                    },
+                    freeze: true,
+                    callback: (r) => {
+                        if (r.message) {
+                            frappe.show_alert({ message: __('Subcontracting Inward Order Created'), indicator: 'green' });
+                            // Reload details
+                            this.load_production_details(this.selected_item);
+                        }
+                    }
+                });
+            });
         });
 
         // Create PO for Shortages

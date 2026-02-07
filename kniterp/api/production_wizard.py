@@ -159,9 +159,12 @@ def get_pending_production_items(filters=None):
             soi.delivery_date,
             soi.warehouse,
             soi.description,
+            so.is_subcontracted,
+            soi.fg_item,
+            soi.fg_item_qty,
             COALESCE(soi.bom_no, (
                 SELECT name FROM `tabBOM` 
-                WHERE item = soi.item_code AND is_active = 1 AND is_default = 1
+                WHERE item = IF(so.is_subcontracted = 1, soi.fg_item, soi.item_code) AND is_active = 1 AND is_default = 1
                 LIMIT 1
             )) as bom_no
         FROM `tabSales Order Item` soi
@@ -172,6 +175,15 @@ def get_pending_production_items(filters=None):
     
     # Get linked work orders for each item FIRST (before filtering)
     for item in items:
+        # Determine production item
+        item.production_item = item.fg_item if item.is_subcontracted else item.item_code
+        
+        # If subcontracted, recalculate pending qty based on fg_item_qty
+        if item.is_subcontracted and item.fg_item_qty:
+            # Pro-rate pending qty
+            ratio = flt(item.fg_item_qty) / flt(item.qty) if item.qty else 1.0
+            item.pending_qty = flt(item.pending_qty) * ratio
+            
         # Get work order if exists
         work_order = frappe.db.get_value(
             "Work Order",
@@ -199,13 +211,32 @@ def get_pending_production_items(filters=None):
     
     final_items = items
     
-    # Filter for Ready to Deliver (Completed WO but not delivered OR SO Status indicates readiness)
+    # Filter for Ready to Deliver (must have produced qty that hasn't been delivered yet)
     if invoice_status == "Ready to Deliver":
-        items = [
-            i for i in items 
-            if i.work_order_status == "Completed" 
-            or i.sales_order_status in ['To Deliver and Bill', 'To Deliver']
-        ]
+        ready_items = []
+        for i in items:
+            delivered_qty = flt(i.delivered_qty or 0)
+            produced_qty = flt(i.produced_qty or 0)
+            pending_to_deliver = flt(i.qty) - delivered_qty
+            
+            # Check if there's produced qty that hasn't been delivered
+            ready_qty = 0
+            if produced_qty > 0:
+                ready_qty = max(0, produced_qty - delivered_qty)
+            else:
+                # No WO - check stock availability
+                stock = frappe.db.sql("""
+                    SELECT COALESCE(SUM(actual_qty), 0) 
+                    FROM `tabBin` WHERE item_code = %s
+                """, i.item_code)
+                stock_qty = flt(stock[0][0] if stock else 0)
+                ready_qty = min(stock_qty, pending_to_deliver)
+            
+            if ready_qty > 0:
+                i.ready_to_deliver = ready_qty
+                ready_items.append(i)
+        
+        items = ready_items
         final_items = items
 
     if materials_status:
@@ -213,7 +244,7 @@ def get_pending_production_items(filters=None):
         for item in final_items:
             # We only check availability if work order is not started
             if not item.work_order or item.work_order_status in ['Draft', 'Not Started']:
-                is_ready = check_rm_availability(item.item_code, item.pending_qty)
+                is_ready = check_rm_availability(item.production_item, item.pending_qty)
                 
                 if materials_status == 'Ready':
                     if is_ready:
@@ -250,19 +281,23 @@ def get_production_details(sales_order_item):
         "Sales Order Item",
         sales_order_item,
         ["name", "parent", "item_code", "item_name", "qty", "delivered_qty", 
-         "delivery_date", "warehouse", "bom_no", "description"],
+         "delivery_date", "warehouse", "bom_no", "description", "fg_item", "fg_item_qty"],
         as_dict=True
     )
     
     if not soi:
         frappe.throw(_("Sales Order Item not found"))
+        
+    so = frappe.db.get_value("Sales Order", soi.parent, ["is_subcontracted", "company"], as_dict=True)
+    is_subcontracted = so.is_subcontracted
+    production_item = soi.fg_item if is_subcontracted else soi.item_code
     
     # Get BOM
     bom_no = soi.bom_no
     if not bom_no:
         bom_no = frappe.db.get_value(
             "BOM",
-            {"item": soi.item_code, "is_active": 1, "is_default": 1},
+            {"item": production_item, "is_active": 1, "is_default": 1},
             "name"
         )
     
@@ -303,10 +338,29 @@ def get_production_details(sales_order_item):
                     "is_subcontracted", "wip_warehouse"]
         )
     
+    # Check for Subcontracting Inward Order
+    sio_name = None
+    sio_status = None
+    
+    if is_subcontracted:
+        sio_item = frappe.db.get_value(
+            "Subcontracting Inward Order Item",
+            {"sales_order_item": soi.name, "docstatus": ["!=", 2]},
+            ["parent"],
+            as_dict=True
+        )
+        if sio_item:
+            sio_name = sio_item.parent
+            sio_status = frappe.db.get_value("Subcontracting Inward Order", sio_name, "status")
+    
     # Build operations list from BOM
     operations = []
-    pending_qty = soi.qty - soi.delivered_qty
     
+    pending_qty = soi.qty - soi.delivered_qty
+    if is_subcontracted and soi.fg_item_qty:
+         ratio = flt(soi.fg_item_qty) / flt(soi.qty) if soi.qty else 1.0
+         pending_qty = flt(pending_qty) * ratio
+         
     if bom:
         for idx, op in enumerate(bom.operations):
             # Calculate expected qty from BOM operation's finished_good_qty (scrap factor)
@@ -424,7 +478,7 @@ def get_production_details(sales_order_item):
     raw_materials = []
     
     if bom:
-        company = frappe.db.get_value("Sales Order", soi.parent, "company")
+        company = so.company
         
         for item in bom.items:
             # Skip semi-finished goods - they are produced by earlier operations, not purchased
@@ -559,6 +613,9 @@ def get_production_details(sales_order_item):
         "sales_order": soi.parent,
         "sales_order_item": soi.name,
         "item_code": soi.item_code,
+        "fg_item": soi.fg_item,
+        "is_subcontracted": is_subcontracted,
+        "production_item": production_item,
         "item_name": soi.item_name,
         "qty": soi.qty,
         "delivered_qty": soi.delivered_qty,
@@ -571,7 +628,9 @@ def get_production_details(sales_order_item):
         "work_order": work_order,
         "operations": operations,
         "raw_materials": raw_materials,
-        "projected_qty": fg_projected_qty
+        "projected_qty": fg_projected_qty,
+        "subcontracting_inward_order": sio_name,
+        "sio_status": sio_status
     }
 
 
@@ -585,12 +644,19 @@ def create_work_order(sales_order, sales_order_item):
     soi = frappe.db.get_value(
         "Sales Order Item",
         sales_order_item,
-        ["item_code", "qty", "delivered_qty", "warehouse", "bom_no", "description"],
+        ["item_code", "qty", "delivered_qty", "warehouse", "bom_no", "description", "fg_item", "fg_item_qty"],
         as_dict=True
     )
     
     if not soi:
         frappe.throw(_("Sales Order Item not found"))
+        
+    so = frappe.db.get_value("Sales Order", sales_order, ["company", "project", "is_subcontracted"], as_dict=True)
+    is_subcontracted = so.is_subcontracted
+    production_item = soi.fg_item if is_subcontracted else soi.item_code
+    
+    if is_subcontracted and not production_item:
+         frappe.throw(_("Finished Good Item (fg_item) is missing for this Subcontracted Order"))
     
     # Check if work order already exists
     existing_wo = frappe.db.get_value(
@@ -611,26 +677,28 @@ def create_work_order(sales_order, sales_order_item):
     if not bom_no:
         bom_no = frappe.db.get_value(
             "BOM",
-            {"item": soi.item_code, "is_active": 1, "is_default": 1},
+            {"item": production_item, "is_active": 1, "is_default": 1},
             "name"
         )
     
     if not bom_no:
-        frappe.throw(_("No active BOM found for item {0}").format(soi.item_code))
+        frappe.throw(_("No active BOM found for item {0}").format(production_item))
     
     # Get Sales Order details
-    so = frappe.db.get_value(
-        "Sales Order",
-        sales_order,
-        ["company", "project"],
-        as_dict=True
-    )
+    # so already fetched above
+    pass
     
     # Create Work Order
     wo = frappe.new_doc("Work Order")
-    wo.production_item = soi.item_code
+    wo.production_item = production_item
     wo.bom_no = bom_no
-    wo.qty = flt(soi.qty) - flt(soi.delivered_qty)
+    
+    qty_to_produce = flt(soi.qty) - flt(soi.delivered_qty)
+    if is_subcontracted and soi.fg_item_qty:
+         ratio = flt(soi.fg_item_qty) / flt(soi.qty) if soi.qty else 1.0
+         qty_to_produce = flt(qty_to_produce) * ratio
+         
+    wo.qty = qty_to_produce
     wo.sales_order = sales_order
     wo.sales_order_item = sales_order_item
     wo.company = so.company
@@ -772,8 +840,8 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None):
         supplier_warehouse = frappe.db.get_value(
             "Warehouse", 
             {"company": wo.company, "warehouse_name": ("like", "%Job Work%")},
-            "name"
-        ) or wo.wip_warehouse
+        "name"
+    ) or wo.wip_warehouse
     
     # Create Purchase Order
     po = frappe.new_doc("Purchase Order")
@@ -1361,3 +1429,152 @@ def create_sales_invoice(sales_order):
     frappe.msgprint(_("Sales Invoice {0} created").format(si.name))
     
     return si.name
+
+@frappe.whitelist()
+def create_subcontracting_inward_order(sales_order, sales_order_item):
+    """
+    Create Subcontracting Inward Order for a Sales Order item.
+    """
+    soi = frappe.db.get_value(
+        "Sales Order Item",
+        sales_order_item,
+        ["item_code", "item_name", "qty", "uom", "rate", "delivered_qty", "warehouse", "bom_no", "fg_item", "fg_item_qty"],
+        as_dict=True
+    )
+    
+    if not soi:
+        frappe.throw(_("Sales Order Item not found"))
+    
+    so = frappe.get_doc("Sales Order", sales_order)
+    
+    if not so.is_subcontracted:
+        frappe.throw(_("Sales Order is not marked as Subcontracted"))
+    
+    # Identify Production Item
+    production_item = soi.fg_item or soi.item_code
+    
+    # Identify BOM
+    bom_no = soi.bom_no
+    if not bom_no:
+        bom_no = frappe.db.get_value(
+            "BOM",
+            {"item": production_item, "is_active": 1, "is_default": 1},
+            "name"
+        )
+    
+    if not bom_no:
+        frappe.throw(_("No valid BOM found for item {0}").format(production_item))
+
+    # Find Customer Warehouse (required for SIO)
+    customer_warehouse = None
+    company_abbr = frappe.get_cached_value('Company', so.company, 'abbr')
+    
+    # Strategy 1: Find any warehouse explicitly linked to this customer
+    customer_warehouse = frappe.db.get_value(
+        "Warehouse", 
+        {"customer": so.customer, "company": so.company, "is_group": 0}, 
+        "name"
+    )
+    
+    # Strategy 2: Create new warehouse following standard: JW-IN - {Customer} - {Abbr}
+    if not customer_warehouse:
+        # Standard Parent: Customer Owned - Job Work - {Abbr}
+        parent_wh_name = f"Customer Owned - Job Work - {company_abbr}"
+        parent_wh = frappe.db.exists("Warehouse", parent_wh_name)
+        
+        if not parent_wh:
+             # Fallback: Try fuzzy search for parent
+             parent_wh = frappe.db.get_value(
+                "Warehouse",
+                {"name": ["like", "%Customer%Job%Work%"], "is_group": 1, "company": so.company},
+                "name"
+            )
+             
+        if not parent_wh:
+             frappe.throw(_("Could not find parent warehouse 'Customer Owned - Job Work - {0}'. Please create it first.").format(company_abbr))
+        
+        # Create standard warehouse
+        new_wh_name = f"JW-IN - {so.customer_name} - {company_abbr}"
+        
+        # Check if warehouse with this name exists but without customer link (edge case)
+        existing_wh_doc = frappe.db.exists("Warehouse", new_wh_name)
+        if existing_wh_doc:
+             # Update it? Or use it?
+             # If it exists, let's update the customer link if missing
+             wh_doc = frappe.get_doc("Warehouse", new_wh_name)
+             if not wh_doc.customer:
+                 wh_doc.customer = so.customer
+                 wh_doc.save(ignore_permissions=True)
+             customer_warehouse = new_wh_name
+        else:
+             new_wh = frappe.new_doc("Warehouse")
+             new_wh.warehouse_name = f"JW-IN - {so.customer_name} - {company_abbr}"
+             new_wh.parent_warehouse = parent_wh
+             new_wh.is_group = 0
+             new_wh.company = so.company
+             new_wh.customer = so.customer # CRITICAL: Set the customer field
+             new_wh.insert(ignore_permissions=True)
+             customer_warehouse = new_wh.name
+             frappe.msgprint(_("Created new warehouse {0} for customer raw materials").format(customer_warehouse))
+
+    if not customer_warehouse:
+        frappe.throw(_("No Customer Warehouse found and could not auto-create one. Please create a warehouse for Customer {0} manually.").format(so.customer_name))
+        
+    # Determine Delivery Warehouse: Customer Job Work Completed - {Abbr}
+    delivery_wh_name = f"Customer Job Work Completed - {company_abbr}"
+    if not frappe.db.exists("Warehouse", delivery_wh_name):
+         # Try finding it broadly
+         delivery_wh_name = frappe.db.get_value(
+            "Warehouse",
+            {"name": ["like", "%Customer%Job%Work%Completed%"], "company": so.company},
+            "name"
+        )
+    
+    if not delivery_wh_name:
+         frappe.throw(_("Could not find Delivery Warehouse 'Customer Job Work Completed - {0}'.").format(company_abbr))
+
+    sio = frappe.new_doc("Subcontracting Inward Order")
+    sio.sales_order = sales_order
+    sio.customer = so.customer
+    sio.customer_name = so.customer_name
+    sio.company = so.company
+    sio.transaction_date = nowdate()
+    sio.customer_warehouse = customer_warehouse
+    sio.set_delivery_warehouse = delivery_wh_name # Set default for items
+    sio.status = "Draft"
+    sio.from_production_wizard = 1 
+    
+    # Add Service Item
+    service_item = sio.append("service_items", {})
+    service_item.sales_order_item = sales_order_item
+    service_item.item_code = soi.item_code
+    service_item.item_name = soi.item_name
+    service_item.qty = flt(soi.qty)
+    service_item.uom = soi.uom
+    service_item.rate = soi.rate
+    service_item.amount = flt(soi.qty) * flt(soi.rate)
+    service_item.fg_item = soi.fg_item
+    service_item.fg_item_qty = flt(soi.fg_item_qty)
+    
+    # Populate Items table automatically using standard method
+    if hasattr(sio, "populate_items_table"):
+        sio.populate_items_table()
+    else:
+        # Fallback if method missing
+        item_row = sio.append("items", {})
+        item_row.item_code = production_item
+        item_row.qty = flt(soi.fg_item_qty) if soi.fg_item_qty else flt(soi.qty)
+        item_row.sales_order_item = sales_order_item
+        item_row.bom = bom_no
+        item_row.delivery_warehouse = soi.warehouse
+        item_row.stock_uom = frappe.db.get_value("Item", production_item, "stock_uom")
+        item_row.conversion_factor = 1.0 
+    
+    # Ensure delivery warehouse is set on items (in case populate didn't set it from set_delivery_warehouse)
+    for item in sio.items:
+        if not item.delivery_warehouse:
+            item.delivery_warehouse = delivery_wh_name
+
+    sio.insert(ignore_permissions=True)
+    
+    return sio.name
