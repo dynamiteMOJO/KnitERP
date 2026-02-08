@@ -64,7 +64,7 @@ def get_rm_shortage_fix_details():
     
     for item in items:
         if item.work_order_status in [None, 'Draft', 'Not Started', 'Pending']:
-            if not check_rm_availability(item.item_code, item.qty):
+            if check_rm_availability(item.item_code, item.qty) is False:
                 # Get detailed BOM breakdown
                 try:
                     details = get_production_details(item.sales_order_item)
@@ -510,7 +510,7 @@ def check_rm_availability(item_code, required_qty):
     # Get BOM
     bom_data = frappe.db.get_value('BOM', {'item': item_code, 'is_active': 1, 'is_default': 1}, ['name', 'quantity'], as_dict=1)
     if not bom_data:
-        return False # No BOM means we can't determine, treat as shortage/issue
+        return None # No BOM - cannot determine shortage
         
     bom_no = bom_data.name
     bom_qty = flt(bom_data.quantity) or 1.0
@@ -544,7 +544,7 @@ def get_rm_shortage_items():
         # Check if Work Order is not started (meaning we need to check RM)
         if item.work_order_status in [None, 'Draft', 'Not Started', 'Pending']:
             qty_to_check = item.pending_qty if 'pending_qty' in item else item.qty
-            if not check_rm_availability(item.item_code, qty_to_check):
+            if check_rm_availability(item.item_code, qty_to_check) is False:
                 shortage_items.append({
                     'title': f"{item.customer_name} - {item.item_name}",
                     'description': f"Qty: {qty_to_check}",

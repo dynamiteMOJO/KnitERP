@@ -13,11 +13,106 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             this.PRECISION = 3;
             this.operations = [];
 
-            // Check for pre-populated item from URL
+            // Check for params
             const url_params = new URLSearchParams(window.location.search);
-            this.initial_item = url_params.get('item_code');
+            this.initial_item = (frappe.route_options && frappe.route_options.item_code) || url_params.get('item_code');
+            this.bom_no = (frappe.route_options && frappe.route_options.bom_no) || url_params.get('bom_no');
+            this.sales_order_item = (frappe.route_options && frappe.route_options.sales_order_item) || url_params.get('sales_order_item');
+            this.return_to = (frappe.route_options && frappe.route_options.return_to) || url_params.get('return_to');
+
+            // Clear route options so they don't persist on refresh unintentionally
+            frappe.route_options = null;
 
             this.setup_ui();
+
+            if (this.bom_no) {
+                this.load_existing_bom(this.bom_no);
+            }
+        }
+
+        load_existing_bom(bom_no) {
+            frappe.call({
+                method: 'kniterp.api.bom_tool.get_multilevel_bom',
+                args: { bom_no: bom_no },
+                freeze: true,
+                callback: (r) => {
+                    if (r.message) {
+                        this.populate_from_data(r.message);
+                    }
+                }
+            });
+        }
+
+        populate_from_data(data) {
+            // Set Final Good
+            if (this.fg_item_select) {
+                this.fg_item_select.set_value(data.final_good);
+            }
+            this.page.main.find('.final-qty').val(data.final_qty);
+
+            // Clear existing ops just in case
+            this.operations = [];
+            this.page.main.find('.workflow-stack').empty();
+
+            // Add operations
+            for (let op of data.operations) {
+                // Determine type from scrubbed name
+                let type = op.type; // already scrubbed from backend
+
+                // Add Op
+                this.add_operation(type);
+                let current_op = this.operations[this.operations.length - 1];
+                let $card = current_op.$el;
+
+                // Set Loss
+                $card.find('.input-loss').val(op.loss_percent);
+
+                // Set Job Work
+                $card.find('.chk-job-work').prop('checked', op.is_job_work);
+
+                // Set Output Item (SFG) - wait for control to be ready
+                if (op.output_item && type !== 'dyeing') {
+                    setTimeout(() => {
+                        let sfg_ctrl = $card.data('sfg_control');
+                        if (sfg_ctrl) {
+                            sfg_ctrl.set_value(op.output_item);
+                        }
+                    }, 200);
+                }
+
+                // Set Workstation Type
+                if (op.workstation_type) {
+                    // Wait for control to be ready (it's in a setTimeout in render_op_card)
+                    // or we can just set the value on the control found in data
+                    // But render_op_card is async-ish with those timeouts.
+                    // Let's use a small timeout here or access the data directly if we can't wait.
+                    // Better: access the data object on card after a moment?
+                    // Or just set the value. checking render_op_card implementation...
+                    // render_op_card uses setTimeouts (100ms). We need to wait.
+
+                    setTimeout(() => {
+                        let ws_ctrl = $card.data('ws_control');
+                        if (ws_ctrl) ws_ctrl.set_value(op.workstation_type);
+                    }, 200);
+                }
+
+                // Inputs
+                let $inputs_list = $card.find('.inputs-list');
+                $inputs_list.empty(); // Clear default row
+
+                for (let inp of op.inputs) {
+                    this.add_input_row($card);
+                    let $row = $inputs_list.find('.input-row-mini').last();
+
+                    setTimeout(() => {
+                        let ctrl = $row.data('control');
+                        if (ctrl) ctrl.set_value(inp.item);
+                        $row.find('.input-mix').val(inp.mix);
+                    }, 200);
+                }
+            }
+
+            setTimeout(() => this.calculate_quantities(), 500);
         }
 
         setup_ui() {
@@ -596,7 +691,29 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                     callback: (r) => {
                         if (r.message && r.message.message) {
                             frappe.msgprint(r.message.message);
-                            frappe.set_route('List', 'BOM', { item: data.final_good });
+
+                            // Return flow
+                            if (this.return_to === 'production_wizard' && this.sales_order_item) {
+                                // Link BOM to Sales Order Item
+                                let bom_name = r.message.name;
+                                if (bom_name) {
+                                    frappe.call({
+                                        method: 'kniterp.api.production_wizard.update_so_item_bom',
+                                        args: {
+                                            sales_order_item: this.sales_order_item,
+                                            bom_no: bom_name
+                                        },
+                                        callback: () => {
+                                            frappe.set_route('production_wizard', { selected_item: this.sales_order_item });
+                                        }
+                                    });
+                                } else {
+                                    // Fallback
+                                    frappe.set_route('production_wizard', { selected_item: this.sales_order_item });
+                                }
+                            } else {
+                                frappe.set_route('List', 'BOM', { item: data.final_good });
+                            }
                         }
                     }
                 });

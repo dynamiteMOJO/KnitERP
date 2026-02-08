@@ -748,7 +748,8 @@ def get_production_details(sales_order_item):
         "subcontracting_inward_order": sio_name,
         "sio_status": sio_status,
         "uom": soi.stock_uom,
-        "draft_sales_invoice": draft_sales_invoice
+        "draft_sales_invoice": draft_sales_invoice,
+        "notes": get_notes(soi.name)
     }
 
 
@@ -2004,3 +2005,67 @@ def create_subcontracting_inward_order(sales_order, sales_order_item):
     sio.insert(ignore_permissions=True)
     
     return sio.name
+@frappe.whitelist()
+def get_notes(sales_order_item):
+    """
+    Fetch all notes for a specific sales order item.
+    """
+    notes = frappe.db.get_all(
+        "Production Wizard Note",
+        filters={"sales_order_item": sales_order_item},
+        fields=["name", "note", "owner", "creation", "item_code"],
+        order_by="creation desc"
+    )
+
+    for note in notes:
+        user = frappe.get_doc("User", note.owner)
+        note.user_fullname = user.full_name
+        note.user_image = user.user_image
+
+    return notes
+
+@frappe.whitelist()
+def add_production_note(sales_order_item, note):
+    """
+    Add a new note to the production wizard item.
+    """
+    if not note:
+        frappe.throw(_("Note content is required"))
+
+    soi = frappe.db.get_value("Sales Order Item", sales_order_item, ["parent", "item_code"], as_dict=True)
+    if not soi:
+        frappe.throw(_("Sales Order Item not found"))
+
+    doc = frappe.get_doc({
+        "doctype": "Production Wizard Note",
+        "sales_order": soi.parent,
+        "sales_order_item": sales_order_item,
+        "item_code": soi.item_code,
+        "note": note
+    })
+    doc.insert()
+    return doc
+
+@frappe.whitelist()
+def delete_production_note(note_name):
+    """
+    Delete a production wizard note.
+    Only the creator or System Manager can delete.
+    """
+    if not frappe.db.exists("Production Wizard Note", note_name):
+        frappe.throw(_("Note not found"))
+
+    note = frappe.get_doc("Production Wizard Note", note_name)
+    
+    if note.owner != frappe.session.user and "System Manager" not in frappe.get_roles():
+        frappe.throw(_("You are not authorized to delete this note"))
+
+    note.delete()
+    return "deleted"
+@frappe.whitelist()
+def update_so_item_bom(sales_order_item, bom_no):
+    """
+    Update the BOM number for a specific Sales Order Item.
+    """
+    frappe.db.set_value("Sales Order Item", sales_order_item, "bom_no", bom_no)
+    return {"message": "BOM Updated"}

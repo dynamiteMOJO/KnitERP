@@ -564,7 +564,12 @@ class ProductionWizard {
 						<div>
 							<div class="label">${__('BOM')}</div>
 							${details.bom_no ?
-                `<a href="/app/bom/${details.bom_no}">${details.bom_no}</a>` :
+                `<div>
+                     <a href="/app/bom/${details.bom_no}">${details.bom_no}</a>
+                     <button class="btn btn-xs btn-link text-muted btn-edit-bom ml-1" title="${__('Edit BOM')}" style="padding: 0 4px;">
+                        <i class="fa fa-pencil"></i>
+                     </button>
+                 </div>` :
                 `<button class="btn btn-xs btn-primary btn-create-bom-designer" data-item="${details.production_item || details.item_code}">
 									<i class="fa fa-plus"></i> ${__('Create BOM')}
 								</button>`
@@ -629,7 +634,139 @@ class ProductionWizard {
 		`;
 
         this.$details_content.html(html);
+        this.render_notes_section(details);
         this.bind_action_events(details);
+        this.bind_note_events(details);
+    }
+
+    render_notes_section(details) {
+        const notes = details.notes || [];
+
+        let notes_html = '';
+        if (notes.length === 0) {
+            notes_html = `
+                <div class="text-center text-muted p-4 no-notes-message">
+                    <div class="mb-2"><i class="fa fa-comment-o fa-2x" style="opacity: 0.3;"></i></div>
+                    <small>${__('No notes yet.')}</small>
+                </div>
+            `;
+        } else {
+            notes_html = notes.map(note => {
+                const is_owner = note.owner === frappe.session.user;
+                const time_ago = frappe.datetime.comment_when(note.creation);
+                return `
+                    <div class="note-item py-3 border-bottom">
+                        <div class="d-flex justify-content-between align-items-start">
+                            <div class="d-flex align-items-center mb-2">
+                                <span class="avatar avatar-xs mr-2" title="${note.user_fullname}">
+                                    ${frappe.avatar(note.owner, 'avatar-xs')}
+                                </span>
+                                <div>
+                                    <div class="font-weight-bold" style="font-size: 12px;">${note.user_fullname}</div>
+                                    <div class="text-muted" style="font-size: 10px;">${time_ago}</div>
+                                </div>
+                            </div>
+                            ${is_owner || frappe.user.has_role('System Manager') ?
+                        `<button class="btn btn-xs btn-link text-muted btn-delete-note p-0" data-note="${note.name}" title="${__('Delete')}">
+                                    <i class="fa fa-times"></i>
+                                </button>` : ''}
+                        </div>
+                        <div class="note-content pl-1" style="white-space: pre-wrap; font-size: 13px; color: var(--text-color); padding-left: 28px;">${frappe.utils.escape_html(note.note)}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        const section_html = `
+            <div class="section-header mt-4 mb-3 border-top pt-4">
+                <h5 class="mb-3"><i class="fa fa-comments-o text-muted mr-1"></i> ${__('Notes')} <span class="badge badge-pill badge-light text-muted ml-1" style="font-size: 10px;">${notes.length}</span></h5>
+            </div>
+            <div class="notes-section">
+                 <!-- Input Area -->
+                <div class="comment-input-box mb-4">
+                    <div class="input-wrapper p-2 border rounded" style="background-color: var(--control-bg);">
+                        <textarea class="form-control border-0 bg-transparent" rows="2" placeholder="${__('Write a note...')}" style="resize: none; font-size: 13px; box-shadow: none;"></textarea>
+                        <div class="d-flex justify-content-between align-items-center mt-2 px-1">
+                             <div class="text-muted" style="font-size: 10px;">${__('Ctrl+Enter to post')}</div>
+                             <button class="btn btn-xs btn-primary btn-add-note px-3">
+                                ${__('Comment')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- List Area -->
+                <div class="notes-list" style="max-height: 400px; overflow-y: auto;">
+                    ${notes_html}
+                </div>
+            </div>
+        `;
+
+        this.$details_content.append(section_html);
+    }
+
+    bind_note_events(details) {
+        const $section = this.$details_content.find('.notes-section');
+        const $textarea = $section.find('textarea');
+        const $btn = $section.find('.btn-add-note');
+
+        const post_note = () => {
+            const note_content = $textarea.val().trim();
+
+            if (!note_content) {
+                frappe.msgprint(__('Please enter a note'));
+                return;
+            }
+
+            frappe.call({
+                method: 'kniterp.api.production_wizard.add_production_note',
+                args: {
+                    sales_order_item: details.sales_order_item,
+                    note: note_content
+                },
+                freeze: true,
+                callback: (r) => {
+                    if (r.message) {
+                        frappe.show_alert({ message: __('Note added'), indicator: 'green' });
+                        // Refresh details to show new note
+                        this.load_production_details(details.sales_order_item);
+                    }
+                }
+            });
+        };
+
+        // Click event
+        $btn.on('click', () => post_note());
+
+        // Keyboard Shortcut (Ctrl+Enter)
+        $textarea.on('keydown', (e) => {
+            if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                e.preventDefault();
+                post_note();
+            }
+        });
+
+        // Delete Note
+        $section.on('click', '.btn-delete-note', (e) => {
+            const note_name = $(e.currentTarget).data('note');
+
+            frappe.confirm(__('Are you sure you want to delete this note?'), () => {
+                frappe.call({
+                    method: 'kniterp.api.production_wizard.delete_production_note',
+                    args: {
+                        note_name: note_name
+                    },
+                    freeze: true,
+                    callback: (r) => {
+                        if (r.message) {
+                            frappe.show_alert({ message: __('Note deleted'), indicator: 'green' });
+                            // Refresh details
+                            this.load_production_details(details.sales_order_item);
+                        }
+                    }
+                });
+            });
+        });
     }
 
     get_primary_action_buttons(details) {
@@ -1211,10 +1348,25 @@ class ProductionWizard {
             self.send_subcontracting_delivery(sio_name);
         });
 
-        // Create BOM Designer
+        // Create BOM Designer (New)
         this.$details_content.find('.btn-create-bom-designer').on('click', function () {
             const item_code = $(this).data('item');
-            window.open(`/app/bom_designer?item_code=${encodeURIComponent(item_code)}`, '_blank');
+            frappe.set_route('bom_designer', {
+                item_code: item_code,
+                sales_order_item: details.sales_order_item,
+                return_to: 'production_wizard'
+            });
+        });
+
+        // Edit BOM (New)
+        this.$details_content.find('.btn-edit-bom').on('click', function (e) {
+            e.preventDefault(); // Prevent default link behavior if any
+            frappe.set_route('bom_designer', {
+                bom_no: details.bom_no,
+                item_code: details.item_code, // Ensure item_code is available in details
+                sales_order_item: details.sales_order_item,
+                return_to: 'production_wizard'
+            });
         });
     }
 
