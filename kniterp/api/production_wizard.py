@@ -10,21 +10,25 @@ from frappe import _
 from frappe.utils import flt, nowdate, getdate, add_days, cint
 import json
 
+
 def check_rm_availability(item_code, required_qty):
     """
     Checks if RM is available for the given FG item and qty.
     Returns True if available, False otherwise.
     """
     # Get BOM
-    bom = frappe.db.get_value('BOM', {'item': item_code, 'is_active': 1, 'is_default': 1}, 'name')
-    if not bom:
+    bom_data = frappe.db.get_value('BOM', {'item': item_code, 'is_active': 1, 'is_default': 1}, ['name', 'quantity'], as_dict=1)
+    if not bom_data:
         return False # No BOM means we can't determine, treat as shortage/issue
         
+    bom_no = bom_data.name
+    bom_qty = flt(bom_data.quantity) or 1.0
+
     # Get RMs from BOM
-    rms = frappe.db.get_all('BOM Item', filters={'parent': bom}, fields=['item_code', 'qty', 'uom'])
+    rms = frappe.db.get_all('BOM Item', filters={'parent': bom_no}, fields=['item_code', 'qty', 'uom'])
     
     for rm in rms:
-        needed = flt(rm.qty) * flt(required_qty)
+        needed = (flt(rm.qty) / bom_qty) * flt(required_qty)
         
         # Simple stock balance check
         bal = frappe.db.sql("SELECT sum(actual_qty) FROM `tabBin` WHERE item_code = %s", (rm.item_code,))
@@ -74,6 +78,25 @@ def get_unique_parties(filters=None):
         conditions.append("soi.qty > soi.delivered_qty")
     elif invoice_status == "Ready to Invoice":
         conditions.append("soi.qty <= soi.delivered_qty")
+
+    if filters.get("job_work"):
+        if filters.get("job_work") == "Inward":
+            conditions.append("so.is_subcontracted = 1")
+        elif filters.get("job_work") == "Outward":
+            conditions.append("""
+                EXISTS (
+                    SELECT 1 FROM `tabWork Order` wo
+                    INNER JOIN `tabJob Card` jc ON jc.work_order = wo.name
+                    INNER JOIN `tabPurchase Order Item` poi ON poi.job_card = jc.name
+                    INNER JOIN `tabSubcontracting Order` sco ON sco.purchase_order = poi.parent
+                    WHERE wo.sales_order = so.name
+                    AND wo.sales_order_item = soi.name
+                    AND sco.docstatus = 1
+                    AND sco.status NOT IN ('Closed', 'Completed', 'Cancelled')
+                )
+            """)
+        elif filters.get("job_work") == "Standard":
+             conditions.append("so.is_subcontracted = 0")
     
     where_clause = " AND ".join(conditions)
 
@@ -137,6 +160,25 @@ def get_pending_production_items(filters=None):
         conditions.append("soi.qty > soi.delivered_qty")
     elif invoice_status == "Ready to Invoice":
         conditions.append("soi.qty <= soi.delivered_qty")
+
+    if filters.get("job_work"):
+        if filters.get("job_work") == "Inward":
+            conditions.append("so.is_subcontracted = 1")
+        elif filters.get("job_work") == "Outward":
+            conditions.append("""
+                EXISTS (
+                    SELECT 1 FROM `tabWork Order` wo
+                    INNER JOIN `tabJob Card` jc ON jc.work_order = wo.name
+                    INNER JOIN `tabPurchase Order Item` poi ON poi.job_card = jc.name
+                    INNER JOIN `tabSubcontracting Order` sco ON sco.purchase_order = poi.parent
+                    WHERE wo.sales_order = so.name
+                    AND wo.sales_order_item = soi.name
+                    AND sco.docstatus = 1
+                    AND sco.status NOT IN ('Closed', 'Completed', 'Cancelled')
+                )
+            """)
+        elif filters.get("job_work") == "Standard":
+             conditions.append("so.is_subcontracted = 0")
     
     where_clause = " AND ".join(conditions)
     
@@ -780,11 +822,14 @@ def create_work_order(sales_order, sales_order_item):
 
 
 @frappe.whitelist()
-def start_work_order(work_order):
+def start_work_order(work_order, operation_settings=None):
     """
     Submit Work Order to start production.
     This will create Job Cards for each operation.
     """
+    if operation_settings and isinstance(operation_settings, str):
+        operation_settings = json.loads(operation_settings)
+
     wo = frappe.get_doc("Work Order", work_order)
     
     if wo.docstatus == 1:
@@ -815,6 +860,38 @@ def start_work_order(work_order):
     
     wo.submit()
     
+    # Apply operation-specific settings to Job Cards
+    if operation_settings:
+        job_cards = frappe.get_all("Job Card", filters={"work_order": wo.name, "docstatus": 0}, fields=["name", "operation"])
+        
+        # Create a map for quick lookup
+        settings_map = {s.get("operation"): s for s in operation_settings}
+        
+        for jc_item in job_cards:
+            settings = settings_map.get(jc_item.operation)
+            jc = frappe.get_doc("Job Card", jc_item.name)
+            
+            if settings:
+                if "skip_material_transfer" in settings:
+                    jc.skip_material_transfer = cint(settings["skip_material_transfer"])
+                
+                if "wip_warehouse" in settings:
+                    jc.wip_warehouse = settings["wip_warehouse"]
+                
+                if "workstation" in settings and settings["workstation"]:
+                    jc.workstation = settings["workstation"]
+            
+            # Final validation: Ensure workstation exists before standard save
+            if not jc.workstation:
+                # Fallback to first available matching workstation type if BOM was empty
+                filters = {}
+                if jc.workstation_type:
+                    filters["workstation_type"] = jc.workstation_type
+                
+                jc.workstation = frappe.db.get_value("Workstation", filters, "name")
+            
+            jc.save()
+
     frappe.msgprint(_("Work Order {0} started. Job Cards created for operations.").format(wo.name))
     
     return {
@@ -969,7 +1046,7 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None):
 
 
 @frappe.whitelist()
-def complete_operation(work_order, operation, qty):
+def complete_operation(work_order, operation, qty, workstation=None, employee=None):
     """
     Mark an in-house operation as complete by updating the Job Card.
     """
@@ -994,11 +1071,17 @@ def complete_operation(work_order, operation, qty):
     if job_card.is_subcontracted:
         frappe.throw(_("Operation {0} is subcontracted. Use receive_subcontracted_goods instead.").format(operation))
     
+    # Update Job Card settings if provided
+    if workstation:
+        job_card.workstation = workstation
+    
     # Add time log - this updates manufactured qty without submitting job card
     job_card.append("time_logs", {
         "from_time": frappe.utils.now_datetime(),
         "to_time": frappe.utils.now_datetime(),
-        "completed_qty": qty
+        "completed_qty": qty,
+        "employee": employee,
+        "workstation": workstation
     })
     
     job_card.save()

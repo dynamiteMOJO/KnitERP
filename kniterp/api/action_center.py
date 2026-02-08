@@ -22,6 +22,8 @@ def get_action_items():
         'send_to_job_worker': get_send_to_jw_items(),
         'receive_from_job_worker': get_receive_from_jw_items(),
         'receive_rm_from_customer': get_receive_rm_from_customer_items(),
+        'pending_purchase_receipt': get_pending_purchase_receipt_items(),
+        'pending_purchase_invoice': get_pending_purchase_invoice_items(),
         'pending_delivery': get_pending_delivery_items(),
         'pending_invoice': get_pending_invoice_items()
     }
@@ -40,6 +42,8 @@ def get_fix_details(action_key):
         'send_to_job_worker': get_send_to_jw_fix_details,
         'receive_from_job_worker': get_receive_from_jw_fix_details,
         'receive_rm_from_customer': get_receive_rm_from_customer_fix_details,
+        'pending_purchase_receipt': get_pending_purchase_receipt_fix_details,
+        'pending_purchase_invoice': get_pending_purchase_invoice_fix_details,
         'pending_delivery': get_pending_delivery_fix_details,
         'pending_invoice': get_pending_invoice_fix_details
     }
@@ -496,15 +500,18 @@ def check_rm_availability(item_code, required_qty):
     Returns True if available, False otherwise.
     """
     # Get BOM
-    bom = frappe.db.get_value('BOM', {'item': item_code, 'is_active': 1, 'is_default': 1}, 'name')
-    if not bom:
+    bom_data = frappe.db.get_value('BOM', {'item': item_code, 'is_active': 1, 'is_default': 1}, ['name', 'quantity'], as_dict=1)
+    if not bom_data:
         return False # No BOM means we can't determine, treat as shortage/issue
         
+    bom_no = bom_data.name
+    bom_qty = flt(bom_data.quantity) or 1.0
+
     # Get RMs from BOM
-    rms = frappe.db.get_all('BOM Item', filters={'parent': bom}, fields=['item_code', 'qty', 'uom'])
+    rms = frappe.db.get_all('BOM Item', filters={'parent': bom_no}, fields=['item_code', 'qty', 'uom'])
     
     for rm in rms:
-        needed = rm.qty * required_qty # Simple logic, ignoring scrap for high-level check
+        needed = (flt(rm.qty) / bom_qty) * flt(required_qty)
         actual = get_stock_balance(rm.item_code)
         if actual < needed:
             return False
@@ -528,10 +535,11 @@ def get_rm_shortage_items():
     for item in items:
         # Check if Work Order is not started (meaning we need to check RM)
         if item.work_order_status in [None, 'Draft', 'Not Started', 'Pending']:
-            if not check_rm_availability(item.item_code, item.qty):
+            qty_to_check = item.pending_qty if 'pending_qty' in item else item.qty
+            if not check_rm_availability(item.item_code, qty_to_check):
                 shortage_items.append({
                     'title': f"{item.customer_name} - {item.item_name}",
-                    'description': f"Qty: {item.qty}",
+                    'description': f"Qty: {qty_to_check}",
                     'link': 'production-wizard',
                     'route_options': {
                         'materials_status': 'Shortage',
@@ -554,10 +562,11 @@ def get_knitting_pending_items():
     for item in items:
          # Need to check if work order is NOT created or Draft
          if item.work_order_status in [None, 'Draft', 'Not Started', 'Pending']:
-            if check_rm_availability(item.item_code, item.qty):
+            qty_to_check = item.pending_qty if 'pending_qty' in item else item.qty
+            if check_rm_availability(item.item_code, qty_to_check):
                 ready_items.append({
                     'title': f"{item.customer_name} - {item.item_name}",
-                    'description': f"Qty: {item.qty}",
+                    'description': f"Qty: {qty_to_check}",
                     'link': 'production-wizard',
                     'route_options': {
                         'materials_status': 'Ready',
@@ -815,3 +824,244 @@ def get_pending_invoice_items():
         'label': 'Pending Sales Invoices',
         'color': 'success'
     }
+
+
+def get_pending_purchase_receipt_items():
+    """Get pending Purchase Receipts for ordered items (excluding subcontracted POs)."""
+    pos = frappe.db.sql("""
+        SELECT 
+            po.name, po.supplier_name, po.transaction_date
+        FROM
+            `tabPurchase Order` po
+        WHERE
+            po.docstatus = 1
+            AND po.is_subcontracted = 0
+            AND po.status NOT IN ('Closed', 'Completed', 'Cancelled')
+            AND po.per_received < 100
+        ORDER BY po.transaction_date ASC
+        LIMIT 5
+    """, as_dict=1)
+    
+    data = []
+    for po in pos:
+        data.append({
+            'title': f"{po.supplier_name}",
+            'description': f"PO: {po.name}",
+            'date': po.transaction_date,
+            'link': 'Form/Purchase Order/' + po.name
+        })
+        
+    # Get total count
+    count_result = frappe.db.sql("""
+        SELECT COUNT(*) as count
+        FROM `tabPurchase Order`
+        WHERE docstatus = 1
+            AND is_subcontracted = 0
+            AND status NOT IN ('Closed', 'Completed', 'Cancelled')
+            AND per_received < 100
+    """)
+    
+    return {
+        'count': count_result[0][0] if count_result else 0,
+        'items': data,
+        'label': 'Pending Purchase Receipt',
+        'color': 'warning'
+    }
+
+
+def get_pending_purchase_receipt_fix_details():
+    """Get detailed pending purchase receipt data for Fix dialog."""
+    pos = frappe.db.sql("""
+        SELECT 
+            po.name, po.supplier, po.supplier_name, po.transaction_date
+        FROM
+            `tabPurchase Order` po
+        WHERE
+            po.docstatus = 1
+            AND po.is_subcontracted = 0
+            AND po.status NOT IN ('Closed', 'Completed', 'Cancelled')
+            AND po.per_received < 100
+        ORDER BY po.transaction_date ASC
+    """, as_dict=1)
+    
+    data = []
+    for po in pos:
+        items = frappe.db.sql("""
+            SELECT item_code, item_name, qty, received_qty, stock_uom
+            FROM `tabPurchase Order Item`
+            WHERE parent = %s AND (qty - received_qty) > 0
+        """, po.name, as_dict=1)
+        
+        for item in items:
+            data.append({
+                'supplier': po.supplier_name,
+                'po_name': po.name,
+                'item_code': item.item_code,
+                'item_name': item.item_name,
+                'ordered_qty': flt(item.qty, 3),
+                'received_qty': flt(item.received_qty, 3),
+                'pending_qty': flt(item.qty - item.received_qty, 3),
+                'uom': item.stock_uom,
+                'po_date': po.transaction_date
+            })
+    
+    return {
+        'title': _('Receive Ordered Items'),
+        'button_label': _('Receive'),
+        'columns': [
+            {'fieldname': 'select', 'label': '', 'width': 30},
+            {'fieldname': 'supplier', 'label': _('Supplier')},
+            {'fieldname': 'po_name', 'label': _('PO')},
+            {'fieldname': 'item_name', 'label': _('Item')},
+            {'fieldname': 'ordered_qty', 'label': _('Ordered')},
+            {'fieldname': 'received_qty', 'label': _('Received')},
+            {'fieldname': 'pending_qty', 'label': _('Pending')},
+            {'fieldname': 'po_date', 'label': _('PO Date')},
+            {'fieldname': 'action_btn', 'label': _('Actions')}
+        ],
+        'data': data,
+        'row_actions': [
+            {'action': 'create_pr', 'label': _('Create PR'), 'icon': 'fa fa-download'},
+            {'action': 'view_po', 'label': _('View PO'), 'icon': 'fa fa-external-link'}
+        ],
+        'bulk_actions': []
+    }
+
+
+def get_pending_purchase_invoice_items():
+    """Get pending Purchase Invoices for ordered items (both regular and subcontracted POs)."""
+    # Get regular POs
+    regular_pos = frappe.db.sql("""
+        SELECT 
+            po.name, po.supplier_name, po.transaction_date, 'Regular' as po_type
+        FROM
+            `tabPurchase Order` po
+        WHERE
+            po.docstatus = 1
+            AND po.is_subcontracted = 0
+            AND po.status NOT IN ('Closed', 'Cancelled')
+            AND po.per_billed < 100
+        ORDER BY po.transaction_date ASC
+        LIMIT 3
+    """, as_dict=1)
+    
+    # Get subcontracted POs
+    subcontracted_pos = frappe.db.sql("""
+        SELECT 
+            po.name, po.supplier_name, po.transaction_date, 'Subcontracted' as po_type
+        FROM
+            `tabPurchase Order` po
+        WHERE
+            po.docstatus = 1
+            AND po.is_subcontracted = 1
+            AND po.status NOT IN ('Closed', 'Cancelled')
+            AND po.per_billed < 100
+        ORDER BY po.transaction_date ASC
+        LIMIT 2
+    """, as_dict=1)
+    
+    data = []
+    for po in regular_pos + subcontracted_pos:
+        data.append({
+            'title': f"{po.supplier_name} ({po.po_type})",
+            'description': f"PO: {po.name}",
+            'date': po.transaction_date,
+            'link': 'Form/Purchase Order/' + po.name
+        })
+        
+    # Get total counts
+    regular_count_result = frappe.db.sql("""
+        SELECT COUNT(*) as count
+        FROM `tabPurchase Order`
+        WHERE docstatus = 1
+            AND is_subcontracted = 0
+            AND status NOT IN ('Closed', 'Cancelled')
+            AND per_billed < 100
+    """)
+    regular_count = regular_count_result[0][0] if regular_count_result else 0
+    
+    subcontracted_count_result = frappe.db.sql("""
+        SELECT COUNT(*) as count
+        FROM `tabPurchase Order`
+        WHERE docstatus = 1
+            AND is_subcontracted = 1
+            AND status NOT IN ('Closed', 'Cancelled')
+            AND per_billed < 100
+    """)
+    subcontracted_count = subcontracted_count_result[0][0] if subcontracted_count_result else 0
+    
+    return {
+        'count': regular_count + subcontracted_count,
+        'items': data[:5],
+        'label': 'Pending Purchase Invoice',
+        'color': 'warning'
+    }
+
+
+def get_pending_purchase_invoice_fix_details():
+    """Get detailed pending purchase invoice data for Fix dialog."""
+    # Get regular POs
+    regular_pos = frappe.db.sql("""
+        SELECT 
+            po.name, po.supplier, po.supplier_name, po.transaction_date, 
+            po.grand_total, po.per_billed, 'Regular' as po_type
+        FROM
+            `tabPurchase Order` po
+        WHERE
+            po.docstatus = 1
+            AND po.is_subcontracted = 0
+            AND po.status NOT IN ('Closed', 'Cancelled')
+            AND po.per_billed < 100
+        ORDER BY po.transaction_date ASC
+    """, as_dict=1)
+    
+    # Get subcontracted POs
+    subcontracted_pos = frappe.db.sql("""
+        SELECT 
+            po.name, po.supplier, po.supplier_name, po.transaction_date, 
+            po.grand_total, po.per_billed, 'Subcontracted' as po_type
+        FROM
+            `tabPurchase Order` po
+        WHERE
+            po.docstatus = 1
+            AND po.is_subcontracted = 1
+            AND po.status NOT IN ('Closed', 'Cancelled')
+            AND po.per_billed < 100
+        ORDER BY po.transaction_date ASC
+    """, as_dict=1)
+    
+    data = []
+    for po in regular_pos + subcontracted_pos:
+        pending_amount = flt(po.grand_total) * (100 - flt(po.per_billed)) / 100
+        data.append({
+            'supplier': po.supplier_name,
+            'po_name': po.name,
+            'po_type': po.po_type,
+            'po_date': po.transaction_date,
+            'total_amount': flt(po.grand_total, 2),
+            'billed_percent': flt(po.per_billed, 2),
+            'pending_amount': flt(pending_amount, 2)
+        })
+    
+    return {
+        'title': _('Create Purchase Invoices'),
+        'button_label': _('Invoice'),
+        'columns': [
+            {'fieldname': 'select', 'label': '', 'width': 30},
+            {'fieldname': 'supplier', 'label': _('Supplier')},
+            {'fieldname': 'po_name', 'label': _('PO')},
+            {'fieldname': 'po_type', 'label': _('Type')},
+            {'fieldname': 'po_date', 'label': _('PO Date')},
+            {'fieldname': 'total_amount', 'label': _('Total Amount')},
+            {'fieldname': 'billed_percent', 'label': _('Billed %')},
+            {'fieldname': 'pending_amount', 'label': _('Pending Amount')},
+            {'fieldname': 'action_btn', 'label': _('Actions')}
+        ],
+        'data': data,
+        'row_actions': [
+            {'action': 'create_pi', 'label': _('Create Invoice'), 'icon': 'fa fa-file-text'},
+            {'action': 'view_po', 'label': _('View PO'), 'icon': 'fa fa-external-link'}
+        ],
+        'bulk_actions': []
+    }
+

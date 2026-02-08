@@ -66,7 +66,22 @@ def create_subcontracting_bom(op_data, bom_no):
     
     service_item = op_data.get('service_item')
     if not service_item:
-        service_item = frappe.db.get_value("Item", {"item_name": op_data['type']}, "name")
+        # Map operation types to service item names
+        service_name_map = {
+            'knitting': 'Knitting Jobwork',
+            'dyeing': 'Dyeing Jobwork',
+            'yarn_processing': 'Yarn Processing'
+        }
+        
+        op_type = op_data['type'].lower()
+        service_name = service_name_map.get(op_type)
+        
+        if service_name:
+            service_item = frappe.db.get_value("Item", {"item_name": service_name}, "name")
+        
+        # Fallback to old naming conventions if not found
+        if not service_item:
+            service_item = frappe.db.get_value("Item", {"item_name": op_data['type']}, "name")
         if not service_item:
             # Fallback to unscrubbed name if type is 'yarn_processing' etc
             service_item = frappe.db.get_value("Item", {"item_name": frappe.unscrub(op_data['type'])}, "name")

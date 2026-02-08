@@ -23,11 +23,21 @@ class KniterpHome {
     }
 
     setup_page() {
+        let greeting = "Good Morning";
+        const hour = new Date().getHours();
+        if (hour >= 12 && hour < 17) {
+            greeting = "Good Afternoon";
+        } else if (hour >= 17) {
+            greeting = "Good Evening";
+        }
+
         this.body.html(`
 <div class="kniterp-home-container">
     <div class="kniterp-header">
-        <h1 class="greeting-text">Good Morning, <span id="user-first-name">User</span></h1>
-        <p class="sub-greeting">Here's what's happening with your business today.</p>
+        <div class="greeting-wrapper">
+            <h1 class="greeting-text"><span id="greeting-time">${greeting}</span>, <span id="user-first-name">User</span></h1>
+            <p class="sub-greeting">Here's what's happening with your business today.</p>
+        </div>
         <button class="btn btn-primary show-reports-btn">Show Reports</button>
     </div>
 
@@ -218,7 +228,19 @@ class KniterpHome {
         this.refresh();
     }
 
+    update_greeting() {
+        let greeting = "Good Morning";
+        const hour = new Date().getHours();
+        if (hour >= 12 && hour < 17) {
+            greeting = "Good Afternoon";
+        } else if (hour >= 17) {
+            greeting = "Good Evening";
+        }
+        this.body.find("#greeting-time").text(greeting);
+    }
+
     refresh() {
+        this.update_greeting();
         frappe.call({
             method: "kniterp.kniterp.page.kniterp_home.kniterp_home.get_dashboard_metrics",
             callback: (r) => {
@@ -278,14 +300,31 @@ class KniterpHome {
         // View All / Metric redirects
         this.body.on("click", ".view-all, .metric-block, .urgent-row", function (e) {
             e.preventDefault();
-            const action = $(this).data("action") || $(this).closest("[data-action]").data("action");
+            const $target = $(this);
+            const action = $target.data("action") || $target.closest("[data-action]").data("action");
 
             if (!action) return;
 
-            if (action.startsWith("sales-") || action.startsWith("purchase-") || action.startsWith("jw-")) {
+            if (action.startsWith("sales-")) {
+                let filters = {
+                    "docstatus": 1,
+                    "is_subcontracted": 0,
+                    "status": ["not in", ["Closed", "Completed", "Cancelled"]]
+                };
+                frappe.set_route("List", "Sales Order", filters);
+            } else if (action.startsWith("purchase-")) {
+                let filters = {
+                    "docstatus": 1,
+                    "is_subcontracted": 0,
+                    "status": ["not in", ["Closed", "Completed", "Cancelled"]]
+                };
+                frappe.set_route("List", "Purchase Order", filters);
+            } else if (action.startsWith("jw-")) {
                 let options = {};
-                if (action.includes("-urgent")) {
-                    options.urgent = 1;
+                if (action.includes("inward")) {
+                    options.job_work = "Inward";
+                } else if (action.includes("outward")) {
+                    options.job_work = "Outward";
                 }
                 // Redirect to Production Wizard
                 frappe.route_options = options;
@@ -319,7 +358,7 @@ class KniterpHome {
             if (tool === "attendance") {
                 frappe.set_route("Form", "Employee Attendance Tool");
             } else if (tool === "payroll") {
-                frappe.set_route("List", "Salary Slip");
+                frappe.set_route("Workspaces", "Payroll");
             } else if (tool === "conveyance") {
                 // Assuming Monthly Conveyance based on previous conversations maybe
                 frappe.set_route("List", "Monthly Conveyance");

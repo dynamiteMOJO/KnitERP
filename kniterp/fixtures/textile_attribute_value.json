@@ -317,18 +317,6 @@
   "kniterp_attribute": "Yarn Spec",
   "kniterp_description": null,
   "kniterp_is_active": 1,
-  "kniterp_short_code": "30",
-  "kniterp_sort_order": 10,
-  "kniterp_value": "30s",
-  "modified": "2025-12-26 06:23:34.315745",
-  "name": "30s"
- },
- {
-  "docstatus": 0,
-  "doctype": "Textile Attribute Value",
-  "kniterp_attribute": "Yarn Spec",
-  "kniterp_description": null,
-  "kniterp_is_active": 1,
   "kniterp_short_code": "34",
   "kniterp_sort_order": 10,
   "kniterp_value": "34s",
@@ -526,5 +514,17 @@
   "kniterp_value": "20s",
   "modified": "2025-12-26 15:46:39.650338",
   "name": "20s"
+ },
+ {
+  "docstatus": 0,
+  "doctype": "Textile Attribute Value",
+  "kniterp_attribute": "Yarn Spec",
+  "kniterp_description": null,
+  "kniterp_is_active": 1,
+  "kniterp_short_code": "30",
+  "kniterp_sort_order": 10,
+  "kniterp_value": "30s",
+  "modified": "2025-12-26 06:23:34.315745",
+  "name": "30s"
  }
 ]

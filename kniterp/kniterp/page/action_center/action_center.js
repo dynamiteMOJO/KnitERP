@@ -84,6 +84,8 @@ class ActionCenter {
             'send_to_job_worker',
             'receive_from_job_worker',
             'receive_rm_from_customer',
+            'pending_purchase_receipt',
+            'pending_purchase_invoice',
             'pending_delivery',
             'pending_invoice'
         ];
@@ -142,6 +144,21 @@ class ActionCenter {
         } else if (data.label === 'Pending Sales Invoices') {
             view_all_link = 'production-wizard';
             view_all_options = JSON.stringify({ 'invoice_status': 'Ready to Invoice' });
+        } else if (data.label === 'Pending Purchase Receipt') {
+            view_all_link = 'List/Purchase Order';
+            view_all_options = JSON.stringify({
+                'docstatus': 1,
+                'is_subcontracted': 0,
+                'per_received': ['<', 100],
+                'status': ['not in', ['Closed', 'Completed', 'Cancelled']]
+            });
+        } else if (data.label === 'Pending Purchase Invoice') {
+            view_all_link = 'List/Purchase Order';
+            view_all_options = JSON.stringify({
+                'docstatus': 1,
+                'per_billed': ['<', 100],
+                'status': ['not in', ['Closed', 'Cancelled']]
+            });
         }
 
         // Get contextual button label based on card type
@@ -151,6 +168,8 @@ class ActionCenter {
             'send_to_job_worker': __('Send'),
             'receive_from_job_worker': __('Receive'),
             'receive_rm_from_customer': __('Receive'),
+            'pending_purchase_receipt': __('Receive'),
+            'pending_purchase_invoice': __('Invoice'),
             'pending_delivery': __('Deliver'),
             'pending_invoice': __('Invoice')
         };
@@ -181,7 +200,7 @@ class ActionCenter {
                     <button class="btn btn-xs btn-default btn-view-all" 
                             data-link="${view_all_link || data.items[0].link}"
                             ${view_all_options ? `data-options='${view_all_options}'` : ''}>
-                        View Action Items
+                        View All
                     </button>
                 </div>
                 ` : ''}
@@ -273,11 +292,13 @@ class ActionCenter {
                     table_html += `<td><input type="checkbox" class="row-select" data-idx="${idx}"></td>`;
                 } else if (col.fieldname === 'action_btn') {
                     table_html += `<td style="white-space: nowrap;">${action_buttons}</td>`;
-                } else if (col.fieldname === 'delivery_date' || col.fieldname === 'posting_date') {
+                } else if (col.fieldname === 'delivery_date' || col.fieldname === 'posting_date' || col.fieldname === 'po_date') {
                     table_html += `<td>${row[col.fieldname] ? frappe.datetime.str_to_user(row[col.fieldname]) : ''}</td>`;
-                } else if (col.fieldname === 'amount') {
+                } else if (col.fieldname === 'amount' || col.fieldname === 'total_amount' || col.fieldname === 'pending_amount') {
                     table_html += `<td class="text-right">${frappe.format(row[col.fieldname], { fieldtype: 'Currency' })}</td>`;
-                } else if (['required_qty', 'available_qty', 'shortage', 'qty', 'pending_qty', 'ordered_qty', 'delivered_qty'].includes(col.fieldname)) {
+                } else if (col.fieldname === 'billed_percent') {
+                    table_html += `<td class="text-right">${row[col.fieldname] || 0}%</td>`;
+                } else if (['required_qty', 'available_qty', 'shortage', 'qty', 'pending_qty', 'ordered_qty', 'delivered_qty', 'received_qty'].includes(col.fieldname)) {
                     table_html += `<td class="text-right">${row[col.fieldname] || 0}</td>`;
                 } else {
                     table_html += `<td>${row[col.fieldname] || ''}</td>`;
@@ -427,6 +448,38 @@ class ActionCenter {
         } else if (action === 'receive_rm') {
             frappe.set_route('Form', 'Subcontracting Inward Order', rowData.order_name);
             dialog.hide();
+        } else if (action === 'create_pr') {
+            // Create Purchase Receipt from Purchase Order
+            frappe.call({
+                method: 'erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt',
+                args: {
+                    source_name: rowData.po_name
+                },
+                freeze: true,
+                callback: (r) => {
+                    if (r.message) {
+                        const doclist = frappe.model.sync(r.message);
+                        frappe.set_route('Form', 'Purchase Receipt', doclist[0].name);
+                        dialog.hide();
+                    }
+                }
+            });
+        } else if (action === 'create_pi') {
+            // Create Purchase Invoice from Purchase Order
+            frappe.call({
+                method: 'erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_invoice',
+                args: {
+                    source_name: rowData.po_name
+                },
+                freeze: true,
+                callback: (r) => {
+                    if (r.message) {
+                        const doclist = frappe.model.sync(r.message);
+                        frappe.set_route('Form', 'Purchase Invoice', doclist[0].name);
+                        dialog.hide();
+                    }
+                }
+            });
         }
     }
 

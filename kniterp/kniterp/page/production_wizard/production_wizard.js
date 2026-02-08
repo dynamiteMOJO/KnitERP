@@ -47,6 +47,9 @@ class ProductionWizard {
         if (this.filters.materials_status !== undefined) {
             this.materials_filter.set_value(this.filters.materials_status);
         }
+        if (this.filters.job_work !== undefined) {
+            this.type_filter.set_value(this.filters.job_work);
+        }
     }
 
     setup_page() {
@@ -149,6 +152,24 @@ class ProductionWizard {
             ],
             change: () => {
                 this.filters.materials_status = this.materials_filter.get_value();
+                this.refresh_pending_items();
+            }
+        });
+
+        // Type filter (Inward/Outward/Standard)
+        this.type_filter = this.page.add_field({
+            fieldname: 'job_work',
+            label: __('Type'),
+            fieldtype: 'Select',
+            options: [
+                { 'label': __('All Types'), 'value': '' },
+                { 'label': __('In-House'), 'value': 'Standard' },
+                { 'label': __('Job Work In'), 'value': 'Inward' },
+                { 'label': __('Job Work Out'), 'value': 'Outward' }
+            ],
+            change: () => {
+                this.filters.job_work = this.type_filter.get_value();
+                this.load_party_options();
                 this.refresh_pending_items();
             }
         });
@@ -866,7 +887,7 @@ class ProductionWizard {
         } else {
             // In-house operation
             const remaining_qty = (op.for_quantity || details.pending_qty) - (op.completed_qty || 0);
-            if (op.status !== 'Completed' && remaining_qty > 0) {
+            if (op.status !== 'Completed' && remaining_qty > 0 && op.job_card) {
                 actions.push(`
 					<button class="btn btn-sm btn-primary btn-complete-op"
 							data-operation="${op.operation}"
@@ -1243,18 +1264,90 @@ class ProductionWizard {
     }
 
     start_work_order(details) {
-        frappe.confirm(
-            __('This will submit the Work Order and create Job Cards. Continue?'),
-            () => {
+        const operations_data = (details.operations || []).map(op => {
+            let skip = 0;
+            let wh = details.work_order?.wip_warehouse || '';
+
+            // Defaults based on user request
+            if (op.operation.toLowerCase().includes('knitting') && !op.is_subcontracted) {
+                skip = 1;
+            }
+
+            if (op.operation.toLowerCase().includes('dyeing')) {
+                wh = 'Job Work Outward - O';
+            }
+
+            return {
+                operation: op.operation,
+                workstation: op.workstation || '',
+                skip_material_transfer: skip,
+                wip_warehouse: wh
+            };
+        });
+
+        const d = new frappe.ui.Dialog({
+            title: __('Start Production: {0}', [details.work_order.name]),
+            size: 'large',
+            fields: [
+                {
+                    fieldname: 'info',
+                    fieldtype: 'HTML',
+                    options: `<div class="alert alert-info">${__('Define settings for each operation. These will be applied to the generated Job Cards.')}</div>`
+                },
+                {
+                    fieldname: 'operation_settings',
+                    fieldtype: 'Table',
+                    label: __('Operation Settings'),
+                    fields: [
+                        {
+                            fieldname: 'operation',
+                            fieldtype: 'Data',
+                            label: __('Operation'),
+                            read_only: 1,
+                            in_list_view: 1,
+                            columns: 3
+                        },
+                        {
+                            fieldname: 'workstation',
+                            fieldtype: 'Link',
+                            options: 'Workstation',
+                            label: __('Initial Machine'),
+                            in_list_view: 1,
+                            columns: 3,
+                            reqd: 1
+                        },
+                        {
+                            fieldname: 'skip_material_transfer',
+                            fieldtype: 'Check',
+                            label: __('Skip'),
+                            in_list_view: 1,
+                            columns: 2
+                        },
+                        {
+                            fieldname: 'wip_warehouse',
+                            fieldtype: 'Link',
+                            options: 'Warehouse',
+                            label: __('WIP Wh'),
+                            in_list_view: 1,
+                            columns: 3
+                        }
+                    ],
+                    data: operations_data
+                }
+            ],
+            primary_action_label: __('Start Production'),
+            primary_action: (values) => {
                 frappe.call({
                     method: 'kniterp.api.production_wizard.start_work_order',
                     args: {
-                        work_order: details.work_order.name
+                        work_order: details.work_order.name,
+                        operation_settings: values.operation_settings
                     },
                     freeze: true,
                     freeze_message: __('Starting Production...'),
                     callback: (r) => {
                         if (r.message) {
+                            d.hide();
                             frappe.show_alert({
                                 message: __('Work Order {0} started. Job Cards created.',
                                     [`<a href="/app/work-order/${r.message.work_order}">${r.message.work_order}</a>`]),
@@ -1267,7 +1360,9 @@ class ProductionWizard {
                     }
                 });
             }
-        );
+        });
+
+        d.show();
     }
 
     create_subcontracting_order(details, operation) {
@@ -1376,48 +1471,100 @@ class ProductionWizard {
     complete_operation(details, operation, remaining_qty) {
         const self = this;
 
-        // Find the operation to get for_quantity
+        // Find the operation to get job card
         const op = details.operations.find(o => o.operation === operation);
-        const default_qty = remaining_qty || op?.for_quantity || details.pending_qty;
+        if (!op || !op.job_card) {
+            frappe.throw(__('No Job Card found for operation {0}', [operation]));
+            return;
+        }
 
-        const d = new frappe.ui.Dialog({
-            title: __('Update Manufactured Quantity'),
-            fields: [
-                {
-                    fieldname: 'qty',
-                    fieldtype: 'Float',
-                    label: __('Quantity Manufactured'),
-                    default: default_qty,
-                    reqd: 1
+        const job_card = op.job_card;
+
+        // Fetch Job Card details to pre-populate dialog
+        frappe.call({
+            method: 'frappe.client.get',
+            args: {
+                doctype: 'Job Card',
+                name: job_card
+            },
+            callback: (r) => {
+                if (!r.message) {
+                    frappe.msgprint(__('Could not load Job Card details'));
+                    return;
                 }
-            ],
-            primary_action_label: __('Update'),
-            primary_action(values) {
-                frappe.call({
-                    method: 'kniterp.api.production_wizard.complete_operation',
-                    args: {
-                        work_order: details.work_order.name,
-                        operation: operation,
-                        qty: values.qty
-                    },
-                    freeze: true,
-                    freeze_message: __('Updating Manufactured Quantity...'),
-                    callback: (r) => {
-                        if (r.message) {
-                            d.hide();
-                            frappe.show_alert({
-                                message: __('Operation {0} updated with qty {1}', [operation, values.qty]),
-                                indicator: 'green'
-                            }, 3);
-                            self.refresh_pending_items();
-                            self.load_production_details(self.selected_item);
+
+                const jc = r.message;
+                const work_order_skip = details.work_order?.skip_transfer || false;
+                const jc_skip = jc.skip_material_transfer || false;
+                const current_skip = work_order_skip || jc_skip;
+                const default_qty = remaining_qty || op?.for_quantity || details.pending_qty;
+
+                const d = new frappe.ui.Dialog({
+                    title: __('Update Manufactured Quantity: {0}', [operation]),
+                    fields: [
+                        {
+                            fieldname: 'sb_progress',
+                            fieldtype: 'Section Break',
+                            label: __('Production Progress')
+                        },
+                        {
+                            fieldname: 'workstation',
+                            fieldtype: 'Link',
+                            options: 'Workstation',
+                            label: __('Machine / Workstation'),
+                            default: jc.workstation || op.workstation || '',
+                            reqd: 1
+                        },
+                        {
+                            fieldname: 'employee',
+                            fieldtype: 'Link',
+                            options: 'Employee',
+                            label: __('Employee'),
+                            description: __('Person performing the operation')
+                        },
+                        {
+                            fieldname: 'cb_qty',
+                            fieldtype: 'Column Break'
+                        },
+                        {
+                            fieldname: 'qty',
+                            fieldtype: 'Float',
+                            label: __('Quantity Manufactured'),
+                            default: default_qty,
+                            reqd: 1
                         }
+                    ],
+                    primary_action_label: __('Update'),
+                    primary_action(values) {
+                        frappe.call({
+                            method: 'kniterp.api.production_wizard.complete_operation',
+                            args: {
+                                work_order: details.work_order.name,
+                                operation: operation,
+                                qty: values.qty,
+                                workstation: values.workstation,
+                                employee: values.employee
+                            },
+                            freeze: true,
+                            freeze_message: __('Updating Manufactured Quantity...'),
+                            callback: (r) => {
+                                if (r.message) {
+                                    d.hide();
+                                    frappe.show_alert({
+                                        message: __('Operation {0} updated with qty {1}', [operation, values.qty]),
+                                        indicator: 'green'
+                                    }, 3);
+                                    self.refresh_pending_items();
+                                    self.load_production_details(self.selected_item);
+                                }
+                            }
+                        });
                     }
                 });
+
+                d.show();
             }
         });
-
-        d.show();
     }
 
     complete_job_card(details, operation, job_card) {
