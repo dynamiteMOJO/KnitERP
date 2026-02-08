@@ -962,15 +962,17 @@ class ProductionWizard {
             const status_badge = this.get_material_status_badge(m);
 
             // If consumed, show consumed qty; otherwise show shortage
-            const consumed_display = m.status === 'consumed' && m.consumed_qty > 0
-                ? parseFloat(m.consumed_qty || 0).toFixed(3)
+            // If consumed, show consumed qty; otherwise show shortage
+            const consumed_display = (m.consumed_qty && m.consumed_qty > 0)
+                ? parseFloat(m.consumed_qty).toFixed(3)
                 : '-';
-            const shortage_display = m.status === 'consumed'
-                ? '-'
-                : parseFloat(m.shortage || 0).toFixed(3);
 
-            let shortage_class = (m.status !== 'consumed' && m.shortage > 0) ? 'text-danger font-weight-bold' : '';
-            const consumed_class = m.status === 'consumed' ? 'text-info font-weight-bold' : '';
+            const shortage_display = (m.shortage && m.shortage > 0)
+                ? parseFloat(m.shortage).toFixed(3)
+                : '-';
+
+            let shortage_class = (m.shortage > 0) ? 'text-danger font-weight-bold' : '';
+            const consumed_class = (m.consumed_qty > 0) ? 'text-info font-weight-bold' : '';
 
             // Adjust status/class for customer provided items
             if (m.is_customer_provided) {
@@ -1593,9 +1595,191 @@ class ProductionWizard {
                                 }
                             }
                         });
+                    },
+                    secondary_action_label: __('View Logs'),
+                    secondary_action() {
+                        self.show_production_logs(op.job_card);
                     }
                 });
 
+                d.show();
+            }
+        });
+    }
+
+    show_production_logs(job_card) {
+        const self = this;
+        frappe.call({
+            method: 'kniterp.api.production_wizard.get_production_logs',
+            args: { job_card: job_card },
+            callback: (r) => {
+                const logs = r.message || [];
+
+                const d = new frappe.ui.Dialog({
+                    title: __('Production Logs: {0}', [job_card]),
+                    size: 'large',
+                    fields: [
+                        {
+                            fieldname: 'logs_html',
+                            fieldtype: 'HTML'
+                        }
+                    ]
+                });
+
+                const render_table = () => {
+                    let html = `
+                        <table class="table table-bordered table-sm" style="margin-top: 10px;">
+                            <thead>
+                                <tr>
+                                    <th style="width: 140px;">${__('Date & Time')}</th>
+                                    <th>${__('Stock Entry')}</th>
+                                    <th>${__('Employee')}</th>
+                                    <th>${__('Machine')}</th>
+                                    <th class="text-right" style="width: 80px;">${__('Qty')}</th>
+                                    <th class="text-center" style="width: 110px;">${__('Action')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                    `;
+
+                    if (logs.length === 0) {
+                        html += `<tr><td colspan="6" class="text-center text-muted" style="padding: 20px;">${__('No production logs found.')}</td></tr>`;
+                    } else {
+                        logs.forEach(log => {
+                            // Format date time slightly nicer
+                            const posting_datetime = frappe.datetime.str_to_user(log.posting_date) + ' ' + (log.posting_time ? log.posting_time.substring(0, 5) : '');
+
+                            html += `
+                                <tr>
+                                    <td>${posting_datetime}</td>
+                                    <td><a href="/app/stock-entry/${log.name}" target="_blank" style="font-weight: bold;">${log.name}</a></td>
+                                    <td>${log.employee_name || log.employee || '-'}</td>
+                                    <td>${log.workstation || '-'}</td>
+                                    <td class="text-right"><strong>${parseFloat(log.fg_completed_qty).toFixed(3)}</strong></td>
+                                    <td class="text-center">
+                                        <div class="btn-group btn-group-xs">
+                                            <button class="btn btn-default btn-edit" data-name="${log.name}" data-qty="${log.fg_completed_qty}" data-employee="${log.employee || ''}" data-workstation="${log.workstation || ''}" title="${__('Edit Entry')}">
+                                                ${frappe.utils.icon('edit', 'xs')}
+                                            </button>
+                                            <button class="btn btn-danger btn-revert" data-name="${log.name}" title="${__('Revert Entry')}">
+                                                ${frappe.utils.icon('undo', 'xs')}
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            `;
+                        });
+                    }
+
+                    html += `</tbody></table>`;
+
+                    const $wrapper = d.fields_dict.logs_html.$wrapper;
+                    $wrapper.html(html);
+
+                    // Bind events
+                    $wrapper.find('.btn-revert').off('click').on('click', function () {
+                        const stock_entry = $(this).data('name');
+
+                        frappe.confirm(
+                            __('Are you sure you want to revert Stock Entry <b>{0}</b>?<br><br>This will:<br>1. Cancel the Stock Entry.<br>2. Remove the corresponding Time Log from the Job Card.', [stock_entry]),
+                            () => {
+                                frappe.call({
+                                    method: 'kniterp.api.production_wizard.revert_production_entry',
+                                    args: { stock_entry: stock_entry },
+                                    freeze: true,
+                                    freeze_message: __('Reverting Production Entry...'),
+                                    callback: (res) => {
+                                        if (!res.exc) {
+                                            frappe.show_alert({ message: __('Entry reverted successfully'), indicator: 'green' });
+                                            refresh_view(stock_entry);
+                                        }
+                                    }
+                                });
+                            }
+                        );
+                    });
+
+                    // Bind Edit
+                    $wrapper.find('.btn-edit').off('click').on('click', function () {
+                        const btn = $(this);
+                        const stock_entry = btn.data('name');
+                        const current_qty = btn.data('qty');
+                        const current_employee = btn.data('employee');
+                        const current_workstation = btn.data('workstation');
+
+                        const d_edit = new frappe.ui.Dialog({
+                            title: __('Update Entry: {0}', [stock_entry]),
+                            fields: [
+                                {
+                                    fieldname: 'employee',
+                                    fieldtype: 'Link',
+                                    label: __('Employee'),
+                                    options: 'Employee',
+                                    default: current_employee
+                                },
+                                {
+                                    fieldname: 'workstation',
+                                    fieldtype: 'Link',
+                                    label: __('Workstation'),
+                                    options: 'Workstation',
+                                    default: current_workstation,
+                                    reqd: 1
+                                },
+                                {
+                                    fieldname: 'qty',
+                                    fieldtype: 'Float',
+                                    label: __('Quantity'),
+                                    default: current_qty,
+                                    reqd: 1
+                                }
+                            ],
+                            primary_action_label: __('Update'),
+                            primary_action(values) {
+                                frappe.call({
+                                    method: 'kniterp.api.production_wizard.update_production_entry',
+                                    args: {
+                                        stock_entry: stock_entry,
+                                        qty: values.qty,
+                                        employee: values.employee,
+                                        workstation: values.workstation
+                                    },
+                                    freeze: true,
+                                    freeze_message: __('Updating Production Entry...'),
+                                    callback: (res) => {
+                                        if (!res.exc) {
+                                            d_edit.hide();
+                                            frappe.show_alert({ message: __('Entry updated successfully'), indicator: 'green' });
+                                            refresh_view(stock_entry);
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                        d_edit.show();
+                    });
+                };
+
+                const refresh_view = (removed_stock_entry) => {
+                    frappe.call({
+                        method: 'kniterp.api.production_wizard.get_production_logs',
+                        args: { job_card: job_card },
+                        callback: (r) => {
+                            if (r.message) {
+                                logs.length = 0;
+                                logs.push(...r.message);
+                                render_table();
+
+                                // Refresh main UI (parent)
+                                self.refresh_pending_items();
+                                if (self.selected_item) {
+                                    self.load_production_details(self.selected_item);
+                                }
+                            }
+                        }
+                    });
+                };
+
+                render_table();
                 d.show();
             }
         });
@@ -1629,90 +1813,71 @@ class ProductionWizard {
 
                 // Build items table fields
                 const item_fields = [];
-                if (jc.items && jc.items.length > 0) {
-                    item_fields.push({
-                        fieldname: 'section_items',
-                        fieldtype: 'Section Break',
-                        label: __('Raw Materials - Source Warehouses')
-                    });
+                const summary_fields = [];
 
-                    for (let i = 0; i < jc.items.length; i++) {
-                        const item = jc.items[i];
-                        item_fields.push({
-                            fieldname: 'item_info_' + i,
-                            fieldtype: 'HTML',
-                            options: `
-                    <div style="margin-top: 10px; margin-bottom: 5px;">
-                                    <span style="font-weight: bold; color: var(--text-color); font-size: 13px;">${item.item_code}</span>
-                                    <span style="color: var(--text-muted); font-size: 12px; margin-left: 8px;">(Req: <strong style="color: var(--text-color);">${parseFloat(item.required_qty || 0).toFixed(3)} ${item.uom || ''}</strong>)</span>
-                                </div>
-                    <div style="color: var(--text-muted); font-size: 11px; margin-bottom: 5px;">${item.item_name || ''}</div>
-                `
-                        });
-                        item_fields.push({
-                            fieldname: 'source_warehouse_' + item.item_code,
-                            fieldtype: 'Link',
-                            options: 'Warehouse',
-                            label: __('Source Warehouse'),
-                            default: item.source_warehouse || '',
-                            reqd: 1
-                        });
-                    }
-                }
+                // --- SUMMARY SECTION ---
+                const produced_qty = parseFloat(jc.manufactured_qty || 0);
+                const planned_qty = parseFloat(jc.for_quantity || 0);
+                const pending_qty = Math.max(0, planned_qty - produced_qty);
+                const is_over = produced_qty > planned_qty;
+                const status_color = is_over ? "var(--red-500)" : (produced_qty >= planned_qty ? "var(--green-500)" : "var(--orange-500)");
+                const status_text = is_over ? `Over-Produced (+${(produced_qty - planned_qty).toFixed(2)})` : (produced_qty >= planned_qty ? "Fully Produced" : "In Progress");
+
+                summary_fields.push({
+                    fieldname: 'summary_section',
+                    fieldtype: 'Section Break',
+                    label: __('Job Card Summary')
+                });
+
+                summary_fields.push({
+                    fieldname: 'summary_html',
+                    fieldtype: 'HTML',
+                    options: `
+                        <div style="padding: 12px; background-color: var(--fill-color); border: 1px solid var(--border-color); border-radius: var(--border-radius); margin-bottom: 15px;">
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                <span class="text-muted">${__('Planned Quantity')}:</span>
+                                <strong>${planned_qty}</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 4px;">
+                                <span class="text-muted">${__('Already Produced')}:</span>
+                                <strong>${produced_qty}</strong>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin-bottom: 8px; border-bottom: 1px dashed var(--border-color); padding-bottom: 8px;">
+                                <span class="text-muted">${__('Balance Pending')}:</span>
+                                <strong>${pending_qty}</strong>
+                            </div>
+                             <div style="display: flex; justify-content: space-between; align-items: center;">
+                                <span class="text-muted">${__('Status')}:</span>
+                                <span class="badge" style="background-color: ${status_color}; color: white; padding: 4px 8px;">${status_text}</span>
+                            </div>
+                            
+                            <div style="margin-top: 12px; font-size: 11px; color: var(--text-muted); line-height: 1.4;">
+                                ${pending_qty > 0
+                            ? `Could trigger a final <b>Stock Entry</b> for the remaining <b>${pending_qty}</b> units (and associated RM consumption).`
+                            : `Production is complete. This action will <b>close the Job Card</b> without creating further stock entries.`}
+                            </div>
+                        </div>
+                    `
+                });
+                // ---------------------------
+                // Item and Settings fields removed as per request.
+                // We now rely on Job Card / Work Order defaults.
+                /* if (jc.items && jc.items.length > 0) { ... } */
 
                 const d = new frappe.ui.Dialog({
                     title: __('Complete Job Card: {0}', [job_card]),
                     size: 'large',
                     fields: [
-                        {
-                            fieldname: 'section_settings',
-                            fieldtype: 'Section Break',
-                            label: __('Material Transfer Settings')
-                        },
-                        {
-                            fieldname: 'skip_material_transfer',
-                            fieldtype: 'Check',
-                            label: __('Skip Material Transfer to WIP Warehouse'),
-                            default: current_skip ? 1 : 0,
-                            description: __('If checked, materials will be consumed directly from source warehouse'),
-                            onchange: function () {
-                                const skip = d.get_value('skip_material_transfer');
-                                d.set_df_property('wip_warehouse', 'hidden', skip);
-                                d.set_df_property('wip_warehouse', 'reqd', !skip);
-                            }
-                        },
-                        {
-                            fieldname: 'wip_warehouse',
-                            fieldtype: 'Link',
-                            options: 'Warehouse',
-                            label: __('WIP Warehouse'),
-                            default: jc.wip_warehouse || details.work_order?.wip_warehouse || '',
-                            hidden: current_skip,
-                            reqd: !current_skip,
-                            description: __('Work In Progress warehouse for material transfer')
-                        },
-                        ...item_fields
+                        ...summary_fields
                     ],
                     primary_action_label: __('Complete Job Card'),
                     primary_action(values) {
-                        // Collect source warehouses
-                        const source_warehouses = {};
-                        for (let item of jc.items) {
-                            const wh = values['source_warehouse_' + item.item_code];
-                            if (wh) {
-                                source_warehouses[item.item_code] = wh;
-                            }
-                        }
-
                         frappe.call({
                             method: 'kniterp.api.production_wizard.complete_job_card',
                             args: {
                                 job_card: job_card,
                                 additional_qty: 0,
-                                process_loss_qty: 0,
-                                wip_warehouse: values.wip_warehouse || '',
-                                skip_material_transfer: values.skip_material_transfer ? 1 : 0,
-                                source_warehouses: JSON.stringify(source_warehouses)
+                                process_loss_qty: 0
                             },
                             freeze: true,
                             freeze_message: __('Completing Job Card...'),
@@ -1720,9 +1885,8 @@ class ProductionWizard {
                                 if (r.message) {
                                     d.hide();
                                     frappe.show_alert({
-                                        message: __('Job Card {0} completed. Stock Entry {1} created.',
-                                            [`<a href="/app/job-card/${job_card}">${job_card}</a>`,
-                                            `<a href="/app/stock-entry/${r.message}">${r.message}</a>`]),
+                                        message: __('Job Card {0} completed successfully.',
+                                            [`<a href="/app/job-card/${job_card}">${job_card}</a>`]),
                                         indicator: 'green'
                                     }, 5);
                                     self.refresh_pending_items();

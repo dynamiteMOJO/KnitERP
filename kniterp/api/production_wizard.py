@@ -9,6 +9,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt, nowdate, getdate, add_days, cint
 import json
+from erpnext.stock.doctype.stock_entry_type.stock_entry_type import ManufactureEntry
+from erpnext.manufacturing.doctype.bom.bom import add_additional_cost
 
 
 def check_rm_availability(item_code, required_qty):
@@ -559,49 +561,51 @@ def get_production_details(sales_order_item):
             # Check if material is consumed by checking if the operation using this item is completed
             material_consumed = False
             consumed_qty = 0
-            target_operation = item.operation
             
-            if not target_operation and operations and len(operations) > 0:
-                # No specific operation - raw materials typically consumed by FIRST operation
-                target_operation = operations[0].get("operation")
-            
-            if target_operation:
-                # Find if operation for this item is complete
+            # Find the operation for this item (default to first operation if not specified in BOM Item)
+            target_jc = None
+            if item.operation:
                 for op in operations:
-                    if op.get("operation") == target_operation:
-                        # Material is consumed if job card is submitted (completed)
-                        if op.get("status") == "Completed":
-                            material_consumed = True
-                            
-                            # Get actual consumed qty from Stock Entry (Manufacture)
-                            if op.get("job_card") and work_order:
-                                # Sum up consumed qty from Stock Entries linked to this Job Card
-                                # Filter for raw materials (is_finished_item=0)
-                                actual_consumed = frappe.db.sql("""
-                                    SELECT SUM(sed.qty)
-                                    FROM `tabStock Entry` se
-                                    JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
-                                    WHERE se.job_card = %s
-                                    AND se.docstatus = 1
-                                    AND se.purpose = 'Manufacture'
-                                    AND sed.item_code = %s
-                                    AND sed.is_finished_item = 0
-                                """, (op.get("job_card"), item.item_code))
-                                
-                                consumed_qty = flt(actual_consumed[0][0]) if actual_consumed and actual_consumed[0][0] else required_qty
-                            else:
-                                consumed_qty = required_qty
-                        break
+                    if op.get("operation") == item.operation:
+                         target_jc = op.get("job_card")
+                         break
+            elif operations:
+                 target_jc = operations[0].get("job_card")
+
+            if target_jc and work_order:
+                # Sum up consumed qty from Stock Entries linked to this Job Card (including partials)
+                # Filter for raw materials (is_finished_item=0)
+                actual_consumed = frappe.db.sql("""
+                    SELECT SUM(sed.qty)
+                    FROM `tabStock Entry` se
+                    JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
+                    WHERE se.job_card = %s
+                    AND se.docstatus = 1
+                    AND se.purpose = 'Manufacture'
+                    AND sed.item_code = %s
+                    AND sed.is_finished_item = 0
+                """, (target_jc, item.item_code))
+                
+                consumed_qty = flt(actual_consumed[0][0]) if actual_consumed and actual_consumed[0][0] else 0
+                
+                if consumed_qty > 0:
+                     material_consumed = True
+                     # Update required qty to show remaining need
+                     required_qty = max(0, flt(required_qty) - flt(consumed_qty))
+                     
+                     # Re-calculate shortage based on remaining need
+                     shortage = max(0, required_qty - available_qty)
             
             # Determine status
-            if material_consumed:
+            if material_consumed and required_qty == 0:
                 status = "consumed"
-            elif shortage <= 0:
-                status = "available"
-            elif available_qty > 0:
-                status = "low"
-            else:
+            elif shortage > 0:
                 status = "shortage"
+            else:
+                 status = "available"
+
+            
+
             
             # Get ordered qty from pending Purchase Orders (for this item, specifically for this SO Item if reserved, or SO-level reservation, or Global pool)
             po_data = frappe.db.sql("""
@@ -1086,11 +1090,105 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
     })
     
     job_card.save()
+
+    # FIX: ERPNext auto-calculates process_loss_qty as (for_qty - completed_qty) on save.
+    # For partial updates, this incorrectly marks the remainder as loss.
+    # We must reset it to 0.
+    if job_card.process_loss_qty > 0:
+        job_card.db_set("process_loss_qty", 0)
+        job_card.process_loss_qty = 0
     
+    # ALWAYS synchronize the Work Order (Operation Qty) with the Job Card (Completed Qty)
+    # This is critical before creating a Stock Entry, otherwise 'add_additional_cost'
+    # fails with ZeroDivisionError (WO Produced Qty == WO Op Qty)
+    job_card.update_work_order()
+    
+    # Create Stock Entry for the manufactured quantity (if applicable)
+    # This ensures 'manufactured_qty' and RM 'consumed_qty' are updated on the Job Card
+    stock_entry_name = None
+    if job_card.finished_good:
+        try:
+            # Determine BOM to use
+            bom_no = job_card.semi_fg_bom or frappe.db.get_value("Work Order", job_card.work_order, "bom_no")
+            
+            # Prepare arguments for ManufactureEntry
+            # We use the specific quantity reported in this operation
+            ste_args = {
+                "for_quantity": qty, 
+                "job_card": job_card.name,
+                "skip_material_transfer": job_card.skip_material_transfer,
+                "backflush_from_wip_warehouse": job_card.backflush_from_wip_warehouse,
+                "work_order": job_card.work_order,
+                "purpose": "Manufacture",
+                "production_item": job_card.finished_good,
+                "company": job_card.company,
+                "wip_warehouse": job_card.wip_warehouse,
+                "fg_warehouse": job_card.target_warehouse or job_card.wip_warehouse, # Fallback if not set (though validation might fail)
+                "bom_no": bom_no,
+                "project": job_card.project or frappe.db.get_value("Work Order", job_card.work_order, "project"),
+            }
+            
+            # Handle missing target warehouse by fetching from WO if needed
+            if not ste_args["fg_warehouse"]:
+                ste_args["fg_warehouse"] = frappe.db.get_value("Work Order", job_card.work_order, "fg_warehouse")
+            
+            ste = ManufactureEntry(ste_args)
+            ste.make_stock_entry()
+            
+            # FIX: Scale Raw Material consumption pro-rata based on produced quantity
+            # By default, ManufactureEntry might consume full remaining qty (if based on transfer)
+            # We want strict pro-rata consumption: (Req Qty / Total JC Qty) * Manufactured Qty
+            if flt(job_card.for_quantity) > 0:
+                ratio = flt(qty) / flt(job_card.for_quantity)
+                for row in ste.stock_entry.items:
+                    if not row.is_finished_item and row.job_card_item:
+                        jc_required = frappe.db.get_value("Job Card Item", row.job_card_item, "required_qty")
+                        row.qty = flt(jc_required) * ratio
+            
+            # Configure Stock Entry
+            ste.stock_entry.flags.ignore_mandatory = True
+            
+            # Add additional costs (operating costs)
+            wo_doc = frappe.get_doc("Work Order", job_card.work_order)
+            add_additional_cost(ste.stock_entry, wo_doc, job_card)
+            
+            # Handle scrap items
+            ste.stock_entry.set_scrap_items()
+            for row in ste.stock_entry.items:
+                if row.is_scrap_item and not row.t_warehouse:
+                    row.t_warehouse = ste_args["fg_warehouse"]
+            
+            # Submit the Stock Entry
+            ste.stock_entry.submit()
+            stock_entry_name = ste.stock_entry.name
+            
+            frappe.msgprint(_("Stock Entry {0} created for {1} {2}").format(
+                frappe.utils.get_link_to_form("Stock Entry", stock_entry_name), 
+                qty, 
+                job_card.finished_good
+            ))
+            
+            
+        except Exception as e:
+            # If Stock Entry fails (e.g. negative stock), we MUST rollback the time log 
+            # so the user can fix the stock issue first.
+            frappe.log_error(f"Failed to create Stock Entry for Job Card {job_card.name}: {str(e)}")
+            
+            # Clear previous messages to avoid duplicate error display in UI
+            frappe.clear_messages()
+            
+            # Check for common stock errors to give better message
+            if "Negative Stock Error" in str(e) or "Insufficient stock" in str(e):
+                 frappe.throw(_("Cannot update manufactured quantity: Raw Material stock is not available.<br><br>{0}").format(str(e)))
+            else:
+                 frappe.throw(_("Failed to create Stock Entry: {0}").format(str(e)))
+
+
     return {
         "job_card": job_card.name,
         "status": job_card.status,
-        "total_completed_qty": job_card.total_completed_qty
+        "total_completed_qty": job_card.total_completed_qty,
+        "stock_entry": stock_entry_name
     }
 
 
@@ -1170,52 +1268,138 @@ def complete_job_card(job_card, additional_qty=0, process_loss_qty=0,
                     item.idx, item.item_code
                 ))
             
-            # Check stock availability - PREVENT negative inventory
-            available_qty = frappe.db.get_value(
-                "Bin",
-                {"item_code": item.item_code, "warehouse": item.source_warehouse},
-                "actual_qty"
-            ) or 0
+    jc.submit()
+    return jc.name
+
+@frappe.whitelist()
+def get_production_logs(job_card):
+    """
+    Get production logs (Stock Entries) for a job card.
+    Enriched with Employee and Machine data from Job Card Time Logs.
+    """
+    job_card_doc = frappe.get_doc("Job Card", job_card)
+    
+    logs = frappe.get_all(
+        "Stock Entry",
+        filters={"job_card": job_card, "purpose": "Manufacture", "docstatus": 1},
+        fields=["name", "posting_date", "posting_time", "fg_completed_qty", "creation"],
+        order_by="creation desc"
+    )
+    
+    # Enrich logs with Employee and Machine info
+    # We try to match Stock Entry to Time Log based on creation time proximity and quantity
+    # Note: This is a "best effort" match since there's no hard ID link
+    
+    # Create a copy of time logs to consume during matching
+    time_logs = [tl for tl in job_card_doc.time_logs]
+    
+    for log in logs:
+        log["workstation"] = job_card_doc.workstation # Default to current JC workstation
+        log["employee"] = ""
+        log["employee_name"] = ""
+        
+        # Find matching time log
+        match_index = -1
+        for i, tl in enumerate(time_logs):
+             if flt(tl.completed_qty) == flt(log.fg_completed_qty):
+                 match_index = i
+                 break 
+        
+        if match_index != -1:
+            tl = time_logs.pop(match_index)
+            log["employee"] = tl.employee
+            if tl.employee:
+                log["employee_name"] = frappe.get_cached_value("Employee", tl.employee, "employee_name")
             
-            if flt(available_qty) < flt(item.required_qty):
-                frappe.throw(
-                    _("Row {0}: Insufficient stock for {1}. Required: {2}, Available: {3} in {4}. Please ensure stock is available before completing the Job Card.").format(
-                        item.idx, 
-                        item.item_code, 
-                        frappe.format(item.required_qty, {"fieldtype": "Float"}),
-                        frappe.format(available_qty, {"fieldtype": "Float"}),
-                        item.source_warehouse
-                    )
-                )
-    
-    # WIP warehouse is required ONLY if skip_material_transfer is NOT enabled (on either WO or JC)
-    if not skip_wip_transfer and not jc.wip_warehouse:
-        frappe.throw(_("WIP Warehouse is required. Please update the Job Card or enable 'Skip Material Transfer' on Job Card or Work Order."))
-    
-    # For semi-finished goods, validate target warehouse
-    if jc.finished_good and not work_order.fg_warehouse:
-        frappe.throw(_("Finished Goods Warehouse is not set on Work Order {0}").format(jc.work_order))
-    
-    # Now submit the job card
+            # Check if custom workstation field exists on time log
+            if hasattr(tl, "workstation") and tl.workstation:
+                log["workstation"] = tl.workstation 
+            # (TimeLog doctype usually doesn't have workstation)
+
+    return logs
+
+@frappe.whitelist()
+def revert_production_entry(stock_entry):
+    """
+    Revert a production entry:
+    1. Cancel the Stock Entry.
+    2. Remove the corresponding Time Log from Job Card.
+    """
     try:
-        jc.submit()
+        se = frappe.get_doc("Stock Entry", stock_entry)
+        if se.docstatus != 1:
+            frappe.throw(_("Stock Entry {0} is not submitted").format(stock_entry))
+            
+        job_card_name = se.job_card
+        qty = se.fg_completed_qty
+        
+        # 1. Cancel Stock Entry
+        se.cancel()
+        
+        # 2. Update Job Card
+        if job_card_name:
+            jc = frappe.get_doc("Job Card", job_card_name)
+            
+            # Find a matching time log to remove
+            # We look for the latest log with the same completed_qty
+            log_to_remove = None
+            for i, log in enumerate(reversed(jc.time_logs)):
+                if flt(log.completed_qty) == flt(qty):
+                    # Found a match (checking from end means we get the latest)
+                    log_to_remove = len(jc.time_logs) - 1 - i
+                    break
+            
+            if log_to_remove is not None:
+                del jc.time_logs[log_to_remove]
+                jc.save()
+                jc.update_work_order()
+                frappe.msgprint(_("Reverted production entry. Stock Entry {0} cancelled and Time Log removed.").format(stock_entry))
+            else:
+                 frappe.msgprint(_("Stock Entry {0} cancelled. However, could not find an exact matching Time Log of {1} units to remove. Please update Job Card manually if needed.").format(stock_entry, qty))
+                 
     except Exception as e:
-        frappe.throw(_("Failed to submit Job Card: {0}").format(str(e)))
+        frappe.log_error(f"Failed to revert production entry {stock_entry}: {str(e)}")
+        frappe.throw(_("Failed to revert entry: {0}").format(str(e)))
+
+@frappe.whitelist()
+def update_production_entry(stock_entry, qty, employee, workstation):
+    """
+    Update a production entry (Revert + New Entry).
+    """
+    try:
+        # 1. Get details before reverting
+        se = frappe.get_doc("Stock Entry", stock_entry)
+        job_card_name = se.job_card
+        work_order_name = se.work_order
+        
+        if not job_card_name:
+             frappe.throw(_("Cannot update Stock Entry {0} as it is not linked to a Job Card").format(stock_entry))
+
+        jc = frappe.get_doc("Job Card", job_card_name)
+        operation = jc.operation
+        
+        # 2. Revert the existing entry
+        revert_production_entry(stock_entry)
+        
+        # 3. Create new entry with updated values
+        # We reuse complete_operation logic which handles everything (Stock Entry + Time Log)
+        complete_operation(
+            work_order=work_order_name,
+            operation=operation,
+            qty=qty,
+            workstation=workstation,
+            employee=employee
+        )
+        
+        frappe.msgprint(_("Production entry updated successfully."))
+        
+    except Exception as e:
+        frappe.log_error(f"Failed to update production entry {stock_entry}: {str(e)}")
+        frappe.throw(_("Failed to update entry: {0}").format(str(e)))
+
+
     
-    # Create stock entry for semi-finished goods if applicable
-    # Stock entry is ALWAYS required to manufacture finished goods - never skip
-    stock_entry_name = None
-    if jc.finished_good:
-        try:
-            se_result = jc.make_stock_entry_for_semi_fg_item(auto_submit=True)
-            if se_result:
-                stock_entry_name = se_result.get("name")
-        except Exception as e:
-            # Stock entry failed - notify user but don't throw (JC is already submitted)
-            frappe.log_error(f"Error creating stock entry for Job Card {job_card}: {str(e)}")
-            frappe.msgprint(_("Note: Job Card was submitted successfully. However, Stock Entry creation failed: {0}. Please create Stock Entry manually.").format(str(e)), indicator="orange")
-    
-    return stock_entry_name or jc.name
+
 
 
 @frappe.whitelist()
