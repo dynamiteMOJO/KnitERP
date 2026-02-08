@@ -690,11 +690,19 @@ class ProductionWizard {
 				</button>
 			`);
             } else {
-                buttons.push(`
-				<button class="btn btn-success btn-create-invoice">
-					<i class="fa fa-file-text"></i> ${__('Create Sales Invoice')}
-				</button>
-			`);
+                if (details.draft_sales_invoice) {
+                    buttons.push(`
+                    <button class="btn btn-warning btn-create-invoice">
+                        <i class="fa fa-file-text-o"></i> ${__('View Draft Invoice')}
+                    </button>
+                `);
+                } else {
+                    buttons.push(`
+                    <button class="btn btn-success btn-create-invoice">
+                        <i class="fa fa-file-text"></i> ${__('Create Sales Invoice')}
+                    </button>
+                `);
+                }
             }
         }
 

@@ -445,13 +445,21 @@ def get_pending_invoice_fix_details():
             WHERE parent = %s AND so_detail IS NOT NULL
             LIMIT 1
         """, d.name)
+
+        # Check for existing Draft Sales Invoice linked to this DN
+        draft_invoice = frappe.db.sql("""
+            SELECT parent FROM `tabSales Invoice Item`
+            WHERE delivery_note = %s AND docstatus = 0
+            LIMIT 1
+        """, d.name)
         
         data.append({
             'customer': d.customer_name,
             'dn_name': d.name,
             'posting_date': d.posting_date,
             'amount': flt(d.grand_total, 2),
-            'sales_order_item': so_item[0][0] if so_item else None
+            'sales_order_item': so_item[0][0] if so_item else None,
+            'draft_invoice': draft_invoice[0][0] if draft_invoice else None
         })
     
     return {

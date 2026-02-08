@@ -408,6 +408,13 @@ def get_production_details(sales_order_item):
             # Assume one entry per item code for simplicity, though could be multiple? usually one per item
             sio_received_map = {item.rm_item_code: item for item in sio_received_items}
     
+    # Check for Draft Sales Invoice
+    draft_sales_invoice = frappe.db.get_value(
+        "Sales Invoice Item",
+        {"so_detail": soi.name, "docstatus": 0},
+        "parent"
+    )
+    
     # Build operations list from BOM
     operations = []
     
@@ -740,7 +747,8 @@ def get_production_details(sales_order_item):
         "projected_qty": fg_projected_qty,
         "subcontracting_inward_order": sio_name,
         "sio_status": sio_status,
-        "uom": soi.stock_uom
+        "uom": soi.stock_uom,
+        "draft_sales_invoice": draft_sales_invoice
     }
 
 
@@ -1758,9 +1766,90 @@ def create_sales_invoice(sales_order):
     """
     Create Sales Invoice for a Sales Order.
     """
+    # Check for existing draft Sales Invoice for this Sales Order
+    existing_draft = frappe.db.get_value(
+        "Sales Invoice Item",
+        {"sales_order": sales_order, "docstatus": 0},
+        "parent"
+    )
+    
+    if existing_draft:
+        frappe.msgprint(_("Opening existing Draft Sales Invoice {0}").format(existing_draft))
+        return existing_draft
+
     from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
     
     si = make_sales_invoice(sales_order)
+    
+    # Filter items to match delivered quantity
+    # We only want to invoice what has been delivered but not yet billed
+    final_items = []
+    for item in si.items:
+        if item.so_detail:
+            # We must fetch the SO Item to get current delivered qty
+            # make_sales_invoice defaults to 'qty - billed_qty' (ordered view)
+            # or uses pending_qty_to_bill which might differ based on settings
+            # We enforce delivered view here
+            so_item = frappe.db.get_value(
+                "Sales Order Item",
+                item.so_detail,
+                ["delivered_qty", "qty"],
+                as_dict=True
+            )
+
+            if so_item:
+                # Calculate billed_qty manually as it is not stored in column
+                billed_qty = frappe.db.sql("""
+                    SELECT SUM(qty)
+                    FROM `tabSales Invoice Item`
+                    WHERE so_detail = %s
+                    AND docstatus = 1
+                """, item.so_detail)[0][0] or 0.0
+
+                # Calculate pending billing based on DELIVERY
+                # This ensures we don't invoice for undelivered goods
+                pending_delivery_billing = flt(so_item.delivered_qty) - flt(billed_qty)
+
+                if pending_delivery_billing > 0:
+                    item.qty = pending_delivery_billing
+                    
+                    # Link to Delivery Note if possible
+                    # Find unbilled Delivery Note Item for this Sales Order Item
+                    dn_data = frappe.db.sql("""
+                        SELECT name, parent 
+                        FROM `tabDelivery Note Item`
+                        WHERE so_detail = %s
+                        AND docstatus = 1
+                        ORDER BY creation DESC
+                    """, item.so_detail, as_dict=True)
+                    
+                    # We might have multiple DNs. 
+                    # Ideally we should split the invoice line if it covers multiple DNs, 
+                    # but typically 1 Invoice <= 1 DN or 1 Invoice <= Many DNs.
+                    # Here we are creating 1 Invoice for the whole SO pending qty.
+                    # If there are multiple DNs, we picked the total pending qty.
+                    # Linking to just the first remaining DN might be inexact but better than nothing.
+                    # A better approach: The system should ideally create invoice FROM Delivery Notes 
+                    # (which kniterp action center does). 
+                    # But here we are creating FROM Sales Order.
+                    
+                    if dn_data:
+                         # Just link the first one found as a fallback reference. 
+                         # ERPNext's make_sales_invoice doesn't auto-link DNs if creating from SO.
+                         item.dn_detail = dn_data[0].name
+                         item.delivery_note = dn_data[0].parent
+
+                    final_items.append(item)
+        else:
+            # Keep items without SO link (unlikely)
+            final_items.append(item)
+            
+    si.items = final_items
+    
+    if not si.items:
+        frappe.throw(_("No items to invoice (Deliveries are fully billed or nothing delivered)"))
+
+    si.set_missing_values()
     si.insert()
     
     frappe.msgprint(_("Sales Invoice {0} created").format(si.name))

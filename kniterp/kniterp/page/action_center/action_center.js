@@ -275,12 +275,22 @@ class ActionCenter {
             let action_buttons = '';
             if (details.row_actions) {
                 details.row_actions.forEach(action => {
+                    let label = action.label;
+                    let icon = action.icon;
+                    let btnClass = 'btn-secondary';
+
+                    if (action.action === 'create_invoice' && row.draft_invoice) {
+                        label = __('View Draft');
+                        icon = 'fa fa-file-text-o';
+                        btnClass = 'btn-warning';
+                    }
+
                     action_buttons += `
-                        <button class="btn btn-xs btn-secondary btn-row-action mr-1" 
+                        <button class="btn btn-xs ${btnClass} btn-row-action mr-1" 
                             data-action="${action.action}"
                             data-row-idx="${idx}"
-                            title="${action.label}">
-                            ${action.icon ? `<i class="${action.icon}"></i>` : action.label}
+                            title="${label}">
+                            ${icon ? `<i class="${icon}"></i>` : label}
                         </button>
                      `;
                 });
@@ -419,20 +429,25 @@ class ActionCenter {
                 dialog.hide();
             });
         } else if (action === 'create_invoice') {
-            frappe.call({
-                method: 'erpnext.stock.doctype.delivery_note.delivery_note.make_sales_invoice',
-                args: {
-                    source_name: rowData.dn_name
-                },
-                freeze: true,
-                callback: (r) => {
-                    if (r.message) {
-                        const doclist = frappe.model.sync(r.message);
-                        frappe.set_route('Form', 'Sales Invoice', doclist[0].name);
-                        dialog.hide();
+            if (rowData.draft_invoice) {
+                frappe.set_route('Form', 'Sales Invoice', rowData.draft_invoice);
+                dialog.hide();
+            } else {
+                frappe.call({
+                    method: 'erpnext.stock.doctype.delivery_note.delivery_note.make_sales_invoice',
+                    args: {
+                        source_name: rowData.dn_name
+                    },
+                    freeze: true,
+                    callback: (r) => {
+                        if (r.message) {
+                            const doclist = frappe.model.sync(r.message);
+                            frappe.set_route('Form', 'Sales Invoice', doclist[0].name);
+                            dialog.hide();
+                        }
                     }
-                }
-            });
+                });
+            }
         } else if (action === 'send_material') {
             frappe.route_options = {
                 'selected_item': rowData.sales_order_item
