@@ -1269,6 +1269,12 @@ def complete_job_card(job_card, additional_qty=0, process_loss_qty=0,
                 ))
             
     jc.submit()
+    
+    # Force update Work Order status as standard ERPNext might not trigger it on simple submit
+    # if there are no pending operations
+    wo = frappe.get_doc("Work Order", jc.work_order)
+    wo.update_status()
+    
     return jc.name
 
 @frappe.whitelist()

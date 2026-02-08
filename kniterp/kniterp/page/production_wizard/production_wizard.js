@@ -669,6 +669,19 @@ class ProductionWizard {
 					<i class="fa fa-play"></i> ${__('Start Production')}
 				</button>
 			`);
+        } else if (details.work_order.status === 'In Process') {
+            // Allow delivery if we have formatted goods ready (produced > delivered)
+            // This handles partial deliveries and over-production scenarios
+            const produced = details.work_order.produced_qty || 0;
+            const delivered = details.delivered_qty || 0;
+
+            if (produced > delivered) {
+                buttons.push(`
+				<button class="btn btn-success btn-create-delivery">
+					<i class="fa fa-truck"></i> ${__('Create Delivery Note')}
+				</button>
+			`);
+            }
         } else if (details.work_order.status === 'Completed') {
             if (details.pending_qty > 0) {
                 buttons.push(`
