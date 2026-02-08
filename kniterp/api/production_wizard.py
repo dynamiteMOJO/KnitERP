@@ -323,7 +323,7 @@ def get_production_details(sales_order_item):
         "Sales Order Item",
         sales_order_item,
         ["name", "parent", "item_code", "item_name", "qty", "delivered_qty", 
-         "delivery_date", "warehouse", "bom_no", "description", "fg_item", "fg_item_qty"],
+         "delivery_date", "warehouse", "bom_no", "description", "fg_item", "fg_item_qty", "stock_uom"],
         as_dict=True
     )
     
@@ -735,7 +735,8 @@ def get_production_details(sales_order_item):
         "raw_materials": raw_materials,
         "projected_qty": fg_projected_qty,
         "subcontracting_inward_order": sio_name,
-        "sio_status": sio_status
+        "sio_status": sio_status,
+        "uom": soi.stock_uom
     }
 
 

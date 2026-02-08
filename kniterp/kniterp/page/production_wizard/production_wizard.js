@@ -765,9 +765,40 @@ class ProductionWizard {
                     </div>
                 `;
             } else {
-                const completed_fmt = frappe.format(op.completed_qty || 0, { fieldtype: 'Float', precision: 2 });
-                const total_fmt = frappe.format(op.for_quantity || details.pending_qty, { fieldtype: 'Float', precision: 2 });
-                const pct = this.get_operation_progress(op, details);
+                const completed = op.completed_qty || 0;
+                const total = op.for_quantity || details.pending_qty;
+                const completed_fmt = format_number(completed, null, 2);
+                const total_fmt = format_number(total, null, 2);
+
+                let progress_bars_html = '';
+                let overproduced_badge = '';
+
+                if (completed > total) {
+                    // Stacked bar logic: Container represents 'completed' qty
+                    // Standard bar = (total / completed) * 100
+                    // Red bar = (excess / completed) * 100
+                    const planned_pct = (total / completed) * 100;
+                    const over_pct = 100 - planned_pct; // fill the rest
+
+                    const over_qty = completed - total;
+                    // Use toFixed to avoid frappe.format returning a div
+                    const over_qty_fmt = parseFloat(over_qty).toFixed(2);
+
+                    progress_bars_html = `
+                        <div class="progress-bar" style="width: ${planned_pct}%"></div>
+                        <div class="progress-bar bg-danger" style="width: ${over_pct}%"></div>
+                     `;
+
+                    overproduced_badge = `<div class="clearfix">
+                        <span class="badge badge-danger float-right mt-1" style="font-size: 10px;">+ ${over_qty_fmt} ${details.uom || ''}</span>
+                     </div>`;
+                } else {
+                    // Standard logic
+                    const pct = total ? Math.min(100, (completed / total) * 100) : 0;
+                    progress_bars_html = `
+                        <div class="progress-bar" style="width: ${pct}%"></div>
+                    `;
+                }
 
                 progress_html = `
                     <div class="op-progress-row">
@@ -779,9 +810,10 @@ class ProductionWizard {
                         </div>
                         <div class="op-progress-bar-container">
                             <div class="progress" style="height: 10px; background: var(--control-bg); border-radius: 4px; overflow: hidden;">
-                                <div class="progress-bar" style="width: ${pct}%"></div>
+                                ${progress_bars_html}
                             </div>
                         </div>
+                        ${overproduced_badge}
                     </div>
                 `;
             }
@@ -887,7 +919,7 @@ class ProductionWizard {
         } else {
             // In-house operation
             const remaining_qty = (op.for_quantity || details.pending_qty) - (op.completed_qty || 0);
-            if (op.status !== 'Completed' && remaining_qty > 0 && op.job_card) {
+            if (op.status !== 'Completed' && op.job_card) {
                 actions.push(`
 					<button class="btn btn-sm btn-primary btn-complete-op"
 							data-operation="${op.operation}"
@@ -1497,7 +1529,9 @@ class ProductionWizard {
                 const work_order_skip = details.work_order?.skip_transfer || false;
                 const jc_skip = jc.skip_material_transfer || false;
                 const current_skip = work_order_skip || jc_skip;
-                const default_qty = remaining_qty || op?.for_quantity || details.pending_qty;
+                // Default to remaining_qty if positive, else 0. 
+                // Don't fallback to total quantity if remaining is 0 or negative (over-production logic)
+                const default_qty = (remaining_qty > 0) ? remaining_qty : 0;
 
                 const d = new frappe.ui.Dialog({
                     title: __('Update Manufactured Quantity: {0}', [operation]),
@@ -1657,30 +1691,7 @@ class ProductionWizard {
                             reqd: !current_skip,
                             description: __('Work In Progress warehouse for material transfer')
                         },
-                        ...item_fields,
-                        {
-                            fieldname: 'section_qty',
-                            fieldtype: 'Section Break',
-                            label: __('Quantity')
-                        },
-                        {
-                            fieldname: 'pending_qty',
-                            fieldtype: 'Float',
-                            label: __('Additional Quantity (if any)'),
-                            default: remaining_qty > 0 ? remaining_qty : 0,
-                            description: __('Enter any remaining quantity to manufacture')
-                        },
-                        {
-                            fieldname: 'col_break',
-                            fieldtype: 'Column Break'
-                        },
-                        {
-                            fieldname: 'process_loss_qty',
-                            fieldtype: 'Float',
-                            label: __('Process Loss Quantity'),
-                            default: 0,
-                            description: __('Enter process loss quantity if applicable')
-                        }
+                        ...item_fields
                     ],
                     primary_action_label: __('Complete Job Card'),
                     primary_action(values) {
@@ -1697,8 +1708,8 @@ class ProductionWizard {
                             method: 'kniterp.api.production_wizard.complete_job_card',
                             args: {
                                 job_card: job_card,
-                                additional_qty: values.pending_qty || 0,
-                                process_loss_qty: values.process_loss_qty || 0,
+                                additional_qty: 0,
+                                process_loss_qty: 0,
                                 wip_warehouse: values.wip_warehouse || '',
                                 skip_material_transfer: values.skip_material_transfer ? 1 : 0,
                                 source_warehouses: JSON.stringify(source_warehouses)
