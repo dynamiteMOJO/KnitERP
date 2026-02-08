@@ -313,6 +313,21 @@
     z-index: 1;
 }
 
+.btn-remove-input {
+    opacity: 0.5;
+    transition: all 0.2s ease;
+}
+
+.btn-remove-input:hover {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+.input-row-mini:hover .btn-remove-input {
+    opacity: 0.8;
+}
+
+
 .bom-designer-container .input-row-mini:focus-within {
     z-index: 100 !important;
 }

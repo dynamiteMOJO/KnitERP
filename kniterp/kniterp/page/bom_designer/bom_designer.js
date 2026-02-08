@@ -43,7 +43,76 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             });
         }
 
+        check_and_load_bom(item_code) {
+            // Skip if we're already loading a BOM from URL params
+            if (this.bom_no) return;
+
+            // Skip if we're currently populating data
+            if (this.is_populating) return;
+
+            // Skip if there are already operations (user has started designing)
+            if (this.operations.length > 0) {
+                return;
+            }
+
+            // Skip if we already checked this item (prevent duplicate prompts)
+            if (this.last_checked_item === item_code) {
+                return;
+            }
+
+            // Skip if a prompt is already being shown
+            if (this.bom_prompt_shown) {
+                return;
+            }
+
+            // Mark this item as checked
+            this.last_checked_item = item_code;
+            this.bom_prompt_shown = true;
+
+            // Check if a default BOM exists for this item
+            frappe.call({
+                method: 'frappe.client.get_list',
+                args: {
+                    doctype: 'BOM',
+                    filters: {
+                        item: item_code,
+                        is_active: 1,
+                        is_default: 1,
+                        docstatus: 1
+                    },
+                    fields: ['name'],
+                    limit: 1
+                },
+                callback: (r) => {
+                    if (r.message && r.message.length > 0) {
+                        let bom_name = r.message[0].name;
+
+                        // Ask user if they want to load the existing BOM
+                        frappe.confirm(
+                            `A default BOM (${bom_name}) exists for this item. Would you like to load it?`,
+                            () => {
+                                // User clicked Yes - load the BOM
+                                this.load_existing_bom(bom_name);
+                            },
+                            () => {
+                                // User clicked No - do nothing, let them design from scratch
+                                console.log('User chose to design from scratch');
+                                // Reset the flag so they can try again if they change the item
+                                this.bom_prompt_shown = false;
+                            }
+                        );
+                    } else {
+                        // No BOM found, reset the flag
+                        this.bom_prompt_shown = false;
+                    }
+                }
+            });
+        }
+
         populate_from_data(data) {
+            // Set flag to prevent BOM check during population
+            this.is_populating = true;
+
             // Set Final Good
             if (this.fg_item_select) {
                 this.fg_item_select.set_value(data.final_good);
@@ -59,9 +128,13 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                 // Determine type from scrubbed name
                 let type = op.type; // already scrubbed from backend
 
-                // Add Op
+                // Add Op (this will sort and render)
                 this.add_operation(type);
-                let current_op = this.operations[this.operations.length - 1];
+
+                // Find the operation we just added by type
+                let current_op = this.operations.find(o => o.type === type);
+                if (!current_op) continue;
+
                 let $card = current_op.$el;
 
                 // Set Loss
@@ -112,7 +185,12 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                 }
             }
 
-            setTimeout(() => this.calculate_quantities(), 500);
+            setTimeout(() => {
+                this.update_sfg_visibility();
+                this.calculate_quantities();
+                // Clear the populating flag
+                this.is_populating = false;
+            }, 500);
         }
 
         setup_ui() {
@@ -193,8 +271,12 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                 let val = this.fg_item_select.get_value();
                                 console.log("Final Good changed to:", val);
                                 if (val) {
+                                    // Check if BOM exists for this item
+                                    this.check_and_load_bom(val);
+
                                     // Set interim display while fetching name
                                     this.sync_dyeing();
+                                    this.sync_all_knitting_outputs();
                                     frappe.db.get_value('Item', val, 'item_name').then(r => {
                                         console.log("Fetched FG Name Response:", r);
                                         let name_val = '';
@@ -205,13 +287,16 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                         }
                                         this.fg_item_name = name_val;
                                         this.sync_dyeing();
+                                        this.sync_all_knitting_outputs();
                                     }).catch(e => {
                                         console.error("Error fetching FG name:", e);
                                         this.sync_dyeing();
+                                        this.sync_all_knitting_outputs();
                                     });
                                 } else {
                                     this.fg_item_name = '';
                                     this.sync_dyeing();
+                                    this.sync_all_knitting_outputs();
                                 }
                             }
                         },
@@ -261,6 +346,10 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                 this.add_input_row($(e.currentTarget).closest('.op-card'));
             });
 
+            this.body.on('click', '.btn-remove-input', (e) => {
+                this.remove_input_row($(e.currentTarget).closest('.input-row-mini'));
+            });
+
             // Auto-calculate on loss change
             this.body.on('change', '.input-loss, .input-mix, .final-qty', () => {
                 this.calculate_quantities();
@@ -286,35 +375,72 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
         }
 
         add_operation(type) {
-            let step_num = this.operations.length + 1;
-            let op = {
-                type: type,
-                $el: this.render_op_card(type, step_num)
-            };
-
-            if (this.operations.length > 0) {
-                this.page.main.find('.workflow-stack').append('<div class="arrow-icon"><i class="fa fa-chevron-down"></i></div>');
+            // Check if operation already exists
+            let existing = this.operations.find(o => o.type === type);
+            if (existing) {
+                frappe.msgprint(`${frappe.unscrub(type)} operation already exists`);
+                return;
             }
 
+            let op = {
+                type: type,
+                $el: this.render_op_card(type, 0) // Step number will be set during render
+            };
+
             this.operations.push(op);
-            this.page.main.find('.workflow-stack').append(op.$el);
+
+            // Sort operations in the correct order: yarn_processing -> knitting -> dyeing
+            this.sort_operations();
+
+            // Re-render all operations in the correct order
+            this.render_operations();
+
             this.update_buttons_visibility();
+            this.update_sfg_visibility();
 
             if (type === 'dyeing') this.sync_dyeing();
+            if (type === 'knitting') {
+                // Sync knitting output to show final good if no dyeing
+                setTimeout(() => this.sync_knitting_output(op.$el), 150);
+            }
 
             this.calculate_quantities();
         }
 
-        remove_operation(idx) {
-            let $wrappers = this.page.main.find('.op-card-wrapper');
-            let $arrow = $wrappers.eq(idx).prev('.arrow-icon');
-            if ($arrow.length === 0) $arrow = $wrappers.eq(idx).next('.arrow-icon');
+        sort_operations() {
+            // Define the correct order
+            const order = { 'yarn_processing': 1, 'knitting': 2, 'dyeing': 3 };
+            this.operations.sort((a, b) => order[a.type] - order[b.type]);
+        }
 
-            $wrappers.eq(idx).remove();
-            $arrow.remove();
+        render_operations() {
+            // Clear the workflow stack
+            this.page.main.find('.workflow-stack').empty();
+
+            // Render each operation in order
+            this.operations.forEach((op, idx) => {
+                // Add arrow between operations
+                if (idx > 0) {
+                    this.page.main.find('.workflow-stack').append('<div class="arrow-icon"><i class="fa fa-chevron-down"></i></div>');
+                }
+
+                // Update step number
+                op.$el.find('.step-num').text(idx + 1);
+
+                // Append to stack
+                this.page.main.find('.workflow-stack').append(op.$el);
+            });
+        }
+
+        remove_operation(idx) {
+            // Remove from operations array
             this.operations.splice(idx, 1);
+
+            // Re-render all operations
+            this.render_operations();
+
             this.update_buttons_visibility();
-            this.renumber_steps();
+            this.update_sfg_visibility();
             this.calculate_quantities();
         }
 
@@ -326,6 +452,55 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
 
         update_buttons_visibility() {
             // All operation buttons are now always visible
+        }
+
+        update_sfg_visibility() {
+            // Check if there's a dyeing operation
+            let has_dyeing = this.operations.some(o => o.type === 'dyeing');
+
+            // Update each knitting operation
+            this.operations.forEach((op, idx) => {
+                if (op.type === 'knitting') {
+                    let $card = op.$el;
+                    let $sfg_section = $card.find('.sfg-output-section');
+
+                    if (has_dyeing) {
+                        // Show SFG field when dyeing exists
+                        $sfg_section.show();
+                        // Clear the output display to show SFG prompt
+                        this.sync_knitting_output($card);
+                    } else {
+                        // Hide SFG field and auto-use final good
+                        $sfg_section.hide();
+                        // Update output display to show final good
+                        this.sync_knitting_output($card);
+                    }
+                }
+            });
+        }
+
+        sync_knitting_output($card) {
+            // When no dyeing operation, knitting outputs the final good
+            let has_dyeing = this.operations.some(o => o.type === 'dyeing');
+
+            if (!has_dyeing) {
+                let fg = this.fg_item_select ? this.fg_item_select.get_value() : '';
+                let display = fg;
+                if (fg && this.fg_item_name) {
+                    display = `${fg} : ${this.fg_item_name}`;
+                }
+                $card.find('.output-item-name').text(display || 'Select Final Good...');
+            } else {
+                // When dyeing exists, check if SFG is selected
+                let sfg_ctrl = $card.data('sfg_control');
+                if (sfg_ctrl && sfg_ctrl.get_value()) {
+                    // SFG is selected, use sync_output_display
+                    this.sync_output_display($card);
+                } else {
+                    // No SFG selected yet, show prompt
+                    $card.find('.output-item-name').text('Select SFG...');
+                }
+            }
         }
 
         render_op_card(type, step_num) {
@@ -370,7 +545,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                     </div>
 
                                     ${is_knit || is_yarn ? `
-                                    <div class="mb-4">
+                                    <div class="mb-4 sfg-output-section">
                                         <label class="small text-muted mb-2">Target Output (SFG)</label>
                                         <div class="sfg-output-target"></div>
                                     </div>
@@ -509,7 +684,10 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             let is_dye = $card.hasClass('card-dyeing');
             let $list = $card.find('.inputs-list');
             let $row = $(`
-                <div class="input-row-mini mb-3">
+                <div class="input-row-mini mb-3" style="position: relative;">
+                    <button class="btn btn-sm btn-link text-danger btn-remove-input" style="position: absolute; top: -5px; right: -5px; padding: 2px 6px; font-size: 18px; line-height: 1; z-index: 10;" title="Remove item">
+                        <i class="fa fa-times-circle"></i>
+                    </button>
                     <div class="small-header mb-1">Item</div>
                     <div class="item-link-target mb-3"></div>
                     <div class="row no-gutters">
@@ -563,6 +741,24 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             $list.append($row);
         }
 
+        remove_input_row($row) {
+            let $card = $row.closest('.op-card');
+            let $list = $card.find('.inputs-list');
+            let row_count = $list.find('.input-row-mini').length;
+
+            // Ensure at least one row remains
+            if (row_count <= 1) {
+                frappe.msgprint('At least one input item is required');
+                return;
+            }
+
+            // Remove the row
+            $row.remove();
+
+            // Recalculate quantities
+            this.calculate_quantities();
+        }
+
         sync_output_display($card) {
             let item = $card.find('.sfg-output-target .form-control').val();
             let name = $card.data('item_name');
@@ -571,6 +767,15 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                 display = `${item} : ${name}`;
             }
             $card.find('.output-item-name').text(display || 'Select SFG...');
+        }
+
+        sync_all_knitting_outputs() {
+            // Update all knitting operations to show final good when no dyeing exists
+            this.operations.forEach(op => {
+                if (op.type === 'knitting') {
+                    this.sync_knitting_output(op.$el);
+                }
+            });
         }
 
         sync_dyeing() {
@@ -626,6 +831,24 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             }
         }
 
+        get_operation_output_item(type, $card, final_good, sfg_ctrl) {
+            // For dyeing, always use final good
+            if (type === 'dyeing') {
+                return final_good;
+            }
+
+            // For knitting, check if dyeing exists
+            let has_dyeing = this.operations.some(o => o.type === 'dyeing');
+
+            if (type === 'knitting' && !has_dyeing) {
+                // If no dyeing operation, knitting outputs the final good
+                return final_good;
+            }
+
+            // Otherwise use the SFG control value
+            return sfg_ctrl ? sfg_ctrl.get_value() : $card.find('.sfg-output-target .form-control').val();
+        }
+
         get_data() {
             let data = {
                 final_good: this.fg_item_select ? this.fg_item_select.get_value() : null,
@@ -645,7 +868,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                     type: type,
                     is_job_work: $card.find('.chk-job-work').prop('checked'),
                     loss_percent: flt($card.find('.input-loss').val()),
-                    output_item: type === 'dyeing' ? data.final_good : (sfg_ctrl ? sfg_ctrl.get_value() : $card.find('.sfg-output-target .form-control').val()),
+                    output_item: this.get_operation_output_item(type, $card, data.final_good, sfg_ctrl),
                     output_qty: flt($card.find('.output-qty-display .val').text()),
                     workstation_type: type === 'dyeing' ? 'Dyeing Job Work' : (ws_ctrl ? ws_ctrl.get_value() : $card.find('.workstation-type-target .form-control').val()),
                     inputs: []
