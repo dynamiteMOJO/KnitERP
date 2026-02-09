@@ -457,64 +457,148 @@ def get_production_details(sales_order_item):
                     operation_data["for_quantity"] = jc.for_quantity  # Override with actual job card qty
                     operation_data["is_subcontracted"] = jc.is_subcontracted
                     
-                    # If subcontracted, find PO and receipt details
+                    # If subcontracted, find ALL POs and receipt details (supports multiple SCOs per operation)
                     if jc.is_subcontracted:
-                        po = frappe.db.get_value(
-                            "Purchase Order Item",
-                            {"job_card": jc.name, "docstatus": ["!=", 2]},
-                            ["parent", "qty", "fg_item_qty"],
-                            as_dict=True
-                        )
-                        if po:
-                            operation_data["purchase_order"] = po.parent
-                            operation_data["po_qty"] = po.fg_item_qty or po.qty
+                        # Fetch all PO items for this job card
+                        po_items = frappe.db.sql("""
+                            SELECT poi.parent as po_name, poi.fg_item_qty, poi.qty
+                            FROM `tabPurchase Order Item` poi
+                            INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
+                            WHERE poi.job_card = %s AND po.docstatus != 2
+                            ORDER BY po.creation ASC
+                        """, jc.name, as_dict=True)
+                        
+                        total_po_qty = 0
+                        total_sent_qty = 0
+                        total_received_qty = 0
+                        subcontracting_orders = []  # List of individual SCOs for display
+                        
+                        for po in po_items:
+                            po_fg_qty = flt(po.fg_item_qty or po.qty)
+                            total_po_qty += po_fg_qty
                             
                             # Get SCO for this PO
                             sco = frappe.db.get_value(
                                 "Subcontracting Order",
-                                {"purchase_order": po.parent, "docstatus": 1},
+                                {"purchase_order": po.po_name, "docstatus": 1},
                                 "name"
                             )
                             
-                            # Get material sent qty from Stock Entry
-                            sent_qty = frappe.db.sql("""
-                                SELECT SUM(sed.qty) 
-                                FROM `tabStock Entry` se
-                                JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
-                                WHERE se.subcontracting_order = %s
-                                AND se.purpose = 'Send to Subcontractor'
-                                AND se.docstatus = 1
-                            """, sco) if sco else [[0]]
-                            operation_data["sent_qty"] = flt(sent_qty[0][0], 3) if sent_qty and sent_qty[0][0] else 0
-                            
-                            # Get received qty from Subcontracting Receipt 
-                            received_qty = frappe.db.sql("""
-                                SELECT SUM(sri.received_qty)
-                                FROM `tabSubcontracting Receipt` scr
-                                JOIN `tabSubcontracting Receipt Item` sri ON sri.parent = scr.name
-                                WHERE sri.subcontracting_order = %s
-                                AND scr.docstatus = 1
-                            """, sco) if sco else [[0]]
-                            operation_data["received_qty"] = flt(received_qty[0][0], 3) if received_qty and received_qty[0][0] else 0
+                            if sco:
+                                # Get material sent qty from Stock Entry
+                                sent_qty = frappe.db.sql("""
+                                    SELECT COALESCE(SUM(sed.qty), 0)
+                                    FROM `tabStock Entry` se
+                                    JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
+                                    WHERE se.subcontracting_order = %s
+                                    AND se.purpose = 'Send to Subcontractor'
+                                    AND se.docstatus = 1
+                                """, sco)[0][0] or 0
+                                
+                                # Get received qty from Subcontracting Receipt 
+                                received_qty = frappe.db.sql("""
+                                    SELECT COALESCE(SUM(sri.received_qty), 0)
+                                    FROM `tabSubcontracting Receipt` scr
+                                    JOIN `tabSubcontracting Receipt Item` sri ON sri.parent = scr.name
+                                    WHERE sri.subcontracting_order = %s
+                                    AND scr.docstatus = 1
+                                """, sco)[0][0] or 0
+                                
+                                total_sent_qty += flt(sent_qty, 3)
+                                total_received_qty += flt(received_qty, 3)
+                                
+                                # Get supplier for display
+                                supplier = frappe.db.get_value("Purchase Order", po.po_name, "supplier")
+                                
+                                subcontracting_orders.append({
+                                    "po_name": po.po_name,
+                                    "sco_name": sco,
+                                    "supplier": supplier,
+                                    "qty": po_fg_qty,
+                                    "sent_qty": flt(sent_qty, 3),
+                                    "received_qty": flt(received_qty, 3)
+                                })
+                        
+                        if po_items:
+                            operation_data["purchase_order"] = po_items[0].po_name  # First PO for backward compat
+                            operation_data["po_qty"] = total_po_qty
+                            operation_data["sent_qty"] = total_sent_qty
+                            operation_data["received_qty"] = total_received_qty
+                            operation_data["subcontracting_orders"] = subcontracting_orders
+                            operation_data["remaining_to_subcontract"] = flt(jc.for_quantity) - total_po_qty
                             
                             # If fully received, mark operation as completed
-                            if operation_data["received_qty"] >= operation_data["po_qty"]:
+                            if total_received_qty >= total_po_qty and total_po_qty >= jc.for_quantity:
                                 operation_data["status"] = "Completed"
-                                operation_data["completed_qty"] = operation_data["received_qty"]
+                                operation_data["completed_qty"] = total_received_qty
                     break
             
             operations.append(operation_data)
         
-        # Set previous_complete flag for each operation based on sequence
-        # For subcontracted ops, also check if received_qty >= po_qty
+        # Set previous_complete flag and calculate available_to_process
         for idx, op in enumerate(operations):
-            if idx > 0:
+            # Determine what has already been processed in THIS operation (in FG/Output terms usually)
+            current_processed = flt(op.get("po_qty") if op.get("is_subcontracted") else op.get("completed_qty"), 3)
+            
+            if idx == 0:
+                # First operation: limited by total pending qty
+                prev_output = pending_qty
+                op["previous_complete"] = True # First op is always ready to start
+            else:
                 prev_op = operations[idx - 1]
+                # Previous output is what was completed/received
                 if prev_op.get("is_subcontracted"):
-                    # For subcontracted, complete when fully received
-                    op["previous_complete"] = prev_op.get("received_qty", 0) >= prev_op.get("po_qty", 0) or prev_op["status"] == "Completed"
+                    prev_output = flt(prev_op.get("received_qty"), 3)
+                    # For subcontracted: can proceed if any goods received
+                    op["previous_complete"] = prev_output > 0 or prev_op["status"] == "Completed"
                 else:
-                    op["previous_complete"] = prev_op["status"] == "Completed"
+                    prev_output = flt(prev_op.get("completed_qty"), 3)
+                    # For in-house: can proceed if any qty is completed
+                    op["previous_complete"] = prev_output > 0 or prev_op["status"] == "Completed"
+
+            # Calculate Conversion Factor (Prev Op Output -> Current Op Output/FG)
+            conversion_factor = 1.0
+            if idx > 0:
+                # Try to use explicit finished_good_qty from attributes first (most accurate)
+                # op is from bom.operations iteration, so it has attributes
+                prev_bom_op = bom.operations[idx - 1]
+                
+                # Check if Prev Op has explicit output qty
+                if getattr(prev_bom_op, "finished_good_qty", 0):
+                     prev_op_output_per_bom = flt(prev_bom_op.finished_good_qty)
+                     # Factor = Prev Output / BOM Qty
+                     conversion_factor = prev_op_output_per_bom / flt(bom.quantity)
+                else:
+                    # Fallback: Find items in BOM linked to THIS operation (Input for this op)
+                    consumed_items = [d for d in bom.items if d.operation == op["operation"]]
+                    if consumed_items and bom.quantity:
+                        # Qty of SFG required per BOM Qty
+                        qty_per_bom = flt(consumed_items[0].qty)
+                        conversion_factor = qty_per_bom / flt(bom.quantity)
+            
+            if conversion_factor == 0:
+                conversion_factor = 1.0
+
+            # available_to_process (in Current Op terms) = (Available Input / Conversion Factor) - Processed
+            # available_to_process (in Current Op terms) = (Available Input / Conversion Factor) - Processed
+            val_unrounded = (prev_output / conversion_factor) - current_processed
+            available_fg = flt(val_unrounded, 3)
+            available_fg = max(0, available_fg)
+
+            # But we shouldn't exceed the total required for this operation
+            total_required = flt(op.get("for_quantity") or pending_qty, 3)
+            remaining_required = max(0, total_required - current_processed)
+
+            # Available to process
+            op["available_to_process"] = min(available_fg, remaining_required)
+            op["available_to_process"] = flt(op["available_to_process"], 3)
+            
+            # Store the raw "waiting" qty specifically from flow context (in FG terms for consistency in UI)
+            op["qty_ready_from_prev"] = available_fg
+            op["conversion_factor"] = conversion_factor # Useful for UI debugging if propertie needed
+    
+ 
+    fg_projected_qty = pending_qty
     
 
     fg_projected_qty = pending_qty
@@ -654,6 +738,9 @@ def get_production_details(sales_order_item):
                     })
                 total_received += flt(po.received_qty)
             
+            # Fetch Item Rates
+            item_rates = frappe.db.get_value("Item", item.item_code, ["last_purchase_rate", "valuation_rate"], as_dict=True) or {}
+            
             rm_data = {
                 "item_code": item.item_code,
                 "item_name": item.item_name,
@@ -673,7 +760,9 @@ def get_production_details(sales_order_item):
                 "operation_row_id": item.operation_row_id,
                 "is_customer_provided": 0,
                 "sio_received_qty": 0,
-                "sio_required_qty": 0
+                "sio_required_qty": 0,
+                "last_purchase_rate": flt(item.rate) if item.rate else flt(item_rates.get("last_purchase_rate", 0)),
+                "valuation_rate": flt(item_rates.get("valuation_rate", 0))
             }
             
             # Check if Customer Provided via SIO
@@ -725,6 +814,40 @@ def get_production_details(sales_order_item):
             
             raw_materials.append(rm_data)
     
+    # Calculate max producible qty based on available raw materials (bottleneck analysis)
+    # This tells the user how much they can produce with current RM stock
+    max_producible_qty = None
+    bottleneck_item = None
+    
+    if bom and raw_materials:
+        for rm in raw_materials:
+            # Skip customer-provided items that are not yet received
+            if rm.get("is_customer_provided") and rm.get("status") == "pending_receipt":
+                continue
+            
+            # Calculate qty per unit of finished good
+            qty_per_unit = flt(rm.get("required_qty", 0)) / flt(pending_qty) if pending_qty else 0
+            rm["qty_per_unit"] = flt(qty_per_unit, 6)
+            
+            if qty_per_unit > 0:
+                # How much FG can we produce with available RM?
+                available = flt(rm.get("available_qty", 0))
+                producible_from_rm = available / qty_per_unit
+                
+                # Find the bottleneck (lowest producible qty)
+                if max_producible_qty is None or producible_from_rm < max_producible_qty:
+                    max_producible_qty = producible_from_rm
+                    bottleneck_item = rm.get("item_code")
+    
+    # Round down to avoid partial production issues
+    # Round max_producible if very close to integer to handle floating point noise
+    if max_producible_qty:
+        nearest_int = round(max_producible_qty)
+        if abs(max_producible_qty - nearest_int) < 0.005:
+            max_producible_qty = nearest_int
+            
+    max_producible_qty = flt(max_producible_qty, 3) if max_producible_qty else 0
+    
     return {
         "sales_order": soi.parent,
         "sales_order_item": soi.name,
@@ -745,6 +868,8 @@ def get_production_details(sales_order_item):
         "operations": operations,
         "raw_materials": raw_materials,
         "projected_qty": fg_projected_qty,
+        "max_producible_qty": max_producible_qty,
+        "bottleneck_item": bottleneck_item,
         "subcontracting_inward_order": sio_name,
         "sio_status": sio_status,
         "uom": soi.stock_uom,
@@ -826,6 +951,53 @@ def create_work_order(sales_order, sales_order_item):
     wo.description = soi.description
     
     wo.set_work_order_operations()
+    
+    # Calculate custom planned output for each operation based on BOM requirements
+    # Logic: 
+    # 1. Check if BOM Operation defines 'finished_good_qty' (Output of that op)
+    # 2. If not, fallback to Input Qty required for Next Op (Logic from before)
+    if wo.operations:
+         bom_doc = frappe.get_doc("BOM", wo.bom_no)
+         
+         # Map operations by name or index. WO Ops are copied from BOM Ops.
+         # Ideally match by operation and sequence_id
+         
+         for idx, op in enumerate(wo.operations):
+            planned_qty = wo.qty
+            
+            # Find corresponding BOM Operation
+            bom_op = None
+            if idx < len(bom_doc.operations):
+                bom_op = bom_doc.operations[idx]
+                # Double check matching
+                if bom_op.operation != op.operation:
+                     # Fallback search
+                     found = [b for b in bom_doc.operations if b.operation == op.operation]
+                     if found: bom_op = found[0]
+            
+            if bom_op and flt(bom_op.finished_good_qty) > 0:
+                 # Use explicit output qty from BOM Op
+                 per_unit_qty = flt(bom_op.finished_good_qty) / flt(bom_doc.quantity)
+                 planned_qty = flt(wo.qty) * per_unit_qty
+            
+            # Fallback: If BOM Op qty missing, check what NEXT op consumes (only if mapped)
+            elif idx < len(wo.operations) - 1:
+                next_op = wo.operations[idx + 1]
+                
+                # Find items in BOM linked to next_op.operation
+                consumed_items = [
+                    d for d in bom_doc.items 
+                    if d.operation == next_op.operation
+                ]
+                
+                if consumed_items:
+                    # Use the quantity of the first/major item consumed by the next step
+                    per_unit_qty = flt(consumed_items[0].qty) / flt(bom_doc.quantity)
+                    planned_qty = flt(wo.qty) * per_unit_qty
+            
+            # Set the custom field
+            op.custom_planned_output_qty = planned_qty
+
     wo.flags.ignore_mandatory = True
     wo.insert()
     wo.save()
@@ -874,37 +1046,52 @@ def start_work_order(work_order, operation_settings=None):
     
     wo.submit()
     
-    # Apply operation-specific settings to Job Cards
-    if operation_settings:
-        job_cards = frappe.get_all("Job Card", filters={"work_order": wo.name, "docstatus": 0}, fields=["name", "operation"])
+    # Update Job Cards with correct quantities and apply settings
+    # Also fetch created JCs to update for_quantity from custom_planned_output_qty
+    
+    # Re-fetch WO to get operations with custom_planned_output_qty
+    wo.reload()
+    op_qty_map = {op.operation: op.custom_planned_output_qty for op in wo.operations}
+
+    job_cards = frappe.get_all("Job Card", filters={"work_order": wo.name, "docstatus": 0}, fields=["name", "operation"])
+    
+    # Create a map for settings lookup
+    settings_map = {s.get("operation"): s for s in operation_settings} if operation_settings else {}
+    
+    for jc_item in job_cards:
+        jc = frappe.get_doc("Job Card", jc_item.name)
         
-        # Create a map for quick lookup
-        settings_map = {s.get("operation"): s for s in operation_settings}
+        # 1. Update Quantity if custom planned output is set
+        planned_qty = op_qty_map.get(jc.operation)
+        if planned_qty and flt(planned_qty) > 0:
+            jc.for_quantity = planned_qty
+            
+        # 2. Apply User Settings
+        settings = settings_map.get(jc.operation)
+        if settings:
+            if "skip_material_transfer" in settings:
+                jc.skip_material_transfer = cint(settings["skip_material_transfer"])
+            
+            if "wip_warehouse" in settings:
+                jc.wip_warehouse = settings["wip_warehouse"]
+            
+            if "workstation" in settings and settings["workstation"]:
+                jc.workstation = settings["workstation"]
         
-        for jc_item in job_cards:
-            settings = settings_map.get(jc_item.operation)
-            jc = frappe.get_doc("Job Card", jc_item.name)
+        # Final validation: Ensure workstation exists before standard save
+        if not jc.workstation:
+            # Fallback to first available matching workstation type if BOM was empty
+            filters = {}
+            if jc.workstation_type:
+                filters["workstation_type"] = jc.workstation_type
             
-            if settings:
-                if "skip_material_transfer" in settings:
-                    jc.skip_material_transfer = cint(settings["skip_material_transfer"])
-                
-                if "wip_warehouse" in settings:
-                    jc.wip_warehouse = settings["wip_warehouse"]
-                
-                if "workstation" in settings and settings["workstation"]:
-                    jc.workstation = settings["workstation"]
-            
-            # Final validation: Ensure workstation exists before standard save
-            if not jc.workstation:
-                # Fallback to first available matching workstation type if BOM was empty
-                filters = {}
-                if jc.workstation_type:
-                    filters["workstation_type"] = jc.workstation_type
-                
-                jc.workstation = frappe.db.get_value("Workstation", filters, "name")
-            
-            jc.save()
+            jc.workstation = frappe.db.get_value("Workstation", filters, "name")
+        
+        # Bypass sequence validation when just applying initial settings
+        # (we're not completing operations, just setting workstation/wip_warehouse)
+        jc.flags.ignore_validate = True
+        jc.save()
+        jc.flags.ignore_validate = False
 
     frappe.msgprint(_("Work Order {0} started. Job Cards created for operations.").format(wo.name))
     
@@ -915,7 +1102,7 @@ def start_work_order(work_order, operation_settings=None):
 
 
 @frappe.whitelist()
-def create_subcontracting_order(work_order, operation, supplier, qty=None):
+def create_subcontracting_order(work_order, operation, supplier, qty=None, rate=None):
     """
     Create Subcontracting Purchase Order and Subcontracting Order for a specific operation.
     
@@ -945,29 +1132,53 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None):
     if not job_card.is_subcontracted:
         frappe.throw(_("Operation {0} is not marked as subcontracted").format(operation))
     
-    # Check operation sequence - ensure all previous operations are completed
-    previous_ops_incomplete = frappe.db.sql("""
-        SELECT jc.name, jc.operation, jc.status
+    # Check operation sequence - ensure all previous operations have AT LEAST SOME output
+    # (Allow partial production flow)
+    previous_ops = frappe.db.sql("""
+        SELECT jc.name, jc.operation, jc.status, jc.total_completed_qty, jc.is_subcontracted
         FROM `tabJob Card` jc
         WHERE jc.work_order = %s
         AND jc.docstatus != 2
         AND jc.sequence_id < %s
-        AND jc.status != 'Completed'
-    """, (work_order, job_card.sequence_id or 999), as_dict=True)
+        ORDER BY jc.sequence_id
+    """, (work_order, job_card.get("sequence_id") or 999), as_dict=True)
     
-    if previous_ops_incomplete:
-        incomplete_ops = ", ".join([op.operation for op in previous_ops_incomplete])
-        frappe.throw(_("Cannot start this operation. Previous operations not completed: {0}").format(incomplete_ops))
+    for prev_op in previous_ops:
+        is_started = False
+        
+        if prev_op.is_subcontracted:
+             # Check if any goods received for this subcontracted job card
+             # (Purchase Order Item tracks received_qty against job_card)
+             received_qty = frappe.db.sql("""
+                SELECT SUM(poi.received_qty)
+                FROM `tabPurchase Order Item` poi
+                WHERE poi.job_card = %s
+                AND poi.docstatus = 1
+             """, prev_op.name)[0][0] or 0
+             
+             if flt(received_qty) > 0 or prev_op.status == 'Completed':
+                 is_started = True
+        else:
+             # In-house: check completed qty
+             if flt(prev_op.total_completed_qty) > 0 or prev_op.status == 'Completed':
+                 is_started = True
+        
+        if not is_started:
+            frappe.throw(_("Cannot start this operation. Previous operation '{0}' has no completed quantity.").format(prev_op.operation))
     
-    # Check if PO already exists
-    existing_po = frappe.db.get_value(
-        "Purchase Order Item",
-        {"job_card": job_card.name, "docstatus": ["!=", 2]},
-        "parent"
-    )
+    # Calculate already ordered qty for this job card (allows multiple SCOs per operation)
+    already_ordered_qty = frappe.db.sql("""
+        SELECT COALESCE(SUM(poi.fg_item_qty), 0)
+        FROM `tabPurchase Order Item` poi
+        INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
+        WHERE poi.job_card = %s
+        AND po.docstatus != 2
+    """, job_card.name)[0][0] or 0
     
-    if existing_po:
-        frappe.throw(_("Purchase Order {0} already exists for this operation").format(existing_po))
+    remaining_to_subcontract = flt(job_card.for_quantity) - flt(already_ordered_qty)
+    
+    if remaining_to_subcontract <= 0:
+        frappe.throw(_("All quantity ({0}) has already been subcontracted for this operation. Existing POs cover the full Job Card quantity.").format(job_card.for_quantity))
     
     # Get subcontracting BOM details - use the finished_good from job card
     from erpnext.subcontracting.doctype.subcontracting_bom.subcontracting_bom import (
@@ -980,9 +1191,12 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None):
     if not sc_bom:
         frappe.throw(_("No Subcontracting BOM found for item {0}").format(fg_item))
     
-    pending_qty = flt(job_card.for_quantity) - flt(job_card.total_completed_qty)
+    # Use provided qty or remaining qty
+    order_qty = remaining_to_subcontract
     if qty:
-        pending_qty = min(flt(qty), pending_qty)
+        order_qty = min(flt(qty), remaining_to_subcontract)
+    
+    order_qty = flt(order_qty, 3)
     
     # Get company abbreviation for supplier warehouse
     company_abbr = frappe.get_cached_value("Company", wo.company, "abbr")
@@ -1015,14 +1229,22 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None):
         "stock_uom": sc_bom.service_item_uom,
         "conversion_factor": sc_bom.conversion_factor or 1,
         "item_name": sc_bom.service_item,
-        "qty": pending_qty * service_item_qty / fg_item_qty,
-        "fg_item_qty": pending_qty,
+        "qty": flt(order_qty * service_item_qty / fg_item_qty, 3),
+        "fg_item_qty": order_qty,
         "job_card": job_card.name,
         "bom": job_card.semi_fg_bom or sc_bom.finished_good_bom,
+        "rate": flt(rate) if rate else 0,
         "warehouse": wo.fg_warehouse
     })
     
     po.set_missing_values()
+    
+    # Force rate if provided, as set_missing_values might fetch from Price List
+    if rate and flt(rate) > 0:
+        for item in po.items:
+            item.rate = flt(rate)
+            item.price_list_rate = flt(rate)
+            
     po.flags.ignore_mandatory = True
     po.insert()
     po.submit()
@@ -1152,7 +1374,17 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
                 for row in ste.stock_entry.items:
                     if not row.is_finished_item and row.job_card_item:
                         jc_required = frappe.db.get_value("Job Card Item", row.job_card_item, "required_qty")
-                        row.qty = flt(jc_required) * ratio
+                        row.qty = flt(flt(jc_required) * ratio, 3)
+                        
+                        # Fix: Auto-adjust consumption if close to available stock (avoid negative stock error)
+                        if row.s_warehouse:
+                            bin_qty = flt(frappe.db.get_value("Bin", 
+                                {"item_code": row.item_code, "warehouse": row.s_warehouse}, 
+                                "actual_qty"))
+                            
+                            # If we are trying to consume slightly more than available (within 0.005 tolerance)
+                            if row.qty > bin_qty and (row.qty - bin_qty) < 0.005:
+                                row.qty = bin_qty
             
             # Configure Stock Entry
             ste.stock_entry.flags.ignore_mandatory = True
@@ -1418,7 +1650,7 @@ def update_production_entry(stock_entry, qty, employee, workstation):
 
 
 @frappe.whitelist()
-def receive_subcontracted_goods(purchase_order, items=None):
+def receive_subcontracted_goods(purchase_order, qty=None, rate=None, supplier_delivery_note=None, items=None):
     """
     Create Subcontracting Receipt to receive goods from subcontractor.
     Auto-updates Job Card and Work Order status.
@@ -1454,9 +1686,30 @@ def receive_subcontracted_goods(purchase_order, items=None):
     )
     
     scr = make_subcontracting_receipt(sco)
-    scr.insert()
     
-    frappe.msgprint(_("Subcontracting Receipt {0} created").format(scr.name))
+    # Update Receipt Details if provided
+    if supplier_delivery_note:
+        scr.supplier_delivery_note = supplier_delivery_note
+        
+    for item in scr.items:
+        if qty and flt(qty) > 0:
+            item.qty = flt(qty, 3)
+            # Re-calculate amount ? (Standard save might handle it, but setting rate explicitly helps)
+        if rate and flt(rate) > 0:
+            item.rate = flt(rate, 2)
+            
+    scr.insert()
+    scr.submit()
+    
+    # Check for linked Purchase Receipt (Draft) and submit it
+    # Sometimes a Purchase Receipt is created for Service Items or other logic
+    linked_pr = frappe.db.get_value("Purchase Receipt", {"purchase_order": purchase_order, "docstatus": 0}, "name")
+    if linked_pr:
+        pr_doc = frappe.get_doc("Purchase Receipt", linked_pr)
+        pr_doc.submit()
+        frappe.msgprint(_("Linked Purchase Receipt {0} submitted").format(pr_doc.name))
+    
+    frappe.msgprint(_("Subcontracting Receipt {0} created and submitted").format(scr.name))
     
     return scr.name
 
@@ -2062,6 +2315,7 @@ def delete_production_note(note_name):
 
     note.delete()
     return "deleted"
+
 @frappe.whitelist()
 def update_so_item_bom(sales_order_item, bom_no):
     """
@@ -2069,3 +2323,148 @@ def update_so_item_bom(sales_order_item, bom_no):
     """
     frappe.db.set_value("Sales Order Item", sales_order_item, "bom_no", bom_no)
     return {"message": "BOM Updated"}
+
+
+@frappe.whitelist()
+def get_batch_production_summary(sales_order_item):
+    """
+    Get comprehensive summary of production batches for a Sales Order Item.
+    
+    Returns:
+    - Work Order info
+    - Manufacturing batches (Stock Entries)
+    - Subcontracting batches (by PO/SCO)
+    - Delivery batches (Delivery Notes)
+    """
+    soi = frappe.db.get_value(
+        "Sales Order Item", sales_order_item,
+        ["parent", "item_code", "qty", "delivered_qty", "stock_uom"],
+        as_dict=True
+    )
+    
+    if not soi:
+        frappe.throw(_("Sales Order Item not found"))
+    
+    # Get Work Order
+    wo = frappe.db.get_value(
+        "Work Order",
+        {"sales_order_item": sales_order_item, "docstatus": ["!=", 2]},
+        ["name", "qty", "produced_qty", "status"],
+        as_dict=True
+    )
+    
+    result = {
+        "sales_order": soi.parent,
+        "sales_order_item": sales_order_item,
+        "item_code": soi.item_code,
+        "uom": soi.stock_uom,
+        "total_ordered_qty": soi.qty,
+        "total_delivered_qty": soi.delivered_qty,
+        "work_order": wo.name if wo else None,
+        "work_order_status": wo.status if wo else None,
+        "work_order_qty": wo.qty if wo else 0,
+        "total_produced_qty": wo.produced_qty if wo else 0,
+        "manufacturing_batches": [],
+        "subcontracting_batches": [],
+        "delivery_batches": []
+    }
+    
+    if wo:
+        # Get Manufacturing Batches (Stock Entries for Manufacture)
+        mfg_entries = frappe.db.sql("""
+            SELECT 
+                se.name, se.posting_date, se.fg_completed_qty,
+                tl.employee, tl.workstation
+            FROM `tabStock Entry` se
+            LEFT JOIN `tabJob Card Time Log` tl ON tl.parent = se.job_card AND tl.idx = 1
+            WHERE se.work_order = %s
+            AND se.docstatus = 1
+            AND se.purpose = 'Manufacture'
+            ORDER BY se.creation ASC
+        """, wo.name, as_dict=True)
+        
+        for idx, se in enumerate(mfg_entries):
+            result["manufacturing_batches"].append({
+                "batch_no": idx + 1,
+                "stock_entry": se.name,
+                "date": se.posting_date,
+                "qty": se.fg_completed_qty,
+                "employee": se.employee,
+                "workstation": se.workstation
+            })
+        
+        # Get Subcontracting Batches (grouped by PO)
+        sco_data = frappe.db.sql("""
+            SELECT 
+                poi.parent as po_name,
+                po.supplier,
+                poi.fg_item_qty as ordered_qty,
+                sco.name as sco_name,
+                po.creation as order_date
+            FROM `tabPurchase Order Item` poi
+            INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
+            INNER JOIN `tabJob Card` jc ON jc.name = poi.job_card
+            LEFT JOIN `tabSubcontracting Order` sco ON sco.purchase_order = po.name AND sco.docstatus = 1
+            WHERE jc.work_order = %s
+            AND po.docstatus != 2
+            ORDER BY po.creation ASC
+        """, wo.name, as_dict=True)
+        
+        for idx, sco in enumerate(sco_data):
+            # Get sent and received qty for this SCO
+            sent_qty = 0
+            received_qty = 0
+            
+            if sco.sco_name:
+                sent = frappe.db.sql("""
+                    SELECT COALESCE(SUM(sed.qty), 0)
+                    FROM `tabStock Entry` se
+                    JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
+                    WHERE se.subcontracting_order = %s
+                    AND se.purpose = 'Send to Subcontractor'
+                    AND se.docstatus = 1
+                """, sco.sco_name)
+                sent_qty = flt(sent[0][0]) if sent else 0
+                
+                recd = frappe.db.sql("""
+                    SELECT COALESCE(SUM(sri.received_qty), 0)
+                    FROM `tabSubcontracting Receipt` scr
+                    JOIN `tabSubcontracting Receipt Item` sri ON sri.parent = scr.name
+                    WHERE sri.subcontracting_order = %s
+                    AND scr.docstatus = 1
+                """, sco.sco_name)
+                received_qty = flt(recd[0][0]) if recd else 0
+            
+            result["subcontracting_batches"].append({
+                "batch_no": idx + 1,
+                "po_name": sco.po_name,
+                "sco_name": sco.sco_name,
+                "supplier": sco.supplier,
+                "ordered_qty": sco.ordered_qty,
+                "sent_qty": sent_qty,
+                "received_qty": received_qty,
+                "order_date": sco.order_date
+            })
+    
+    # Get Delivery Batches
+    dn_data = frappe.db.sql("""
+        SELECT 
+            dni.parent as dn_name,
+            dn.posting_date,
+            dni.qty as delivered_qty
+        FROM `tabDelivery Note Item` dni
+        INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+        WHERE dni.so_detail = %s
+        AND dn.docstatus = 1
+        ORDER BY dn.creation ASC
+    """, sales_order_item, as_dict=True)
+    
+    for idx, dn in enumerate(dn_data):
+        result["delivery_batches"].append({
+            "batch_no": idx + 1,
+            "dn_name": dn.dn_name,
+            "date": dn.posting_date,
+            "qty": dn.delivered_qty
+        })
+    
+    return result

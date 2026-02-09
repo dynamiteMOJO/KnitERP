@@ -865,13 +865,20 @@ class ProductionWizard {
                 const sent_raw = op.sent_qty || 0;
                 const recvd_raw = op.received_qty || 0;
                 const po_qty_raw = op.po_qty || 0;
+                // For Sent: Denominator is Required Material = Ordered FG * Conversion Factor
+                const conversion_factor = op.conversion_factor || 1;
+                const sent_denom = po_qty_raw * conversion_factor;
 
-                const sent = frappe.format(sent_raw, { fieldtype: 'Float', precision: 2 });
-                const recvd = frappe.format(recvd_raw, { fieldtype: 'Float', precision: 2 });
-                const po_qty_fmt = frappe.format(po_qty_raw, { fieldtype: 'Float', precision: 2 });
+                // For Received: Denominator is Ordered FG (PO Qty)
+                const recvd_denom = po_qty_raw;
 
-                const sent_pct = po_qty_raw ? Math.min(100, (sent_raw / po_qty_raw) * 100) : 0;
-                const recd_pct = this.get_operation_progress(op, details);
+                const sent = frappe.format(sent_raw, { fieldtype: 'Float', precision: 3 });
+                const recvd = frappe.format(recvd_raw, { fieldtype: 'Float', precision: 3 });
+                const sent_denom_fmt = frappe.format(sent_denom, { fieldtype: 'Float', precision: 3 });
+                const recvd_denom_fmt = frappe.format(recvd_denom, { fieldtype: 'Float', precision: 3 });
+
+                const sent_pct = sent_denom ? Math.min(100, (sent_raw / sent_denom) * 100) : 0;
+                const recd_pct = recvd_denom ? Math.min(100, (recvd_raw / recvd_denom) * 100) : 0;
 
                 let send_btn = '';
                 if (recvd_raw < po_qty_raw) {
@@ -894,7 +901,7 @@ class ProductionWizard {
                             <div class="op-progress-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                                 <span class="op-progress-label" style="font-size: 11px; font-weight: 600; color: var(--text-muted);">${__('Sent')}</span>
                                 <span class="op-progress-summary" style="font-size: 13px; font-weight: 700; white-space: nowrap !important; display: flex; align-items: center;">
-                                    ${sent}&nbsp;/&nbsp;${po_qty_fmt}
+                                    ${sent}&nbsp;/&nbsp;${sent_denom_fmt}
                                 </span>
                             </div>
                             <div class="op-progress-bar-container" style="margin-bottom: 8px;">
@@ -910,7 +917,7 @@ class ProductionWizard {
                             <div class="op-progress-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 4px;">
                                 <span class="op-progress-label" style="font-size: 11px; font-weight: 600; color: var(--text-muted);">${__('Received')}</span>
                                 <span class="op-progress-summary" style="font-size: 13px; font-weight: 700; white-space: nowrap !important; display: flex; align-items: center;">
-                                    ${recvd}&nbsp;/&nbsp;${po_qty_fmt}
+                                    ${recvd}&nbsp;/&nbsp;${recvd_denom_fmt}
                                 </span>
                             </div>
                             <div class="op-progress-bar-container" style="margin-bottom: 8px;">
@@ -1045,34 +1052,37 @@ class ProductionWizard {
         }
 
         if (op.is_subcontracted) {
-            if (!op.purchase_order) {
+            // Calculate remaining to subcontract (uses new backend field)
+            const remaining_to_subcontract = op.remaining_to_subcontract ||
+                ((op.for_quantity || 0) - (op.po_qty || 0));
+
+            if (remaining_to_subcontract > 0) {
+                const btnLabel = op.purchase_order
+                    ? __('Create Additional SCO')
+                    : __('Create Subcontracting Order');
                 actions.push(`
 					<button class="btn btn-sm btn-primary btn-create-sco"
-							data-operation="${op.operation}">
-						<i class="fa fa-file-text-o"></i> ${__('Create Subcontracting Order')}
+							data-operation="${op.operation}"
+							data-remaining="${remaining_to_subcontract}">
+						<i class="fa fa-file-text-o"></i> ${btnLabel}
 					</button>
                     `);
-            } else {
-                // PO exists - show progress and buttons based on state
-                const sent_qty = op.sent_qty || 0;
-                const received_qty = op.received_qty || 0;
-                const po_qty = op.po_qty || 0;
+            }
 
-                // Show subcontracting progress
-                // Moved to main progress bar
-
-
-                // Action buttons are now inline with progress bars
-                /*
-                // Send Material button - always show if not fully received
-                if (received_qty < po_qty) {
-                    actions.push(`...`);
+            // Show existing SCO info if any
+            if (op.subcontracting_orders && op.subcontracting_orders.length > 0) {
+                let scoInfo = `<div class="mt-2 small">`;
+                for (const sco of op.subcontracting_orders) {
+                    const statusIcon = sco.received_qty >= sco.qty ? 'check text-success' : 'clock-o text-warning';
+                    scoInfo += `
+                        <div class="d-flex align-items-center mb-1">
+                            <i class="fa fa-${statusIcon} mr-2"></i>
+                            <a href="/app/subcontracting-order/${sco.sco_name}" class="mr-2">${sco.sco_name}</a>
+                            <span class="text-muted">${sco.supplier}: ${sco.received_qty}/${sco.qty} ${details.uom || 'Units'}</span>
+                        </div>`;
                 }
-                // Receive Goods button - only show if some material has been sent
-                if (sent_qty > 0 && received_qty < po_qty) {
-                    actions.push(`...`);
-                }
-                */
+                scoInfo += `</div>`;
+                actions.push(scoInfo);
             }
         } else {
             // In-house operation
@@ -1575,14 +1585,57 @@ class ProductionWizard {
     create_subcontracting_order(details, operation) {
         const self = this;
 
-        // Find the operation to get for_quantity
+        // Find the operation details
         const op = details.operations.find(o => o.operation === operation);
-        const default_qty = op?.for_quantity || details.pending_qty;
+        const total_qty = op?.for_quantity || details.pending_qty;
+        const already_ordered = op?.po_qty || 0;
+        const remaining_required = op?.remaining_to_subcontract || (total_qty - already_ordered);
+
+        // Get availability from previous operation (batch flow)
+        // If undefined (e.g. first op), assume full pending qty is available
+        const available_from_prev = op.qty_ready_from_prev !== undefined ? op.qty_ready_from_prev : details.pending_qty;
+
+        // The default qty should be what's available to process NOW
+        // (limited by both remaining requirement and previous op output)
+        const default_qty = op.available_to_process !== undefined ? op.available_to_process : remaining_required;
+
+        // Build info section
+        let info_html = `
+            <div class="alert alert-info">
+                <div class="d-flex justify-content-between flex-wrap">
+                    <span><strong>${__('Total Required')}:</strong> ${total_qty}</span>
+                    <span><strong>${__('Already Ordered')}:</strong> ${already_ordered}</span>
+                    <span><strong>${__('Remaining Needed')}:</strong> ${remaining_required}</span>
+                </div>
+            </div>
+        `;
+
+        // Show availability context if relevant (i.e. not first op or if flow restricted)
+        if (op.qty_ready_from_prev !== undefined) {
+            const can_proceed = default_qty > 0;
+            const alert_class = can_proceed ? 'alert-success' : 'alert-warning';
+            const icon = can_proceed ? 'check-circle' : 'exclamation-circle';
+
+            info_html += `
+                <div class="alert ${alert_class}">
+                    <i class="fa fa-${icon}"></i>
+                    <strong>${__('Ready to Process')}:</strong> ${flt(available_from_prev, 3)} ${details.uom || 'Units'}
+                    <br><small class="text-muted">${__('Based on output from previous operation')}</small>
+                </div>
+             `;
+        }
 
         // Show supplier selection dialog
         const d = new frappe.ui.Dialog({
-            title: __('Create Subcontracting Order'),
+            title: already_ordered > 0
+                ? __('Create Additional Subcontracting Order')
+                : __('Create Subcontracting Order'),
             fields: [
+                {
+                    fieldname: 'info_section',
+                    fieldtype: 'HTML',
+                    options: info_html
+                },
                 {
                     fieldname: 'supplier',
                     fieldtype: 'Link',
@@ -1598,43 +1651,89 @@ class ProductionWizard {
                     }
                 },
                 {
+                    fieldname: 'rate',
+                    fieldtype: 'Currency',
+                    label: __('Rate'),
+                    reqd: 0,
+                    description: __('Rate per Unit')
+                },
+                {
                     fieldname: 'qty',
                     fieldtype: 'Float',
-                    label: __('Quantity'),
+                    label: __('Quantity for this Batch'),
                     default: default_qty,
-                    description: __('Quantity to be processed by subcontractor')
+                    reqd: 1,
+                    description: __('Limit: {0} (Available from previous op)', [flt(available_from_prev, 3)])
                 }
             ],
             primary_action_label: __('Create & Submit'),
             primary_action(values) {
-                frappe.call({
-                    method: 'kniterp.api.production_wizard.create_subcontracting_order',
-                    args: {
-                        work_order: details.work_order.name,
-                        operation: operation,
-                        supplier: values.supplier,
-                        qty: values.qty
-                    },
-                    freeze: true,
-                    freeze_message: __('Creating and Submitting Subcontracting Order...'),
-                    callback: (r) => {
-                        if (r.message) {
-                            d.hide();
-                            frappe.show_alert({
-                                message: __('PO {0} and SCO {1} created and submitted',
-                                    [`<a href="/app/purchase-order/${r.message.purchase_order}">${r.message.purchase_order}</a>`,
-                                    `<a href="/app/subcontracting-order/${r.message.subcontracting_order}">${r.message.subcontracting_order}</a>`]),
-                                indicator: 'green'
-                            }, 7);
-                            self.refresh_pending_items();
-                            self.load_production_details(self.selected_item);
+                // Validation: Warn but don't strictly block if they really want to proceed (unless 0)
+                // Use a small epsilon for float comparison to avoid 245 > 244.99999 issues
+
+                if (values.qty <= 0) {
+                    frappe.msgprint({
+                        title: __('Invalid Quantity'),
+                        message: __('Quantity must be greater than 0'),
+                        indicator: 'red'
+                    });
+                    return;
+                }
+
+                // Round available to 3 decimal places for comparison strictness
+                const rounded_available = flt(available_from_prev, 3);
+
+                // Strict validation: Block if quantity exceeds available (with epsilon tolerance)
+                if (values.qty > rounded_available + 0.001) {
+                    frappe.msgprint({
+                        title: __('Limit Exceeded'),
+                        message: __('You are ordering <b>{0}</b>, but only <b>{1}</b> is available to process from the previous operation.', [values.qty, rounded_available]),
+                        indicator: 'red'
+                    });
+                    return;
+                } else if (values.qty > remaining_required + 0.001) {
+                    frappe.confirm(
+                        __('You are ordering <b>{0}</b>, which is more than the remaining required quantity <b>{1}</b>. Continue?', [values.qty, remaining_required]),
+                        () => {
+                            self._submit_sco(details, operation, values, d);
                         }
-                    }
-                });
+                    );
+                } else {
+                    self._submit_sco(details, operation, values, d);
+                }
             }
         });
 
         d.show();
+    }
+
+    _submit_sco(details, operation, values, d) {
+        const self = this;
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_subcontracting_order',
+            args: {
+                work_order: details.work_order.name,
+                operation: operation,
+                supplier: values.supplier,
+                qty: values.qty,
+                rate: values.rate
+            },
+            freeze: true,
+            freeze_message: __('Creating and Submitting Subcontracting Order...'),
+            callback: (r) => {
+                if (r.message) {
+                    d.hide();
+                    frappe.show_alert({
+                        message: __('PO {0} and SCO {1} created and submitted',
+                            [`<a href="/app/purchase-order/${r.message.purchase_order}">${r.message.purchase_order}</a>`,
+                            `<a href="/app/subcontracting-order/${r.message.subcontracting_order}">${r.message.subcontracting_order}</a>`]),
+                        indicator: 'green'
+                    }, 7);
+                    self.refresh_pending_items();
+                    self.load_production_details(self.selected_item);
+                }
+            }
+        });
     }
 
     send_raw_material_to_supplier(purchase_order) {
@@ -1659,19 +1758,87 @@ class ProductionWizard {
         });
     }
 
-    receive_subcontracted_goods(purchase_order) {
-        frappe.call({
-            method: 'kniterp.api.production_wizard.receive_subcontracted_goods',
-            args: {
-                purchase_order: purchase_order
-            },
-            freeze: true,
-            freeze_message: __('Creating Subcontracting Receipt...'),
-            callback: (r) => {
-                if (r.message) {
-                    frappe.set_route('Form', 'Subcontracting Receipt', r.message);
+    receive_subcontracted_goods(po_name) {
+        const self = this;
+        // Prompt for details
+        const d = new frappe.ui.Dialog({
+            title: __('Receive Subcontracted Goods'),
+            fields: [
+                {
+                    fieldname: 'supplier_delivery_note',
+                    fieldtype: 'Data',
+                    label: __('Supplier Delivery Note'),
+                    reqd: 1
+                },
+                {
+                    fieldname: 'qty',
+                    fieldtype: 'Float',
+                    label: __('Quantity to Receive'),
+                    reqd: 1,
+                    default: 0 // Will auto-focus
+                },
+                {
+                    fieldname: 'rate',
+                    fieldtype: 'Currency',
+                    label: __('Rate (Final)'),
+                    reqd: 0
                 }
+            ],
+            primary_action_label: __('Create & Submit Receipt'),
+            primary_action: (values) => {
+                frappe.call({
+                    method: 'kniterp.api.production_wizard.receive_subcontracted_goods',
+                    args: {
+                        purchase_order: po_name,
+                        qty: values.qty,
+                        rate: values.rate,
+                        supplier_delivery_note: values.supplier_delivery_note
+                    },
+                    freeze: true,
+                    freeze_message: __('Creating Subcontracting Receipt...'),
+                    callback: (r) => {
+                        if (r.message) {
+                            d.hide();
+                            frappe.show_alert({
+                                message: __('Subcontracting Receipt Created and Submitted'),
+                                indicator: 'green'
+                            });
+                            // Reload to show updated status
+                            self.load_production_details(self.selected_item);
+                        }
+                    }
+                });
             }
+        });
+
+        // Fetch PO details to set defaults
+        frappe.db.get_value('Purchase Order', po_name, ['supplier', 'company', 'set_warehouse'], (r) => {
+            // We could also fetch items to get pending qty, but for now user enters it manually.
+            // Or prompt user based on PO ID if possible.
+            // Ideally fetching 'pending_qty' from PO item would be nice.
+            // We can use a simple call to get pending qty
+            frappe.call({
+                method: 'frappe.client.get',
+                args: { doctype: 'Purchase Order', name: po_name },
+                callback: (po_res) => {
+                    if (po_res.message) {
+                        const po = po_res.message;
+                        // Sum up pending qty (ordered - received)
+                        let pending = 0;
+                        let rate = 0;
+                        if (po.items) {
+                            po.items.forEach(item => {
+                                const item_pending = (item.fg_item_qty || item.qty) - (item.received_qty || 0);
+                                pending += Math.max(0, item_pending);
+                                rate = item.rate; // Use last item rate
+                            });
+                        }
+                        d.set_value('qty', pending);
+                        d.set_value('rate', rate);
+                    }
+                    d.show();
+                }
+            });
         });
     }
 
@@ -1704,17 +1871,90 @@ class ProductionWizard {
                 const work_order_skip = details.work_order?.skip_transfer || false;
                 const jc_skip = jc.skip_material_transfer || false;
                 const current_skip = work_order_skip || jc_skip;
-                // Default to remaining_qty if positive, else 0. 
-                // Don't fallback to total quantity if remaining is 0 or negative (over-production logic)
-                const default_qty = (remaining_qty > 0) ? remaining_qty : 0;
+
+                // Calculate batch context
+                const total_qty = op.for_quantity || jc.for_quantity || 0;
+                const completed_qty = op.completed_qty || jc.total_completed_qty || 0;
+                const remaining = total_qty - completed_qty;
+
+                // Get max producible based on available RM (from backend calculation)
+                const max_producible = details.max_producible_qty || 0;
+                const bottleneck = details.bottleneck_item || '';
+
+                // Get available from previous operation (batch flow)
+                const available_from_prev = op.qty_ready_from_prev !== undefined ? op.qty_ready_from_prev : details.pending_qty;
+
+                // Default qty logic:
+                // 1. Start with available to process (min of remaining and prev_op_output)
+                let default_qty = op.available_to_process !== undefined ? op.available_to_process : remaining;
+
+                // 2. Limit by raw materials if first operation or if significant RM constraint
+                if (max_producible > 0 && max_producible < default_qty) {
+                    default_qty = max_producible;
+                }
+
+                // 3. Ensure positive and round to standard precision
+                default_qty = Math.max(0, flt(default_qty, 3));
+
+                // Build info section for batch context
+                let info_html = `
+                    <div class="alert alert-light border">
+                        <div class="d-flex justify-content-between flex-wrap">
+                            <span><strong>${__('Total Required')}:</strong> ${total_qty} ${details.uom || 'Units'}</span>
+                            <span><strong>${__('Completed')}:</strong> ${completed_qty} ${details.uom || 'Units'}</span>
+                            <span><strong>${__('Remaining')}:</strong> ${parseFloat(remaining > 0 ? remaining : 0).toFixed(3)} ${details.uom || 'Units'}</span>
+                        </div>
+                    </div>
+                `;
+
+                // Show availability from previous op
+                if (op.qty_ready_from_prev !== undefined) {
+                    info_html += `
+                        <div class="alert alert-info">
+                            <i class="fa fa-arrow-right"></i>
+                            <strong>${__('Ready to Process')}:</strong> ${flt(available_from_prev, 3)} ${details.uom || 'Units'}
+                            <br><small class="text-muted">${__('Based on output from previous operation')}</small>
+                        </div>
+                     `;
+                }
+
+                // Show max producible based on available RM
+                if (max_producible > 0 && max_producible < remaining) {
+                    info_html += `
+                        <div class="alert alert-warning">
+                            <i class="fa fa-exclamation-triangle"></i>
+                            <strong>${__('Max Producible with Available RM')}:</strong> ${flt(max_producible, 3)} ${details.uom || 'Units'}
+                            ${bottleneck ? `<br><small class="text-muted">${__('Limited by')}: ${bottleneck}</small>` : ''}
+                        </div>
+                    `;
+                } else if (max_producible === 0 && remaining > 0) {
+                    // Only show red alert if RM is strictly required (usually first op)
+                    // For subsequent ops, previous op output is the main constraint
+                    info_html += `
+                        <div class="alert alert-danger">
+                            <i class="fa fa-times-circle"></i>
+                            ${__('No raw materials available')}
+                            ${bottleneck ? `<br><small>${__('Missing')}: ${bottleneck}</small>` : ''}
+                        </div>
+                    `;
+                }
+
+                if (completed_qty > 0) {
+                    info_html += `<p class="text-muted small">${__('This will add to the existing completed quantity (batch production).')}</p>`;
+                }
 
                 const d = new frappe.ui.Dialog({
                     title: __('Update Manufactured Quantity: {0}', [operation]),
                     fields: [
                         {
+                            fieldname: 'info_section',
+                            fieldtype: 'HTML',
+                            options: info_html
+                        },
+                        {
                             fieldname: 'sb_progress',
                             fieldtype: 'Section Break',
-                            label: __('Production Progress')
+                            label: __('Production Details')
                         },
                         {
                             fieldname: 'workstation',
@@ -1738,9 +1978,10 @@ class ProductionWizard {
                         {
                             fieldname: 'qty',
                             fieldtype: 'Float',
-                            label: __('Quantity Manufactured'),
+                            label: __('Quantity to Manufacture in this Batch'),
                             default: default_qty,
-                            reqd: 1
+                            reqd: 1,
+                            description: __('Enter the quantity you produced in this batch. You can produce more batches later.')
                         }
                     ],
                     primary_action_label: __('Update'),
@@ -2094,6 +2335,36 @@ class ProductionWizard {
     __show_po_dialog(details, shortage_items, title) {
         const self = this;
         const default_warehouse = details.work_order?.source_warehouse || 'Stores - O';
+        const base_parent_qty = details.pending_qty || 1; // Avoid div by zero
+
+        // Calculate initial plan quantity based on min producible from shortages
+        // We use the "Net" required qty here because we want to know how much *more* we can make given current shortages
+        let initial_plan_qty = base_parent_qty;
+        let min_producible = -1;
+
+        shortage_items.forEach(item => {
+            // For initial plan calculation (shortage based), we must use the TRUE BOM ratio
+            // Reconstruct total required (Net + Consumed) to get the original ratio relative to base_parent_qty
+            const net_req = item.required_qty || 0;
+            const consumed = item.consumed_qty || 0;
+            const total_req_for_batch = net_req + consumed;
+
+            const ratio = total_req_for_batch / base_parent_qty;
+
+            if (ratio > 0 && item.shortage > 0) {
+                const producible = item.shortage / ratio;
+                if (min_producible === -1 || producible < min_producible) {
+                    min_producible = producible;
+                }
+            }
+        });
+
+        if (min_producible !== -1) {
+            initial_plan_qty = min_producible;
+        }
+
+        // Round to 3 decimals
+        initial_plan_qty = parseFloat(initial_plan_qty.toFixed(3));
 
         const d = new frappe.ui.Dialog({
             title: title,
@@ -2123,6 +2394,107 @@ class ProductionWizard {
                     options: 'Warehouse',
                     label: __('Target Warehouse'),
                     default: default_warehouse
+                },
+                {
+                    fieldname: 'bom_info',
+                    fieldtype: 'Data',
+                    label: __('Based on BOM'),
+                    default: details.bom_no || __('Default BOM'),
+                    read_only: 1,
+                    description: __('The logic uses this BOM for ratio calculations.')
+                },
+                {
+                    fieldname: 'sb_calc',
+                    fieldtype: 'Section Break',
+                    label: __('Calculator')
+                },
+                {
+                    fieldname: 'include_available_stock',
+                    fieldtype: 'Check',
+                    label: __('Consider Available Stock for Planning'),
+                    default: 0,
+                    description: __('If checked, the calculator will deduct available raw material stock from the required quantity. Default plan quantity will be set to remaining production (Pending - Produced).'),
+                    onchange: function () {
+                        const checked = this.get_value();
+                        if (checked) {
+                            // Switch to Total Planning Mode
+                            // Default to Remaining Production: Total Pending (Sales) - Already Produced
+                            const produced = details.work_order?.produced_qty || 0;
+                            const remaining_to_produce = Math.max(0, base_parent_qty - produced);
+                            d.set_value('parent_qty', remaining_to_produce);
+                        } else {
+                            // Switch to Shortage Planning Mode (Default: Min Producible Shortage)
+                            d.set_value('parent_qty', initial_plan_qty);
+                        }
+                        // Trigger recalculation
+                        d.fields_dict.parent_qty.df.onchange.call(d.fields_dict.parent_qty);
+                    }
+                },
+                {
+                    fieldname: 'parent_qty',
+                    fieldtype: 'Float',
+                    label: __('Plan for Quantity of ' + (details.production_item || details.item_code)),
+                    default: initial_plan_qty,
+                    onchange: function () {
+                        const new_parent_qty = this.get_value() || 0;
+                        const include_stock = d.get_value('include_available_stock');
+                        let all_stock_available = true;
+
+                        // Update item quantities based on BOM ratios
+                        shortage_items.forEach((item, i) => {
+                            // Calculate TRUE Ratio: (Net Required + Consumed) / Base Parent Qty
+                            // This reconstructs the original BOM requirement per unit of FG
+                            const net_req = item.required_qty || 0;
+                            const consumed = item.consumed_qty || 0;
+                            const total_req_for_batch = net_req + consumed;
+
+                            const ratio = total_req_for_batch / base_parent_qty;
+
+                            // Calc Required based on Plan Qty
+                            let new_qty = new_parent_qty * ratio;
+
+                            if (include_stock) {
+                                // Deduct available stock (actual - reserved)
+                                const available = parseFloat(item.available_qty || 0); // available_qty is ALREADY actual - reserved
+                                new_qty = Math.max(0, new_qty - available);
+                            }
+
+                            if (new_qty > 0.0001) {
+                                all_stock_available = false;
+                            }
+
+                            // Update input
+                            const $input = d.$wrapper.find(`.item-qty[data-idx="${i}"]`);
+                            if ($input.length) {
+                                if (include_stock && new_qty === 0) {
+                                    $input.val(0);
+                                    $input.attr('placeholder', __('Stock Available'));
+                                } else {
+                                    $input.val(parseFloat(new_qty).toFixed(3));
+                                    $input.attr('placeholder', '');
+                                }
+                            }
+                        });
+
+                        // Show notification if all stock is available
+                        const $calc_info = d.fields_dict.calc_info.$wrapper;
+                        if (include_stock && all_stock_available && new_parent_qty > 0) {
+                            $calc_info.html(`<div class="alert alert-center alert-success mt-3 mb-0">
+                                <i class="fa fa-check-circle"></i> ${__('Raw material is already available to produce this quantity.')}
+                             </div>`);
+                        } else {
+                            $calc_info.html(`<p class="text-muted small mt-4">${__('Changing the planned quantity will auto-adjust the required shortage quantities below based on BOM ratios.')}</p>`);
+                        }
+                    }
+                },
+                {
+                    fieldname: 'col_break_calc',
+                    fieldtype: 'Column Break'
+                },
+                {
+                    fieldname: 'calc_info',
+                    fieldtype: 'HTML',
+                    options: `<p class="text-muted small mt-4">${__('Changing the planned quantity will auto-adjust the required shortage quantities below based on BOM ratios.')}</p>`
                 },
                 {
                     fieldname: 'items_section',
@@ -2162,6 +2534,7 @@ class ProductionWizard {
 
         for (let i = 0; i < shortage_items.length; i++) {
             const item = shortage_items[i];
+            const rate = parseFloat(item.last_purchase_rate || item.valuation_rate || 0).toFixed(2);
             items_html += `
                 <tr>
                     <td>
@@ -2174,7 +2547,7 @@ class ProductionWizard {
                     </td>
                     <td>
                         <input type="number" class="form-control form-control-sm text-right item-rate" 
-                            data-idx="${i}" value="0" step="0.01" placeholder="Auto">
+                            data-idx="${i}" value="${rate}" step="0.01" placeholder="Auto">
                     </td>
                     <td>${item.uom || item.stock_uom || ''}</td>
                 </tr>
