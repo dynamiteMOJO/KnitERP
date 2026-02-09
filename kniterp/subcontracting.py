@@ -100,145 +100,100 @@ def on_pr_submit_complete_job_cards(pr, method):
 def on_se_submit_update_job_card_transferred(se, method):
     """
     Update Job Card's transferred_qty when Stock Entry (Send to Subcontractor) is submitted.
-    This is called via doc_events hook on Stock Entry submission.
     """
-    if se.purpose != "Send to Subcontractor":
-        return
-    
-    if not se.subcontracting_order:
-        return
-    
-    # Get the Purchase Order linked to this SCO
-    po_name = frappe.db.get_value("Subcontracting Order", se.subcontracting_order, "purchase_order")
-    if not po_name:
-        return
-    
-    # Get Job Cards linked to this PO
-    po_items = frappe.get_all(
-        "Purchase Order Item",
-        filters={"parent": po_name, "job_card": ["is", "set"]},
-        fields=["job_card", "item_code"]
-    )
-    
-    for poi in po_items:
-        jc = frappe.get_doc("Job Card", poi.job_card)
-        
-        # Get total SENT qty to subcontractor for this job card across ALL Stock Entries
-        total_sent = frappe.db.sql("""
-            SELECT SUM(sed.qty)
-            FROM `tabStock Entry Detail` sed
-            JOIN `tabStock Entry` se ON se.name = sed.parent
-            JOIN `tabSubcontracting Order` sco ON sco.name = se.subcontracting_order
-            JOIN `tabPurchase Order Item` poi ON poi.parent = sco.purchase_order AND poi.job_card = %s
-            WHERE se.docstatus = 1
-            AND se.purpose = 'Send to Subcontractor'
-        """, jc.name)
-        sent_qty = flt(total_sent[0][0]) if total_sent and total_sent[0][0] else 0
-        
-        # Update Job Card transferred_qty
-        jc.db_set("transferred_qty", sent_qty, update_modified=False)
-        
-        # Also update items table if it exists
-        for item in jc.items:
-            # Calculate how much of this item was sent
-            item_sent = frappe.db.sql("""
-                SELECT SUM(sed.qty)
-                FROM `tabStock Entry Detail` sed
-                JOIN `tabStock Entry` se ON se.name = sed.parent
-                WHERE se.docstatus = 1
-                AND se.purpose = 'Send to Subcontractor'
-                AND se.subcontracting_order = %s
-                AND sed.item_code = %s
-            """, (se.subcontracting_order, item.item_code))
-            item_sent_qty = flt(item_sent[0][0]) if item_sent and item_sent[0][0] else 0
-            
-            frappe.db.set_value("Job Card Item", item.name, "transferred_qty", item_sent_qty)
-        
-        # Update status to Material Transferred if all RM sent
-        if sent_qty >= jc.for_quantity and jc.status not in ["Completed", "Submitted"]:
-            jc.db_set("status", "Material Transferred", update_modified=False)
-        elif sent_qty > 0 and jc.status not in ["Completed", "Submitted", "Material Transferred"]:
-            jc.db_set("status", "Work In Progress", update_modified=False)
-        
-        frappe.logger().info({
-            "job_card_transferred_update": jc.name,
-            "source": "stock_entry_send_to_subcontractor",
-            "sent_qty": sent_qty,
-            "for_quantity": jc.for_quantity
-        })
-
+    _update_job_card_transferred_hook(se)
 
 def on_se_cancel_update_job_card_transferred(se, method):
     """
     Recalculate Job Card's transferred_qty when Stock Entry (Send to Subcontractor) is cancelled.
     """
+    _update_job_card_transferred_hook(se)
+
+def _update_job_card_transferred_hook(se):
+    """
+    Common logic to identify Job Cards from Stock Entry and trigger update.
+    """
     if se.purpose != "Send to Subcontractor":
         return
     
     if not se.subcontracting_order:
         return
     
-    # Get the Purchase Order linked to this SCO
-    po_name = frappe.db.get_value("Subcontracting Order", se.subcontracting_order, "purchase_order")
-    if not po_name:
-        return
+    # Find Job Cards linked to this SCO
+    # Link: SCO Item -> PO Item -> Job Card
+    job_cards = frappe.db.sql("""
+        SELECT DISTINCT poi.job_card
+        FROM `tabSubcontracting Order Item` scoi
+        JOIN `tabPurchase Order Item` poi ON poi.name = scoi.purchase_order_item
+        WHERE scoi.parent = %s
+        AND poi.job_card IS NOT NULL
+    """, se.subcontracting_order, as_dict=True)
     
-    # Get Job Cards linked to this PO
-    po_items = frappe.get_all(
-        "Purchase Order Item",
-        filters={"parent": po_name, "job_card": ["is", "set"]},
-        fields=["job_card", "item_code"]
-    )
+    for row in job_cards:
+        if row.job_card:
+            update_job_card_transferred_qty(row.job_card)
+
+def update_job_card_transferred_qty(job_card_name):
+    """
+    Recalculate and update transferred_qty for a Job Card based on ALL relevant stock entries.
+    Identifies proper SCOs linked to this Job Card to sum up quantities.
+    """
+    jc = frappe.get_doc("Job Card", job_card_name)
     
-    for poi in po_items:
-        jc = frappe.get_doc("Job Card", poi.job_card)
-        
-        # Recalculate total SENT qty excluding the cancelled entry (docstatus=1 only)
-        total_sent = frappe.db.sql("""
+    # Subquery to find relevant SCOs (Those containing items linked to this Job Card)
+    relevant_sco_subquery = """
+        SELECT scoi.parent
+        FROM `tabSubcontracting Order Item` scoi
+        JOIN `tabPurchase Order Item` poi ON poi.name = scoi.purchase_order_item
+        WHERE poi.job_card = %s
+    """
+    
+    total_header_sent = 0.0
+    has_change = False
+    
+    # Update Item Level Transferred Qty
+    for item in jc.items:
+        # Sum quantity from all SEs linked to relevant SCOs for this Item Code
+        item_sent = frappe.db.sql(f"""
             SELECT SUM(sed.qty)
             FROM `tabStock Entry Detail` sed
             JOIN `tabStock Entry` se ON se.name = sed.parent
-            JOIN `tabSubcontracting Order` sco ON sco.name = se.subcontracting_order
-            JOIN `tabPurchase Order Item` poi ON poi.parent = sco.purchase_order AND poi.job_card = %s
             WHERE se.docstatus = 1
             AND se.purpose = 'Send to Subcontractor'
-        """, jc.name)
-        sent_qty = flt(total_sent[0][0]) if total_sent and total_sent[0][0] else 0
+            AND se.subcontracting_order IN ({relevant_sco_subquery})
+            AND sed.item_code = %s
+        """, (jc.name, item.item_code))
         
-        # Update Job Card transferred_qty
-        jc.db_set("transferred_qty", sent_qty, update_modified=False)
+        qty = flt(item_sent[0][0]) if item_sent and item_sent[0][0] else 0.0
         
-        # Also update items table if it exists
-        for item in jc.items:
-            # Recalculate how much of this item was sent (excluding cancelled)
-            item_sent = frappe.db.sql("""
-                SELECT SUM(sed.qty)
-                FROM `tabStock Entry Detail` sed
-                JOIN `tabStock Entry` se ON se.name = sed.parent
-                WHERE se.docstatus = 1
-                AND se.purpose = 'Send to Subcontractor'
-                AND se.subcontracting_order IN (
-                    SELECT sco.name FROM `tabSubcontracting Order` sco
-                    JOIN `tabPurchase Order Item` poi ON poi.parent = sco.purchase_order
-                    WHERE poi.job_card = %s
-                )
-                AND sed.item_code = %s
-            """, (jc.name, item.item_code))
-            item_sent_qty = flt(item_sent[0][0]) if item_sent and item_sent[0][0] else 0
-            
-            frappe.db.set_value("Job Card Item", item.name, "transferred_qty", item_sent_qty)
+        if flt(item.transferred_qty) != qty:
+             frappe.db.set_value("Job Card Item", item.name, "transferred_qty", qty)
+             item.transferred_qty = qty
+             has_change = True
         
-        # Update status based on remaining sent qty
-        if sent_qty == 0 and jc.status not in ["Completed", "Submitted"]:
-            jc.db_set("status", "Open", update_modified=False)
-        elif sent_qty >= jc.for_quantity and jc.status not in ["Completed", "Submitted"]:
-            jc.db_set("status", "Material Transferred", update_modified=False)
-        elif sent_qty > 0 and jc.status not in ["Completed", "Submitted", "Material Transferred"]:
-            jc.db_set("status", "Work In Progress", update_modified=False)
+        total_header_sent += qty
+
+    # Update Header Transferred Qty
+    if flt(jc.transferred_qty) != total_header_sent:
+        jc.db_set("transferred_qty", total_header_sent, update_modified=False)
+        has_change = True
         
-        frappe.logger().info({
-            "job_card_transferred_reverted": jc.name,
-            "source": "stock_entry_cancel",
-            "remaining_sent_qty": sent_qty,
-            "for_quantity": jc.for_quantity
-        })
+    # Update Status based on progress
+    current_status = jc.status
+    new_status = current_status
+    
+    if total_header_sent >= jc.for_quantity and current_status not in ["Completed", "Submitted"]:
+         new_status = "Material Transferred"
+    elif total_header_sent > 0 and current_status not in ["Completed", "Submitted", "Material Transferred"]:
+         new_status = "Work In Progress"
+    elif total_header_sent == 0 and current_status not in ["Completed", "Submitted"]:
+         new_status = "Open"
+    
+    if new_status != current_status:
+        jc.db_set("status", new_status, update_modified=False)
+
+    frappe.logger().info({
+        "job_card_transferred_update": jc.name,
+        "sent_qty": total_header_sent,
+        "for_quantity": jc.for_quantity
+    })

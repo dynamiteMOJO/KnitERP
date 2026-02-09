@@ -706,11 +706,19 @@ def get_production_details(sales_order_item):
                                 # Get supplier for display
                                 supplier = frappe.db.get_value("Purchase Order", po.po_name, "supplier")
                                 
+                                # Get Total Required RM Qty (to decide "Send Material" visibility)
+                                required_rm_qty = frappe.db.sql("""
+                                    SELECT COALESCE(SUM(required_qty), 0)
+                                    FROM `tabSubcontracting Order Supplied Item`
+                                    WHERE parent = %s
+                                """, sco)[0][0] or 0
+                                
                                 subcontracting_orders.append({
                                     "po_name": po.po_name,
                                     "sco_name": sco,
                                     "supplier": supplier,
                                     "qty": po_fg_qty,
+                                    "required_rm_qty": flt(required_rm_qty, 3),
                                     "sent_qty": flt(sent_qty, 3),
                                     "received_qty": flt(received_qty, 3)
                                 })
@@ -1644,7 +1652,7 @@ def update_production_entry(stock_entry, qty, employee, workstation):
 
 
 @frappe.whitelist()
-def receive_subcontracted_goods(purchase_order, qty=None, rate=None, supplier_delivery_note=None, items=None):
+def receive_subcontracted_goods(purchase_order, qty=None, rate=None, supplier_delivery_note=None, items=None, subcontracting_order=None):
     """
     Create Subcontracting Receipt to receive goods from subcontractor.
     Auto-updates Job Card and Work Order status.
@@ -1658,11 +1666,15 @@ def receive_subcontracted_goods(purchase_order, qty=None, rate=None, supplier_de
         frappe.throw(_("Purchase Order is not a subcontracting order"))
     
     # Create Subcontracting Order first if not exists
-    sco = frappe.db.get_value(
-        "Subcontracting Order",
-        {"purchase_order": purchase_order, "docstatus": 1},
-        "name"
-    )
+    sco = None
+    if subcontracting_order:
+        sco = subcontracting_order
+    else:
+        sco = frappe.db.get_value(
+            "Subcontracting Order",
+            {"purchase_order": purchase_order, "docstatus": 1},
+            "name"
+        )
     
     if not sco:
         # Create SCO from PO - import from purchase_order module

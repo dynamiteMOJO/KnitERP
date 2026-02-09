@@ -881,18 +881,12 @@ class ProductionWizard {
                 const recd_pct = recvd_denom ? Math.min(100, (recvd_raw / recvd_denom) * 100) : 0;
 
                 let send_btn = '';
-                if (recvd_raw < po_qty_raw) {
-                    send_btn = `<button class="btn btn-xs btn-warning btn-send-material" data-operation="${op.operation}" data-po="${op.purchase_order}" title="${__('Send Raw Material')}">
-                        <i class="fa fa-truck"></i> ${__('Send Raw Material')}
-                    </button>`;
-                }
+                // Removed ambiguous 'Send Raw Material' button from aggregate progress bar.
+                // We show individual buttons per SCO in the actions list.
 
                 let recd_btn = '';
-                if (sent_raw > 0 && recvd_raw < po_qty_raw) {
-                    recd_btn = `<button class="btn btn-xs btn-success btn-receive-goods" data-operation="${op.operation}" data-po="${op.purchase_order}" title="${__('Receive Goods')}">
-                        <i class="fa fa-download"></i> ${__('Receive Goods')}
-                    </button>`;
-                }
+                // Removed old ambiguous 'Receive Goods' button.
+                // We show individual buttons per SCO in the actions list.
 
                 progress_html = `
                     <div class="op-progress-container">
@@ -1043,11 +1037,11 @@ class ProductionWizard {
             return ''; // No actions until work order is started
         }
 
-        // For subcontracted ops: check if more material is available even if status is "Completed"
-        // qty_ready_from_prev = material available from previous operation
-        // po_qty = material already ordered for subcontracting
+        // Check if there's still material to subcontract
+        // qty_ready_from_prev from backend is Net Remaining (Total Available - Already Processed/Ordered)
+        // so we just need to check if it's > 0 (using a small epsilon for float precision)
         const has_more_to_subcontract = op.is_subcontracted &&
-            ((op.available_to_process || 0) > 0 || (op.qty_ready_from_prev || 0) > (op.po_qty || 0));
+            ((op.available_to_process || 0) > 0.001 || (op.qty_ready_from_prev || 0) > 0.001);
 
         if (op.status === 'Completed' && !has_more_to_subcontract) {
             return `<span class="text-success"><i class="fa fa-check"></i> ${__('Done')}</span>`;
@@ -1059,11 +1053,9 @@ class ProductionWizard {
         }
 
         if (op.is_subcontracted) {
-            // Calculate remaining to subcontract based on material available from previous op
-            // This handles partial production scenarios where more SFG becomes available later
-            const material_from_prev = op.qty_ready_from_prev || 0;
-            const already_ordered = op.po_qty || 0;
-            const remaining_to_subcontract = Math.max(0, material_from_prev - already_ordered);
+            // Calculate remaining to subcontract
+            // qty_ready_from_prev is already the "Net Available to Subcontract" from backend
+            const remaining_to_subcontract = op.qty_ready_from_prev || 0;
 
             if (remaining_to_subcontract > 0) {
                 const btnLabel = op.purchase_order
@@ -1082,12 +1074,41 @@ class ProductionWizard {
             if (op.subcontracting_orders && op.subcontracting_orders.length > 0) {
                 let scoInfo = `<div class="mt-2 small">`;
                 for (const sco of op.subcontracting_orders) {
-                    const statusIcon = sco.received_qty >= sco.qty ? 'check text-success' : 'clock-o text-warning';
+                    const statusIcon = sco.received_qty >= sco.qty ? 'check-circle text-success' : 'clock-o text-warning';
+
+                    const required_rm = sco.required_rm_qty || 0;
+                    const sent_rm = sco.sent_qty || 0;
+                    // Show send button only if RM is needed and not fully sent
+                    const showSend = (sco.received_qty < sco.qty) && (sent_rm < (required_rm - 0.001));
+                    const showReceive = (sco.sent_qty || 0) > 0 && sco.received_qty < sco.qty;
+
                     scoInfo += `
-                        <div class="d-flex align-items-center mb-1">
-                            <i class="fa fa-${statusIcon} mr-2"></i>
-                            <a href="/app/subcontracting-order/${sco.sco_name}" class="mr-2">${sco.sco_name}</a>
-                            <span class="text-muted">${sco.supplier}: ${sco.received_qty}/${sco.qty} ${details.uom || 'Units'}</span>
+                        <div class="mb-2 p-2 rounded" style="background-color: var(--control-bg); border: 1px solid var(--border-color);">
+                            <div class="d-flex justify-content-between align-items-center">
+                                <div>
+                                    <div class="d-flex align-items-center mb-1">
+                                        <i class="fa fa-${statusIcon} mr-2"></i>
+                                        <a href="/app/subcontracting-order/${sco.sco_name}" class="font-weight-bold" style="color: var(--text-color);">${sco.sco_name}</a>
+                                    </div>
+                                    <div class="small" style="color: var(--text-muted); margin-left: 20px;">
+                                        ${sco.supplier} &bull; ${sco.received_qty}/${sco.qty} ${details.uom || 'Units'}
+                                        ${(sco.sent_qty || 0) > 0 ? `&bull; Sent: ${sco.sent_qty}` : ''}
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    ${showSend ? `
+                                    <button class="btn btn-xs btn-default btn-send-sco-material mb-1 ml-1" 
+                                        data-sco="${sco.sco_name}" data-po="${sco.po_name}">
+                                        <i class="fa fa-truck text-warning"></i> ${__('Send Material')}
+                                    </button>` : ''}
+                                    
+                                    ${showReceive ? `
+                                    <button class="btn btn-xs btn-default btn-receive-sco-goods mb-1 ml-1" 
+                                        data-sco="${sco.sco_name}" data-po="${sco.po_name}">
+                                        <i class="fa fa-download text-success"></i> ${__('Receive Goods')}
+                                    </button>` : ''}
+                                </div>
+                            </div>
                         </div>`;
                 }
                 scoInfo += `</div>`;
@@ -1304,16 +1325,17 @@ class ProductionWizard {
             self.create_subcontracting_order(details, operation);
         });
 
-        // Send Raw Material to Supplier
-        this.$details_content.find('.btn-send-material').on('click', function () {
-            const po = $(this).data('po');
-            self.send_raw_material_to_supplier(po);
+        // Send Raw Material to Supplier (New per-SCO button)
+        this.$details_content.find('.btn-send-sco-material').on('click', function () {
+            const sco = $(this).data('sco');
+            self.send_raw_material_to_supplier(null, sco);
         });
 
-        // Receive Goods
-        this.$details_content.find('.btn-receive-goods').on('click', function () {
+        // Receive Goods (New per-SCO button)
+        this.$details_content.find('.btn-receive-sco-goods').on('click', function () {
+            const sco = $(this).data('sco');
             const po = $(this).data('po');
-            self.receive_subcontracted_goods(po);
+            self.receive_subcontracted_goods(po, sco);
         });
 
         // Update Manufactured Qty
@@ -1787,7 +1809,15 @@ class ProductionWizard {
         });
     }
 
-    send_raw_material_to_supplier(purchase_order) {
+    send_raw_material_to_supplier(purchase_order, sco_name) {
+        if (sco_name) {
+            frappe.new_doc('Stock Entry', {
+                'purpose': 'Send to Subcontractor',
+                'subcontracting_order': sco_name
+            });
+            return;
+        }
+
         // Open the Stock Entry form with Send to Subcontractor purpose
         frappe.call({
             method: 'frappe.client.get_value',
@@ -1809,7 +1839,7 @@ class ProductionWizard {
         });
     }
 
-    receive_subcontracted_goods(po_name) {
+    receive_subcontracted_goods(po_name, sco_name) {
         const self = this;
         // Prompt for details
         const d = new frappe.ui.Dialog({
@@ -1841,6 +1871,7 @@ class ProductionWizard {
                     method: 'kniterp.api.production_wizard.receive_subcontracted_goods',
                     args: {
                         purchase_order: po_name,
+                        subcontracting_order: sco_name,
                         qty: values.qty,
                         rate: values.rate,
                         supplier_delivery_note: values.supplier_delivery_note
