@@ -414,15 +414,211 @@ def get_production_details(sales_order_item):
         {"so_detail": soi.name, "docstatus": 0},
         "parent"
     )
-    
-    # Build operations list from BOM
-    operations = []
-    
+
     pending_qty = soi.qty - soi.delivered_qty
     if is_subcontracted and soi.fg_item_qty:
          ratio = flt(soi.fg_item_qty) / flt(soi.qty) if soi.qty else 1.0
          pending_qty = flt(pending_qty) * ratio
-         
+
+    # --- 1. Calculate Raw Materials & Max Producible (Pre-Process) ---
+    # We do this FIRST because Operations availability depends on Max Producible bottleneck
+    
+    raw_materials = []
+    max_producible_qty = None
+    bottleneck_item = None
+    
+    if bom:
+        company = so.company
+        item_rates_map = {} # Cache
+        
+        for item in bom.items:
+            # Skip semi-finished goods - they are produced by earlier operations, not purchased
+            if item.is_sub_assembly_item:
+                continue
+            
+            required_qty = flt(flt(item.qty) * flt(soi.qty - soi.delivered_qty) / flt(bom.quantity), 3)
+            original_required_qty = required_qty # Keep track for usage rate calculation
+            
+            # Get available qty from bin
+            bin_data = frappe.db.get_value(
+                "Bin",
+                {"item_code": item.item_code, "warehouse": soi.warehouse or item.source_warehouse},
+                ["actual_qty", "projected_qty", "reserved_qty"],
+                as_dict=True
+            ) or {}
+            
+            actual_qty = flt(bin_data.get("actual_qty", 0), 3)
+            projected_qty = flt(bin_data.get("projected_qty", 0), 3)
+            reserved_qty = flt(bin_data.get("reserved_qty", 0), 3)
+            
+            available_qty = actual_qty - reserved_qty
+            shortage = max(0, required_qty - available_qty)
+            
+            # Check if material is consumed via Stock Entries
+            material_consumed = False
+            consumed_qty = 0
+            
+            # Find the job card for this item (using job_cards list directly to avoid circular dependency on operations list)
+            target_jc_name = None
+            if item.operation:
+                # Find matching job card by operation name
+                matches = [jc.name for jc in job_cards if jc.operation == item.operation]
+                if matches: target_jc_name = matches[0]
+            elif job_cards:
+                 # Default to first job card if no specific op
+                 # (Logic mimics previous "operations[0].job_card")
+                 # We sort job_cards roughly? Or just pick first found.
+                 # Ideally we should sort by operation sequence if possible, but list order from get_all is unreliable without order_by
+                 # But usually first created JC is first op.
+                 target_jc_name = job_cards[0].name
+
+            if target_jc_name:
+                # Sum up consumed qty from Stock Entries
+                actual_consumed = frappe.db.sql("""
+                    SELECT SUM(sed.qty)
+                    FROM `tabStock Entry` se
+                    JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
+                    WHERE se.job_card = %s
+                    AND se.docstatus = 1
+                    AND se.purpose = 'Manufacture'
+                    AND sed.item_code = %s
+                    AND sed.is_finished_item = 0
+                """, (target_jc_name, item.item_code))
+                
+                consumed_qty = flt(actual_consumed[0][0]) if actual_consumed and actual_consumed[0][0] else 0
+                
+                if consumed_qty > 0:
+                     material_consumed = True
+                     required_qty = max(0, flt(required_qty) - flt(consumed_qty))
+                     shortage = max(0, required_qty - available_qty)
+            
+            # Determine status
+            if material_consumed and required_qty == 0:
+                status = "consumed"
+            elif shortage > 0:
+                status = "shortage"
+            else:
+                 status = "available"
+
+            # Get POs...
+            po_data = frappe.db.sql("""
+                SELECT 
+                    po.name as po_name,
+                    po.status as po_status,
+                    poi.qty as ordered_qty,
+                    poi.received_qty,
+                    poi.warehouse,
+                    poi.sales_order,
+                    poi.sales_order_item
+                FROM `tabPurchase Order Item` poi
+                INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
+                WHERE poi.item_code = %s
+                AND (
+                    poi.sales_order_item = %s 
+                    OR ( (poi.sales_order_item IS NULL OR poi.sales_order_item = '') AND poi.sales_order = %s )
+                    OR ( (poi.sales_order IS NULL OR poi.sales_order = '') )
+                )
+                AND po.docstatus = 1
+                AND po.status NOT IN ('Closed', 'Cancelled')
+                ORDER BY po.creation DESC
+            """, (item.item_code, soi.name, soi.parent), as_dict=True)
+            
+            linked_pos = []
+            total_ordered = 0
+            for po in po_data:
+                pending = flt(po.ordered_qty) - flt(po.received_qty)
+                if pending > 0:
+                    total_ordered += pending
+                    linked_pos.append({
+                        "po_name": po.po_name,
+                        "status": po.po_status,
+                        "ordered_qty": flt(po.ordered_qty),
+                        "received_qty": flt(po.received_qty),
+                        "pending_qty": pending
+                    })
+            
+            # Item Rates
+            if item.item_code not in item_rates_map:
+                item_rates_map[item.item_code] = frappe.db.get_value("Item", item.item_code, ["last_purchase_rate", "valuation_rate"], as_dict=True) or {}
+            item_rates = item_rates_map[item.item_code]
+            
+            # SIO Check
+            is_cust_provided = 0
+            sio_req = 0
+            sio_rec = 0
+            
+            if is_subcontracted and sio_name and item.item_code in sio_received_map:
+                sio_data = sio_received_map[item.item_code]
+                is_cust_provided = 1
+                sio_req = flt(sio_data.required_qty)
+                sio_rec = flt(sio_data.received_qty)
+                
+                cust_wh = sio_data.warehouse
+                if cust_wh:
+                    bin_data_cust = frappe.db.get_value(
+                        "Bin",
+                        {"item_code": item.item_code, "warehouse": cust_wh},
+                        ["actual_qty", "projected_qty", "reserved_qty"],
+                        as_dict=True
+                    ) or {}
+                    
+                    available_qty = flt(bin_data_cust.get("actual_qty", 0), 3) - flt(bin_data_cust.get("reserved_qty", 0), 3)
+                    shortage = max(0, required_qty - available_qty)
+                    
+                    if sio_rec < sio_req:
+                         status = "pending_receipt"
+                    else:
+                         if shortage <= 0: status = "available_cust"
+                         elif available_qty > 0: status = "partial_cust"
+                         else: status = "shortage_cust"
+
+            # Max Producible Logic
+            # Use original ratio to determine usage per unit of FG/pending_qty
+            if not (is_cust_provided and status == "pending_receipt"):
+                qty_per_unit = original_required_qty / flt(pending_qty) if pending_qty else 0
+                
+                if qty_per_unit > 0:
+                    available = flt(available_qty)
+                    producible_from_rm = available / qty_per_unit
+                    
+                    if max_producible_qty is None or producible_from_rm < max_producible_qty:
+                        max_producible_qty = producible_from_rm
+                        bottleneck_item = item.item_code
+
+            rm_data = {
+                "item_code": item.item_code,
+                "item_name": item.item_name,
+                "required_qty": required_qty,
+                "available_qty": available_qty,
+                "shortage": shortage,
+                "status": status,
+                "consumed_qty": consumed_qty,
+                "ordered_qty": total_ordered,
+                "linked_pos": linked_pos,
+                "operation_next": item.operation,
+                "is_customer_provided": is_cust_provided,
+                "sio_received_qty": sio_rec,
+                "sio_required_qty": sio_req,
+                "last_purchase_rate": flt(item.rate) if item.rate else flt(item_rates.get("last_purchase_rate", 0)),
+                "valuation_rate": flt(item_rates.get("valuation_rate", 0)),
+                "qty_per_unit": flt(original_required_qty / flt(pending_qty), 6) if pending_qty else 0,
+                "uom": item.uom,
+                "warehouse": soi.warehouse or item.source_warehouse
+            }
+            raw_materials.append(rm_data)
+
+    if max_producible_qty:
+        nearest_int = round(max_producible_qty)
+        if abs(max_producible_qty - nearest_int) < 0.005:
+            max_producible_qty = nearest_int
+    max_producible_qty = flt(max_producible_qty, 3) if max_producible_qty else 0
+
+    
+    # --- 2. Build Operations & Production Flow ---
+    # Now we can calculate flow knowing max_producible_qty constraints
+    
+    operations = []
+    
     if bom:
         for idx, op in enumerate(bom.operations):
             # Calculate expected qty from BOM operation's finished_good_qty (scrap factor)
@@ -527,82 +723,108 @@ def get_production_details(sales_order_item):
                             operation_data["subcontracting_orders"] = subcontracting_orders
                             operation_data["remaining_to_subcontract"] = flt(jc.for_quantity) - total_po_qty
                             
-                            # If fully received, mark operation as completed
-                            if total_received_qty >= total_po_qty and total_po_qty >= jc.for_quantity:
+                            # For subcontracted ops: Calculate status based on actual progress vs. total required
+                            # Don't rely on Job Card status as it may be marked "Completed" after first batch
+                            if total_received_qty >= jc.for_quantity:
+                                # All required FG has been received - truly completed
                                 operation_data["status"] = "Completed"
                                 operation_data["completed_qty"] = total_received_qty
+                            elif total_po_qty > 0:
+                                # Some ordered but not all required - in progress
+                                operation_data["status"] = "Work In Progress"
+                                operation_data["completed_qty"] = total_received_qty
+                            # else: status remains from jc.status (Pending/Submitted/etc)
                     break
             
             operations.append(operation_data)
+
+    # Set previous_complete flag and calculate available_to_process
+    for idx, op in enumerate(operations):
+        # Determine what has already been processed in THIS operation (in FG/Output terms usually)
+        current_processed = flt(op.get("po_qty") if op.get("is_subcontracted") else op.get("completed_qty"), 3)
         
-        # Set previous_complete flag and calculate available_to_process
-        for idx, op in enumerate(operations):
-            # Determine what has already been processed in THIS operation (in FG/Output terms usually)
-            current_processed = flt(op.get("po_qty") if op.get("is_subcontracted") else op.get("completed_qty"), 3)
-            
-            if idx == 0:
-                # First operation: limited by total pending qty
-                prev_output = pending_qty
-                op["previous_complete"] = True # First op is always ready to start
+        if idx == 0:
+            # First operation: limited by total pending qty
+            prev_output = pending_qty
+            op["previous_complete"] = True # First op is always ready to start
+        else:
+            prev_op = operations[idx - 1]
+            # Previous output is what was completed/received
+            if prev_op.get("is_subcontracted"):
+                prev_output = flt(prev_op.get("received_qty"), 3)
+                # For subcontracted: can proceed if any goods received
+                op["previous_complete"] = prev_output > 0 or prev_op["status"] == "Completed"
             else:
-                prev_op = operations[idx - 1]
-                # Previous output is what was completed/received
-                if prev_op.get("is_subcontracted"):
-                    prev_output = flt(prev_op.get("received_qty"), 3)
-                    # For subcontracted: can proceed if any goods received
-                    op["previous_complete"] = prev_output > 0 or prev_op["status"] == "Completed"
-                else:
-                    prev_output = flt(prev_op.get("completed_qty"), 3)
-                    # For in-house: can proceed if any qty is completed
-                    op["previous_complete"] = prev_output > 0 or prev_op["status"] == "Completed"
+                prev_output = flt(prev_op.get("completed_qty"), 3)
+                # For in-house: can proceed if any qty is completed
+                op["previous_complete"] = prev_output > 0 or prev_op["status"] == "Completed"
 
-            # Calculate Conversion Factor (Prev Op Output -> Current Op Output/FG)
+        # Calculate Conversion Factor (Prev Op Output -> Current Op Output/FG)
+        conversion_factor = 1.0
+        
+        if idx == 0:
+             # First operation: Check if BOM defines a different quantity for this Op compared to the SO Item
+             # If so, calculate the conversion factor: SO Item Qty / Op Required Qty
+             # Example: SO Item 700, Op Req 714.287 -> CF = 700 / 714.287 = 0.98...
+             # Then Available Input (700 logic) / CF -> 714.287 (Op logic)
+             if op.get("for_quantity") and pending_qty:
+                 conversion_factor = flt(pending_qty) / flt(op["for_quantity"])
+        elif idx > 0:
+            # Try to use explicit finished_good_qty from attributes first (most accurate)
+            # op is from bom.operations iteration, so it has attributes
+            prev_bom_op = bom.operations[idx - 1]
+            
+            # Check if Prev Op has explicit output qty
+            if getattr(prev_bom_op, "finished_good_qty", 0):
+                 prev_op_output_per_bom = flt(prev_bom_op.finished_good_qty)
+                 # Factor = Prev Output / BOM Qty
+                 conversion_factor = prev_op_output_per_bom / flt(bom.quantity)
+            else:
+                # Fallback: Find items in BOM linked to THIS operation (Input for this op)
+                consumed_items = [d for d in bom.items if d.operation == op["operation"]]
+                if consumed_items and bom.quantity:
+                    # Qty of SFG required per BOM Qty
+                    qty_per_bom = flt(consumed_items[0].qty)
+                    conversion_factor = qty_per_bom / flt(bom.quantity)
+        
+        if conversion_factor == 0:
             conversion_factor = 1.0
-            if idx > 0:
-                # Try to use explicit finished_good_qty from attributes first (most accurate)
-                # op is from bom.operations iteration, so it has attributes
-                prev_bom_op = bom.operations[idx - 1]
-                
-                # Check if Prev Op has explicit output qty
-                if getattr(prev_bom_op, "finished_good_qty", 0):
-                     prev_op_output_per_bom = flt(prev_bom_op.finished_good_qty)
-                     # Factor = Prev Output / BOM Qty
-                     conversion_factor = prev_op_output_per_bom / flt(bom.quantity)
-                else:
-                    # Fallback: Find items in BOM linked to THIS operation (Input for this op)
-                    consumed_items = [d for d in bom.items if d.operation == op["operation"]]
-                    if consumed_items and bom.quantity:
-                        # Qty of SFG required per BOM Qty
-                        qty_per_bom = flt(consumed_items[0].qty)
-                        conversion_factor = qty_per_bom / flt(bom.quantity)
+
+        # available_to_process (in Current Op terms) = (Available Input / Conversion Factor) - Processed
+        # available_to_process (in Current Op terms) = (Available Input / Conversion Factor) - Processed
+        val_unrounded = (prev_output / conversion_factor) - current_processed
+        available_fg = flt(val_unrounded, 3)
+        # Limit available_to_process by max_producible_qty for the first operation
+        # This ensures we don't suggest processing more than we have RM for
+        if idx == 0 and max_producible_qty is not None:
+            # max_producible_qty is in FG units
+            # available_fg is also in FG units (calculated from Sales Order Pending Qty)
             
-            if conversion_factor == 0:
-                conversion_factor = 1.0
-
-            # available_to_process (in Current Op terms) = (Available Input / Conversion Factor) - Processed
-            # available_to_process (in Current Op terms) = (Available Input / Conversion Factor) - Processed
-            val_unrounded = (prev_output / conversion_factor) - current_processed
-            available_fg = flt(val_unrounded, 3)
-            available_fg = max(0, available_fg)
-
-            # But we shouldn't exceed the total required for this operation
-            total_required = flt(op.get("for_quantity") or pending_qty, 3)
-            remaining_required = max(0, total_required - current_processed)
-
-            # Available to process
-            op["available_to_process"] = min(available_fg, remaining_required)
-            op["available_to_process"] = flt(op["available_to_process"], 3)
+            # However, available_fg as currently calculated:
+            # (prev_output / conversion_factor) where prev_output = pending_qty
+            # So available_fg represents the "Theoretical Max based on Order Size"
             
-            # Store the raw "waiting" qty specifically from flow context (in FG terms for consistency in UI)
-            op["qty_ready_from_prev"] = available_fg
-            op["conversion_factor"] = conversion_factor # Useful for UI debugging if propertie needed
+            # We simply cap it.
+            available_fg = min(available_fg, max_producible_qty)
+        
+        available_fg = max(0, available_fg)
+
+        # But we shouldn't exceed the total required for this operation
+        total_required = flt(op.get("for_quantity") or pending_qty, 3)
+        remaining_required = max(0, total_required - current_processed)
+
+        # Available to process
+        op["available_to_process"] = min(available_fg, remaining_required)
+        op["available_to_process"] = flt(op["available_to_process"], 3)
+        
+        # Store the raw "waiting" qty specifically from flow context (in FG terms for consistency in UI)
+        op["qty_ready_from_prev"] = available_fg
+        op["conversion_factor"] = conversion_factor # Useful for UI debugging if propertie needed
     
  
     fg_projected_qty = pending_qty
     
 
-    fg_projected_qty = pending_qty
-    
     if work_order:
         if work_order["status"] == "Completed":
             fg_projected_qty = work_order["produced_qty"]
@@ -618,235 +840,7 @@ def get_production_details(sales_order_item):
                  # Fallback to WO qty if last op not started but WO exists
                  fg_projected_qty = work_order["qty"]
 
-    # ... get raw materials ...
 
-    # Filter to only show purchasable items (not semi-finished goods produced by earlier operations)
-    raw_materials = []
-    
-    if bom:
-        company = so.company
-        
-        for item in bom.items:
-            # Skip semi-finished goods - they are produced by earlier operations, not purchased
-            if item.is_sub_assembly_item:
-                continue
-            
-            
-            required_qty = flt(flt(item.qty) * flt(soi.qty - soi.delivered_qty) / flt(bom.quantity), 3)
-            
-            # Get available qty from bin
-            bin_data = frappe.db.get_value(
-                "Bin",
-                {"item_code": item.item_code, "warehouse": soi.warehouse or item.source_warehouse},
-                ["actual_qty", "projected_qty", "reserved_qty"],
-                as_dict=True
-            ) or {}
-            
-            actual_qty = flt(bin_data.get("actual_qty", 0), 3)
-            projected_qty = flt(bin_data.get("projected_qty", 0), 3)
-            reserved_qty = flt(bin_data.get("reserved_qty", 0), 3)
-            
-            available_qty = actual_qty - reserved_qty
-            shortage = max(0, required_qty - available_qty)
-            
-            # Check if material is consumed by checking if the operation using this item is completed
-            material_consumed = False
-            consumed_qty = 0
-            
-            # Find the operation for this item (default to first operation if not specified in BOM Item)
-            target_jc = None
-            if item.operation:
-                for op in operations:
-                    if op.get("operation") == item.operation:
-                         target_jc = op.get("job_card")
-                         break
-            elif operations:
-                 target_jc = operations[0].get("job_card")
-
-            if target_jc and work_order:
-                # Sum up consumed qty from Stock Entries linked to this Job Card (including partials)
-                # Filter for raw materials (is_finished_item=0)
-                actual_consumed = frappe.db.sql("""
-                    SELECT SUM(sed.qty)
-                    FROM `tabStock Entry` se
-                    JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
-                    WHERE se.job_card = %s
-                    AND se.docstatus = 1
-                    AND se.purpose = 'Manufacture'
-                    AND sed.item_code = %s
-                    AND sed.is_finished_item = 0
-                """, (target_jc, item.item_code))
-                
-                consumed_qty = flt(actual_consumed[0][0]) if actual_consumed and actual_consumed[0][0] else 0
-                
-                if consumed_qty > 0:
-                     material_consumed = True
-                     # Update required qty to show remaining need
-                     required_qty = max(0, flt(required_qty) - flt(consumed_qty))
-                     
-                     # Re-calculate shortage based on remaining need
-                     shortage = max(0, required_qty - available_qty)
-            
-            # Determine status
-            if material_consumed and required_qty == 0:
-                status = "consumed"
-            elif shortage > 0:
-                status = "shortage"
-            else:
-                 status = "available"
-
-            
-
-            
-            # Get ordered qty from pending Purchase Orders (for this item, specifically for this SO Item if reserved, or SO-level reservation, or Global pool)
-            po_data = frappe.db.sql("""
-                SELECT 
-                    po.name as po_name,
-                    po.status as po_status,
-                    poi.qty as ordered_qty,
-                    poi.received_qty,
-                    poi.warehouse,
-                    poi.sales_order,
-                    poi.sales_order_item
-                FROM `tabPurchase Order Item` poi
-                INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
-                WHERE poi.item_code = %s
-                AND (
-                    poi.sales_order_item = %s 
-                    OR ( (poi.sales_order_item IS NULL OR poi.sales_order_item = '') AND poi.sales_order = %s )
-                    OR ( (poi.sales_order IS NULL OR poi.sales_order = '') )
-                )
-                AND po.docstatus = 1
-                AND po.status NOT IN ('Closed', 'Cancelled')
-                ORDER BY po.creation DESC
-            """, (item.item_code, soi.name, soi.parent), as_dict=True)
-            
-            # Calculate totals and build PO list
-            linked_pos = []
-            total_ordered = 0
-            total_received = 0
-            for po in po_data:
-                pending = flt(po.ordered_qty) - flt(po.received_qty)
-                if pending > 0:
-                    total_ordered += pending
-                    linked_pos.append({
-                        "po_name": po.po_name,
-                        "status": po.po_status,
-                        "ordered_qty": flt(po.ordered_qty),
-                        "received_qty": flt(po.received_qty),
-                        "pending_qty": pending
-                    })
-                total_received += flt(po.received_qty)
-            
-            # Fetch Item Rates
-            item_rates = frappe.db.get_value("Item", item.item_code, ["last_purchase_rate", "valuation_rate"], as_dict=True) or {}
-            
-            rm_data = {
-                "item_code": item.item_code,
-                "item_name": item.item_name,
-                "required_qty": required_qty,
-                "available_qty": available_qty,
-                "actual_qty": actual_qty,
-                "projected_qty": projected_qty,
-                "reserved_qty": reserved_qty,
-                "warehouse": soi.warehouse or item.source_warehouse,
-                "uom": item.uom,
-                "shortage": shortage,
-                "status": status,
-                "consumed_qty": consumed_qty,
-                "ordered_qty": total_ordered,
-                "linked_pos": linked_pos,
-                "operation_next": item.operation, # Using operation as existing field
-                "operation_row_id": item.operation_row_id,
-                "is_customer_provided": 0,
-                "sio_received_qty": 0,
-                "sio_required_qty": 0,
-                "last_purchase_rate": flt(item.rate) if item.rate else flt(item_rates.get("last_purchase_rate", 0)),
-                "valuation_rate": flt(item_rates.get("valuation_rate", 0))
-            }
-            
-            # Check if Customer Provided via SIO
-            if is_subcontracted and sio_name and item.item_code in sio_received_map:
-                sio_data = sio_received_map[item.item_code]
-                rm_data["is_customer_provided"] = 1
-                rm_data["sio_required_qty"] = flt(sio_data.required_qty)
-                rm_data["sio_received_qty"] = flt(sio_data.received_qty)
-                
-                # Fetch availability from Customer Warehouse
-                cust_wh = sio_data.warehouse
-                if cust_wh:
-                    bin_data_cust = frappe.db.get_value(
-                        "Bin",
-                        {"item_code": item.item_code, "warehouse": cust_wh},
-                        ["actual_qty", "projected_qty", "reserved_qty"],
-                        as_dict=True
-                    ) or {}
-                    
-                    actual_qty = flt(bin_data_cust.get("actual_qty", 0), 3)
-                    projected_qty = flt(bin_data_cust.get("projected_qty", 0), 3)
-                    reserved_qty = flt(bin_data_cust.get("reserved_qty", 0), 3)
-                    
-                    available_qty = actual_qty - reserved_qty
-                    shortage = max(0, required_qty - available_qty)
-                    
-                    rm_data["available_qty"] = available_qty
-                    rm_data["actual_qty"] = actual_qty
-                    rm_data["projected_qty"] = projected_qty
-                    rm_data["reserved_qty"] = reserved_qty
-                    rm_data["shortage"] = shortage
-                    rm_data["warehouse"] = cust_wh
-                
-                # If fully received, assume available for production if in customer warehouse
-                if rm_data["sio_received_qty"] < rm_data["sio_required_qty"]:
-                     rm_data["status"] = "pending_receipt"
-                else:
-                     rm_data["status"] = "received"
-                     # If status is received, check if it's available
-                     if shortage <= 0:
-                        rm_data["status"] = "available_cust" # Special status for clarity? Or just use available
-                        # Re-evaluate logic: if received, it should be available.
-                        # If available_qty is still low, maybe it's reserved elsewhere?
-                        # For now, let's stick to received if available
-                     elif available_qty > 0:
-                        rm_data["status"] = "partial_cust"
-                     else:
-                        rm_data["status"] = "shortage_cust" # Should ideally be received if sio_received >= sio_required
-            
-            raw_materials.append(rm_data)
-    
-    # Calculate max producible qty based on available raw materials (bottleneck analysis)
-    # This tells the user how much they can produce with current RM stock
-    max_producible_qty = None
-    bottleneck_item = None
-    
-    if bom and raw_materials:
-        for rm in raw_materials:
-            # Skip customer-provided items that are not yet received
-            if rm.get("is_customer_provided") and rm.get("status") == "pending_receipt":
-                continue
-            
-            # Calculate qty per unit of finished good
-            qty_per_unit = flt(rm.get("required_qty", 0)) / flt(pending_qty) if pending_qty else 0
-            rm["qty_per_unit"] = flt(qty_per_unit, 6)
-            
-            if qty_per_unit > 0:
-                # How much FG can we produce with available RM?
-                available = flt(rm.get("available_qty", 0))
-                producible_from_rm = available / qty_per_unit
-                
-                # Find the bottleneck (lowest producible qty)
-                if max_producible_qty is None or producible_from_rm < max_producible_qty:
-                    max_producible_qty = producible_from_rm
-                    bottleneck_item = rm.get("item_code")
-    
-    # Round down to avoid partial production issues
-    # Round max_producible if very close to integer to handle floating point noise
-    if max_producible_qty:
-        nearest_int = round(max_producible_qty)
-        if abs(max_producible_qty - nearest_int) < 0.005:
-            max_producible_qty = nearest_int
-            
-    max_producible_qty = flt(max_producible_qty, 3) if max_producible_qty else 0
     
     return {
         "sales_order": soi.parent,
@@ -1896,47 +1890,96 @@ def get_status_summary():
 def create_delivery_note(sales_order, items=None):
     """
     Create Delivery Note for completed items.
-    If linked to a Work Order, use the produced_qty instead of Sales Order pending qty
-    to handle over-production scenarios.
+    Uses actual produced/received qty instead of Sales Order pending qty.
+    Checks for existing draft DN before creating new one.
     """
+    # 1. Check for existing draft Delivery Note for this Sales Order
+    existing_draft = frappe.db.get_value(
+        "Delivery Note Item",
+        {"against_sales_order": sales_order, "docstatus": 0},
+        "parent"
+    )
+    
+    if existing_draft:
+        frappe.msgprint(_("Opening existing Draft Delivery Note {0}").format(existing_draft))
+        return existing_draft
+    
     from erpnext.selling.doctype.sales_order.sales_order import make_delivery_note
     
     dn = make_delivery_note(sales_order)
     
-    # Update quantities based on actual production
+    # Track items to keep (those with ready qty > 0)
+    items_to_keep = []
+    
+    # Update quantities based on actual production/subcontracting
     for item in dn.items:
         if not item.so_detail:
+            items_to_keep.append(item)
             continue
-            
-        # Check for linked Work Order
-        wo_data = frappe.db.get_value(
-            "Work Order",
-            {
-                "sales_order": sales_order,
-                "sales_order_item": item.so_detail,
-                "docstatus": 1
-            },
-            ["name", "produced_qty"],
-            as_dict=True
-        )
         
-        if wo_data and wo_data.produced_qty > 0:
-            # Get already delivered qty for this SO item
-            delivered_qty = frappe.db.get_value("Sales Order Item", item.so_detail, "delivered_qty") or 0.0
+        # Get SO Item details
+        soi = frappe.db.get_value(
+            "Sales Order Item", item.so_detail,
+            ["delivered_qty", "qty"], as_dict=True
+        )
+        delivered_qty = flt(soi.delivered_qty) if soi else 0
+        remaining_so_qty = flt(soi.qty) - delivered_qty if soi else 0
+        
+        if remaining_so_qty <= 0:
+            continue  # Already fully delivered
+        
+        # Calculate ready qty from production sources
+        ready_qty = 0
+        
+        # Check Work Order produced qty
+        wo_produced = frappe.db.get_value(
+            "Work Order",
+            {"sales_order": sales_order, "sales_order_item": item.so_detail, "docstatus": 1},
+            "produced_qty"
+        ) or 0
+        
+        # Check Subcontracting Receipts received qty
+        # Path: SCR -> SRI -> SCO (via subcontracting_order) -> PO (via purchase_order) -> POI
+        sc_received = frappe.db.sql("""
+            SELECT COALESCE(SUM(sri.received_qty), 0)
+            FROM `tabSubcontracting Receipt Item` sri
+            INNER JOIN `tabSubcontracting Receipt` scr ON scr.name = sri.parent
+            INNER JOIN `tabSubcontracting Order` sco ON sco.name = sri.subcontracting_order
+            INNER JOIN `tabPurchase Order` po ON po.name = sco.purchase_order
+            INNER JOIN `tabPurchase Order Item` poi ON poi.parent = po.name
+            WHERE poi.sales_order = %s
+            AND poi.sales_order_item = %s
+            AND scr.docstatus = 1
+        """, (sales_order, item.so_detail))[0][0] or 0
+        
+        # Use the maximum of produced or received (usually one or the other applies)
+        ready_qty = max(flt(wo_produced), flt(sc_received))
+        available_to_deliver = flt(ready_qty) - delivered_qty
+        
+        if available_to_deliver > 0:
+            # Cap at remaining SO qty to prevent over-delivery
+            item.qty = min(available_to_deliver, remaining_so_qty)
+            items_to_keep.append(item)
             
-            # Calculate what we can deliver now
-            # If we produced 320 and delivered 0, we can deliver 320
-            # If we produced 320 and delivered 100, we can deliver 220
-            available_to_deliver = flt(wo_data.produced_qty) - flt(delivered_qty)
-            
-            if available_to_deliver > item.qty:
-                item.qty = available_to_deliver
+            if flt(wo_produced) > 0:
                 frappe.msgprint(
-                    _("Updated delivery qty for item {0} to {1} based on actual production").format(
-                        item.item_code, available_to_deliver
+                    _("Item {0}: Delivery qty set to {1} based on production").format(
+                        item.item_code, item.qty
                     ),
                     alert=True
                 )
+            elif flt(sc_received) > 0:
+                frappe.msgprint(
+                    _("Item {0}: Delivery qty set to {1} based on subcontracting receipt").format(
+                        item.item_code, item.qty
+                    ),
+                    alert=True
+                )
+    
+    dn.items = items_to_keep
+    
+    if not dn.items:
+        frappe.throw(_("No items ready for delivery. Produce or receive goods first."))
 
     dn.insert()
     
@@ -2468,3 +2511,60 @@ def get_batch_production_summary(sales_order_item):
         })
     
     return result
+
+
+@frappe.whitelist()
+def complete_job_card(job_card):
+    """
+    Manually complete a subcontracted Job Card from the Production Wizard.
+    This is used when the user decides no more subcontracting orders will be created.
+    """
+    jc = frappe.get_doc("Job Card", job_card)
+    
+    if jc.docstatus == 1:
+        # Already submitted - just update status
+        jc.db_set("status", "Completed")
+        return {"success": True, "message": f"Job Card {job_card} marked as Completed"}
+    
+    if jc.docstatus == 2:
+        frappe.throw(_("Cannot complete a cancelled Job Card"))
+    
+    # For draft job cards (likely subcontracted), we need to submit them
+    # Get total received qty for this job card
+    total_received = frappe.db.sql("""
+        SELECT SUM(sri.qty) 
+        FROM `tabSubcontracting Receipt Item` sri
+        JOIN `tabSubcontracting Receipt` scr ON scr.name = sri.parent
+        WHERE sri.job_card = %s AND scr.docstatus = 1
+    """, job_card)
+    received_qty = flt(total_received[0][0]) if total_received and total_received[0][0] else 0
+    
+    if received_qty <= 0:
+        frappe.throw(_("Cannot complete Job Card with no received quantity"))
+    
+    try:
+        # Add time log with total received qty
+        jc.append("time_logs", {
+            "from_time": frappe.utils.now_datetime(),
+            "to_time": frappe.utils.now_datetime(),
+            "completed_qty": received_qty
+        })
+        jc.save()
+        jc.submit()
+        
+        # Update Work Order status
+        if jc.work_order:
+            wo = frappe.get_doc("Work Order", jc.work_order)
+            wo.update_work_order_qty()
+            wo.update_status()
+        
+        frappe.db.commit()
+        
+        return {
+            "success": True, 
+            "message": f"Job Card {job_card} completed with {received_qty} qty",
+            "received_qty": received_qty
+        }
+    except Exception as e:
+        frappe.log_error(f"Error completing Job Card {job_card}: {str(e)}")
+        frappe.throw(str(e))

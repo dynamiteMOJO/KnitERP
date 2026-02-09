@@ -23,8 +23,11 @@ SubcontractingReceipt.validate = patched_validate
 
 def on_submit_complete_job_cards(doc, method):
     """
-    Auto-complete Job Cards linked to the Subcontracting Order when fully received.
+    Update Job Cards linked to the Subcontracting Order when goods are received.
     Also updates Work Order status if all Job Cards are complete.
+    
+    NOTE: ERPNext's standard subcontracting does NOT update Job Card consumed_qty.
+    This is a custom extension because we link Job Cards to subcontracting for manufacturing.
     """
     # Get SCO name from the receipt items
     for item in doc.items:
@@ -49,39 +52,73 @@ def on_submit_complete_job_cards(doc, method):
             
             jc = frappe.get_doc("Job Card", po_item.job_card)
             
-            # Skip if already submitted
-            if jc.docstatus == 1:
-                continue
-            
-            # Calculate total received qty for this SCO
+            # Calculate total received qty for this JOB CARD across ALL SCRs/POs
             total_received = frappe.db.sql("""
-                SELECT SUM(sri.received_qty)
+                SELECT SUM(sri.qty)
                 FROM `tabSubcontracting Receipt` scr
                 JOIN `tabSubcontracting Receipt Item` sri ON sri.parent = scr.name
-                WHERE sri.subcontracting_order = %s
+                WHERE sri.job_card = %s
                 AND scr.docstatus = 1
-            """, item.subcontracting_order)
+            """, jc.name)
             received_qty = flt(total_received[0][0]) if total_received and total_received[0][0] else 0
             
-            # If fully received, submit the job card
-            if received_qty >= flt(po_item.fg_item_qty):
-                try:
-                    # Add time log with received qty
-                    jc.append("time_logs", {
-                        "from_time": frappe.utils.now_datetime(),
-                        "to_time": frappe.utils.now_datetime(),
-                        "completed_qty": received_qty
-                    })
-                    jc.save()
-                    jc.submit()
-                    frappe.msgprint(f"Job Card {jc.name} has been completed", alert=True)
-                    
-                    # Check if all Job Cards for this Work Order are complete
-                    _check_and_complete_work_order(jc.work_order)
-                    
-                except Exception as e:
-                    frappe.log_error(f"Error completing Job Card {jc.name}: {str(e)}")
-                    frappe.msgprint(f"Could not auto-complete Job Card {jc.name}: {str(e)}", indicator="orange", alert=True)
+            # Update manufactured_qty to track progress
+            jc.db_set("manufactured_qty", received_qty, update_modified=False)
+            
+            # Update consumed_qty in Job Card items table
+            # This is custom - ERPNext only tracks consumption in SCO, not Job Card
+            _update_job_card_consumed_qty(jc, item.subcontracting_order, received_qty)
+            
+            # Set status to Work In Progress if not already completed/submitted
+            if jc.status not in ["Completed", "Submitted"]:
+                jc.db_set("status", "Work In Progress", update_modified=False)
+            
+            frappe.logger().info({
+                "job_card_updated": jc.name,
+                "source": "subcontracting_receipt",
+                "received_qty": received_qty,
+                "for_quantity": jc.for_quantity,
+                "auto_complete_disabled": True
+            })
+
+
+def _update_job_card_consumed_qty(jc, subcontracting_order, received_qty):
+    """
+    Update consumed_qty in Job Card items (RM) table based on SCR supplied_items.
+    
+    In subcontracting, the supplier consumes the RM we sent them to produce FG.
+    So when we receive FG, we consider the corresponding RM as consumed.
+    
+    ERPNext's standard subcontracting tracks this in Subcontracting Order supplied_items,
+    but NOT in Job Card items. This is a custom extension.
+    """
+    if not jc.items:
+        return
+    
+    # Get all consumed items from SCRs linked to this job card
+    # SCR.supplied_items tracks the raw materials consumed
+    consumed_data = frappe.db.sql("""
+        SELECT 
+            scr_si.rm_item_code,
+            SUM(scr_si.consumed_qty) as total_consumed
+        FROM `tabSubcontracting Receipt Supplied Item` scr_si
+        JOIN `tabSubcontracting Receipt` scr ON scr.name = scr_si.parent
+        JOIN `tabSubcontracting Receipt Item` sri ON sri.parent = scr.name AND sri.job_card = %s
+        WHERE scr.docstatus = 1
+        GROUP BY scr_si.rm_item_code
+    """, jc.name, as_dict=True)
+    
+    consumed_map = {row.rm_item_code: flt(row.total_consumed) for row in consumed_data}
+    
+    # Update each Job Card Item
+    for jc_item in jc.items:
+        consumed = consumed_map.get(jc_item.item_code, 0)
+        frappe.db.set_value("Job Card Item", jc_item.name, "consumed_qty", consumed)
+    
+    frappe.logger().info({
+        "job_card_consumed_updated": jc.name,
+        "consumed_map": consumed_map
+    })
 
 
 def _check_and_complete_work_order(work_order_name):

@@ -1038,11 +1038,18 @@ class ProductionWizard {
     get_operation_actions(op, details) {
         let actions = [];
 
+
         if (!details.work_order || details.work_order.status === 'Draft') {
             return ''; // No actions until work order is started
         }
 
-        if (op.status === 'Completed') {
+        // For subcontracted ops: check if more material is available even if status is "Completed"
+        // qty_ready_from_prev = material available from previous operation
+        // po_qty = material already ordered for subcontracting
+        const has_more_to_subcontract = op.is_subcontracted &&
+            ((op.available_to_process || 0) > 0 || (op.qty_ready_from_prev || 0) > (op.po_qty || 0));
+
+        if (op.status === 'Completed' && !has_more_to_subcontract) {
             return `<span class="text-success"><i class="fa fa-check"></i> ${__('Done')}</span>`;
         }
 
@@ -1052,9 +1059,11 @@ class ProductionWizard {
         }
 
         if (op.is_subcontracted) {
-            // Calculate remaining to subcontract (uses new backend field)
-            const remaining_to_subcontract = op.remaining_to_subcontract ||
-                ((op.for_quantity || 0) - (op.po_qty || 0));
+            // Calculate remaining to subcontract based on material available from previous op
+            // This handles partial production scenarios where more SFG becomes available later
+            const material_from_prev = op.qty_ready_from_prev || 0;
+            const already_ordered = op.po_qty || 0;
+            const remaining_to_subcontract = Math.max(0, material_from_prev - already_ordered);
 
             if (remaining_to_subcontract > 0) {
                 const btnLabel = op.purchase_order
@@ -1083,6 +1092,19 @@ class ProductionWizard {
                 }
                 scoInfo += `</div>`;
                 actions.push(scoInfo);
+            }
+
+            // Add "Complete Job Card" button if there's received qty and job card is not yet completed
+            // This allows user to manually close the job card when no more SCOs will be created
+            if (op.job_card && op.received_qty > 0 && op.status !== 'Completed') {
+                actions.push(`
+                    <button class="btn btn-sm btn-success btn-complete-jc mt-2"
+                            data-job-card="${op.job_card}"
+                            data-operation="${op.operation}"
+                            data-received="${op.received_qty}">
+                        <i class="fa fa-check"></i> ${__('Complete Job Card')}
+                    </button>
+                `);
             }
         } else {
             // In-house operation
@@ -1301,11 +1323,40 @@ class ProductionWizard {
             self.complete_operation(details, operation, remaining);
         });
 
-        // Complete Job Card
+        // Complete Job Card (in-house)
         this.$details_content.find('.btn-finish-jc').on('click', function () {
             const operation = $(this).data('operation');
             const job_card = $(this).data('job-card');
             self.complete_job_card(details, operation, job_card);
+        });
+
+        // Complete Job Card (subcontracted) - manual completion
+        this.$details_content.find('.btn-complete-jc').on('click', function () {
+            const job_card = $(this).data('job-card');
+            const operation = $(this).data('operation');
+            const received = $(this).data('received');
+
+            frappe.confirm(
+                __('Complete Job Card {0} with {1} qty received? No additional subcontracting orders can be created after this.', [job_card, received]),
+                () => {
+                    frappe.call({
+                        method: 'kniterp.api.production_wizard.complete_job_card',
+                        args: { job_card: job_card },
+                        freeze: true,
+                        freeze_message: __('Completing Job Card...'),
+                        callback: (r) => {
+                            if (r.message && r.message.success) {
+                                frappe.show_alert({
+                                    message: r.message.message,
+                                    indicator: 'green'
+                                });
+                                // Reload details
+                                self.load_production_details(self.selected_item);
+                            }
+                        }
+                    });
+                }
+            );
         });
 
         // Create SIO
@@ -1909,24 +1960,48 @@ class ProductionWizard {
 
                 // Show availability from previous op
                 if (op.qty_ready_from_prev !== undefined) {
+                    let notes = __('Based on output from previous operation');
+                    let alert_class = 'alert-info';
+                    let icon = 'arrow-right';
+
+                    // Check if limited by Raw Material (values are close)
+                    // If available_from_prev is approx equal to max_producible, it means RM is the constraint
+                    const is_rm_limited = max_producible > 0 && Math.abs(available_from_prev - max_producible) < 0.01;
+
+                    if (is_rm_limited) {
+                        notes = __('Limited by Raw Material availability');
+                        if (bottleneck) {
+                            notes += `: <strong>${bottleneck}</strong>`;
+                        }
+                        alert_class = 'alert-warning';
+                        icon = 'exclamation-triangle';
+                    }
+
                     info_html += `
-                        <div class="alert alert-info">
-                            <i class="fa fa-arrow-right"></i>
+                        <div class="alert ${alert_class}">
+                            <i class="fa fa-${icon}"></i>
                             <strong>${__('Ready to Process')}:</strong> ${flt(available_from_prev, 3)} ${details.uom || 'Units'}
-                            <br><small class="text-muted">${__('Based on output from previous operation')}</small>
+                            <br><small class="text-muted">${notes}</small>
                         </div>
                      `;
                 }
 
-                // Show max producible based on available RM
+                // Show max producible based on available RM (ONLY if not already covered above)
+                // If is_rm_limited is true, we already showed the bottleneck info in the first alert.
+                // We only show this secondary alert if max_producible is DIFFERENT (usually higher) than available_from_prev
+                // but still lower than remaining (indicating a future ceiling).
                 if (max_producible > 0 && max_producible < remaining) {
-                    info_html += `
-                        <div class="alert alert-warning">
-                            <i class="fa fa-exclamation-triangle"></i>
-                            <strong>${__('Max Producible with Available RM')}:</strong> ${flt(max_producible, 3)} ${details.uom || 'Units'}
-                            ${bottleneck ? `<br><small class="text-muted">${__('Limited by')}: ${bottleneck}</small>` : ''}
-                        </div>
-                    `;
+                    const is_rm_limited = op.qty_ready_from_prev !== undefined && Math.abs(available_from_prev - max_producible) < 0.01;
+
+                    if (!is_rm_limited) {
+                        info_html += `
+                            <div class="alert alert-warning">
+                                <i class="fa fa-exclamation-triangle"></i>
+                                <strong>${__('Max Producible with Available RM')}:</strong> ${flt(max_producible, 3)} ${details.uom || 'Units'}
+                                ${bottleneck ? `<br><small class="text-muted">${__('Limited by')}: ${bottleneck}</small>` : ''}
+                            </div>
+                        `;
+                    }
                 } else if (max_producible === 0 && remaining > 0) {
                     // Only show red alert if RM is strictly required (usually first op)
                     // For subsequent ops, previous op output is the main constraint

@@ -67,6 +67,10 @@ doc_events = {
     },
     "Subcontracting Receipt": {
         "on_submit": "kniterp.kniterp.overrides.subcontracting_receipt.on_submit_complete_job_cards"
+    },
+    "Stock Entry": {
+        "on_submit": "kniterp.subcontracting.on_se_submit_update_job_card_transferred",
+        "on_cancel": "kniterp.subcontracting.on_se_cancel_update_job_card_transferred"
     }
 }
 
