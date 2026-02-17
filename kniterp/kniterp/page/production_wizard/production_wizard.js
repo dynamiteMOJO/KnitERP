@@ -563,16 +563,18 @@ class ProductionWizard {
 						<i class="fa fa-sitemap"></i>
 						<div>
 							<div class="label">${__('BOM')}</div>
-							${details.bom_no ?
+							${(details.bom_no && (!details.is_subcontracted || details.bom_scio_compatible)) ?
                 `<div>
                      <a href="/app/bom/${details.bom_no}">${details.bom_no}</a>
                      <button class="btn btn-xs btn-link text-muted btn-edit-bom ml-1" title="${__('Edit BOM')}" style="padding: 0 4px;">
                         <i class="fa fa-pencil"></i>
                      </button>
                  </div>` :
-                `<button class="btn btn-xs btn-primary btn-create-bom-designer" data-item="${details.production_item || details.item_code}">
+                `<button class="btn btn-xs btn-primary btn-create-bom-designer" data-item="${details.production_item || details.item_code}" data-bom="${details.bom_no || ''}">
 									<i class="fa fa-plus"></i> ${__('Create BOM')}
-								</button>`
+								</button>
+								${(details.is_subcontracted && details.bom_no && !details.bom_scio_compatible) ?
+                    `<div class="text-danger small mt-1">${__('BOM has no customer-provided materials')}</div>` : ''}`
             }
 						</div>
 					</div>
@@ -607,20 +609,18 @@ class ProductionWizard {
 
 				<!-- Primary Actions -->
 				<div class="primary-actions">
-					${details.bom_no ? this.get_primary_action_buttons(details) : ''}
+					${(details.bom_no && (!details.is_subcontracted || details.bom_scio_compatible)) ? this.get_primary_action_buttons(details) : ''}
 				</div>
 
 				<!-- Raw Materials Section -->
 				<div class="section-header">
 					<h5><i class="fa fa-cube"></i> ${__('Raw Materials')}</h5>
-					${this.has_shortages(details.raw_materials) ? `
-						<button class="btn btn-sm btn-warning create-shortage-po">
-							<i class="fa fa-shopping-cart"></i> ${__('Create PO for Shortages')}
-						</button>
-					` : ''}
+					<button class="btn btn-sm ${this.has_shortages(details.raw_materials) ? 'btn-warning' : 'btn-default'} create-shortage-po">
+						<i class="fa fa-shopping-cart"></i> ${this.has_shortages(details.raw_materials) ? __('Create PO for Shortages') : __('Create PO')}
+					</button>
 				</div>
 				<div class="materials-list">
-					${this.render_raw_materials(details.raw_materials)}
+					${this.render_raw_materials(details.raw_materials, details)}
 				</div>
 
 				<!-- Operations Section -->
@@ -628,7 +628,7 @@ class ProductionWizard {
 					<h5><i class="fa fa-tasks"></i> ${__('Operations')}</h5>
 				</div>
 				<div class="operations-list">
-					${details.bom_no ? this.render_operations(details) : `<div class="text-muted p-3">${__('Please create a BOM to view operations')}</div>`}
+					${(details.bom_no && (!details.is_subcontracted || details.bom_scio_compatible)) ? this.render_operations(details) : `<div class="text-muted p-3">${(details.is_subcontracted && details.bom_no && !details.bom_scio_compatible) ? __('Current BOM is not compatible with Subcontracting Inward. Please create a valid BOM.') : __('Please create a BOM to view operations')}</div>`}
 				</div>
 			</div>
 		`;
@@ -781,14 +781,35 @@ class ProductionWizard {
 				</button>
 			`);
         } else if (details.is_subcontracted && details.subcontracting_inward_order) {
-            // Check if we can deliver (produced > delivered)
-            // Or just show the button if WO exists
-            if (details.work_order && (details.work_order.produced_qty > 0)) {
+            // For SCIO, delivery is tracked on the SIO Item, not the SO Item
+            const sio_delivered = details.sio_delivered_qty || 0;
+            const sio_qty = details.sio_qty || 0;
+            const produced = (details.work_order && details.work_order.produced_qty) || 0;
+
+            // Send Delivery button: only when there's produced-but-undelivered FG qty
+            if (produced > sio_delivered && (sio_qty > sio_delivered)) {
                 buttons.push(`
 				<button class="btn btn-success btn-send-delivery mr-2" data-sio="${details.subcontracting_inward_order}">
 					<i class="fa fa-truck"></i> ${__('Send Delivery')}
 				</button>
 			`);
+            }
+
+            // Partial Invoice button: when SIO has delivered qty that hasn't been billed yet
+            if (sio_delivered > 0 && flt(details.billed_amt || 0) < flt(details.amount || 0)) {
+                if (details.draft_sales_invoice) {
+                    buttons.push(`
+                    <button class="btn btn-warning btn-create-scio-invoice mr-2">
+                        <i class="fa fa-file-text-o"></i> ${__('View Draft Invoice')}
+                    </button>
+                    `);
+                } else {
+                    buttons.push(`
+                    <button class="btn btn-primary btn-create-scio-invoice mr-2">
+                        <i class="fa fa-file-text"></i> ${__('Create Sales Invoice')}
+                    </button>
+                    `);
+                }
             }
         }
 
@@ -808,19 +829,23 @@ class ProductionWizard {
 			`);
         } else if (details.work_order.status === 'In Process') {
             // Allow delivery if we have formatted goods ready (produced > delivered)
-            // This handles partial deliveries and over-production scenarios
-            const produced = details.work_order.produced_qty || 0;
-            const delivered = details.delivered_qty || 0;
+            // Skip for SCIO — delivery is via Send Delivery (subcontracting delivery)
+            if (!details.is_subcontracted) {
+                const produced = details.work_order.produced_qty || 0;
+                const delivered = details.delivered_qty || 0;
 
-            if (produced > delivered) {
-                buttons.push(`
-				<button class="btn btn-success btn-create-delivery">
-					<i class="fa fa-truck"></i> ${__('Create Delivery Note')}
-				</button>
-			`);
+                if (produced > delivered) {
+                    buttons.push(`
+					<button class="btn btn-success btn-create-delivery">
+						<i class="fa fa-truck"></i> ${__('Create Delivery Note')}
+					</button>
+				`);
+                }
             }
         } else if (details.work_order.status === 'Completed') {
-            if (details.pending_qty > 0) {
+            if (details.is_subcontracted) {
+                // SCIO: No delivery note needed, invoice button is in the SCIO block above
+            } else if (details.pending_qty > 0) {
                 buttons.push(`
 				<button class="btn btn-success btn-create-delivery">
 					<i class="fa fa-truck"></i> ${__('Create Delivery Note')}
@@ -1044,7 +1069,17 @@ class ProductionWizard {
             ((op.available_to_process || 0) > 0.001 || (op.qty_ready_from_prev || 0) > 0.001);
 
         if (op.status === 'Completed' && !has_more_to_subcontract) {
-            return `<span class="text-success"><i class="fa fa-check"></i> ${__('Done')}</span>`;
+            let done_html = `<span class="text-success"><i class="fa fa-check"></i> ${__('Done')}</span>`;
+            // Show View Logs for completed in-house ops with production history
+            if (!op.is_subcontracted && op.job_card && (op.completed_qty || 0) > 0) {
+                done_html += `
+                    <button class="btn btn-xs btn-default btn-view-logs ml-2"
+                            data-job-card="${op.job_card}"
+                            data-operation="${op.operation}">
+                        <i class="fa fa-list-alt"></i> ${__('View Logs')}
+                    </button>`;
+            }
+            return done_html;
         }
 
         // Check if previous operation is complete (sequence enforcement)
@@ -1148,12 +1183,22 @@ class ProductionWizard {
 					</button>
                     `);
             }
+            // View Logs button - shown when there's production history
+            if (op.job_card && (op.completed_qty || 0) > 0) {
+                actions.push(`
+                    <button class="btn btn-sm btn-default btn-view-logs ml-1"
+                            data-job-card="${op.job_card}"
+                            data-operation="${op.operation}">
+                        <i class="fa fa-list-alt"></i> ${__('View Logs')}
+                    </button>
+                    `);
+            }
         }
 
         return actions.join('');
     }
 
-    render_raw_materials(materials) {
+    render_raw_materials(materials, details) {
         if (!materials || !materials.length) {
             return `<div class="text-muted p-3">${__('No raw materials required')}</div>`;
         }
@@ -1319,6 +1364,15 @@ class ProductionWizard {
             this.create_sales_invoice(details);
         });
 
+        // Create SCIO Sales Invoice (partial, ratio-based)
+        this.$details_content.find('.btn-create-scio-invoice').on('click', () => {
+            if (details.draft_sales_invoice) {
+                frappe.set_route('Form', 'Sales Invoice', details.draft_sales_invoice);
+            } else {
+                this.create_scio_sales_invoice(details);
+            }
+        });
+
         // Create Subcontracting Order
         this.$details_content.find('.btn-create-sco').on('click', function () {
             const operation = $(this).data('operation');
@@ -1381,6 +1435,12 @@ class ProductionWizard {
             );
         });
 
+        // View Production Logs (inline on operation card)
+        this.$details_content.find('.btn-view-logs').on('click', function () {
+            const job_card = $(this).data('job-card');
+            self.show_production_logs(job_card);
+        });
+
         // Create SIO
         this.$details_content.find('.btn-create-sio').on('click', () => {
             frappe.confirm(__('Create Subcontracting Inward Order for {0}?', [details.production_item || details.item_code]), () => {
@@ -1434,11 +1494,14 @@ class ProductionWizard {
         // Create BOM Designer (New)
         this.$details_content.find('.btn-create-bom-designer').on('click', function () {
             const item_code = $(this).data('item');
-            frappe.set_route('bom_designer', {
+            const bom_no = $(this).data('bom');
+            const route_args = {
                 item_code: item_code,
                 sales_order_item: details.sales_order_item,
-                return_to: 'production_wizard'
-            });
+                return_to: 'production-wizard'
+            };
+            if (bom_no) route_args.bom_no = bom_no;
+            frappe.set_route('bom_designer', route_args);
         });
 
         // Edit BOM (New)
@@ -1448,32 +1511,22 @@ class ProductionWizard {
                 bom_no: details.bom_no,
                 item_code: details.item_code, // Ensure item_code is available in details
                 sales_order_item: details.sales_order_item,
-                return_to: 'production_wizard'
+                return_to: 'production-wizard'
             });
         });
     }
 
     receive_customer_rm(sio_name) {
-        frappe.model.open_mapped_doc({
-            method: "erpnext.subcontracting.doctype.subcontracting_inward_order.subcontracting_inward_order.make_rm_stock_entry_inward",
-            frm: { doc: { name: sio_name, doctype: 'Subcontracting Inward Order' } } // Mocking frm somewhat
-        });
-        // The open_mapped_doc implementation usually expects frm.doc.name. 
-        // If frm is passed, it uses frm.doc.name as source_name.
-        // Let's check if we can pass source_name directly in args if we call make_mapped_doc manually.
-        /* 
-           Actually, the standard way in a page is to call frappe.model.mapper.make_mapped_doc directly.
-        */
-        return frappe.call({
-            type: "POST",
-            method: "frappe.model.mapper.make_mapped_doc",
+        frappe.call({
+            method: "run_doc_method",
             args: {
-                method: "erpnext.subcontracting.doctype.subcontracting_inward_order.subcontracting_inward_order.make_rm_stock_entry_inward",
-                source_name: sio_name,
+                dt: "Subcontracting Inward Order",
+                dn: sio_name,
+                method: "make_rm_stock_entry_inward"
             },
             freeze: true,
             callback: function (r) {
-                if (!r.exc) {
+                if (r.message) {
                     var doc = frappe.model.sync(r.message);
                     frappe.set_route("Form", doc[0].doctype, doc[0].name);
                 }
@@ -1482,16 +1535,16 @@ class ProductionWizard {
     }
 
     send_subcontracting_delivery(sio_name) {
-        return frappe.call({
-            type: "POST",
-            method: "frappe.model.mapper.make_mapped_doc",
+        frappe.call({
+            method: "run_doc_method",
             args: {
-                method: "erpnext.subcontracting.doctype.subcontracting_inward_order.subcontracting_inward_order.make_subcontracting_delivery",
-                source_name: sio_name,
+                dt: "Subcontracting Inward Order",
+                dn: sio_name,
+                method: "make_subcontracting_delivery"
             },
             freeze: true,
             callback: function (r) {
-                if (!r.exc) {
+                if (r.message) {
                     var doc = frappe.model.sync(r.message);
                     frappe.set_route("Form", doc[0].doctype, doc[0].name);
                 }
@@ -2423,19 +2476,32 @@ class ProductionWizard {
     }
 
     create_shortage_po(details) {
+        if (!details.raw_materials) return;
+
         // Prepare items with sales_order for linking
-        const shortage_items = details.raw_materials.filter(m => m.shortage > 0).map(m => {
-            m.sales_order = details.sales_order;
-            m.sales_order_item = details.sales_order_item;
-            return m;
+        let items_source = details.raw_materials.filter(m => m.shortage > 0);
+        let title = __('Create Purchase Order for Shortages');
+
+        // If no shortages, select all valid raw materials (for overproduction/stocking up)
+        if (items_source.length === 0) {
+            items_source = details.raw_materials.filter(m => !m.is_customer_provided);
+            title = __('Create Purchase Order');
+        }
+
+        const shortage_items = items_source.map(m => {
+            // Clone to avoid mutating original
+            let m_copy = Object.assign({}, m);
+            m_copy.sales_order = details.sales_order;
+            m_copy.sales_order_item = details.sales_order_item;
+            return m_copy;
         });
 
         if (!shortage_items.length) {
-            frappe.msgprint(__('No shortages to order'));
+            frappe.msgprint(__('No items to order.'));
             return;
         }
 
-        this.__show_po_dialog(details, shortage_items, __('Create Purchase Order for Shortages'));
+        this.__show_po_dialog(details, shortage_items, title);
     }
 
     __show_po_dialog(details, shortage_items, title) {
@@ -2743,6 +2809,22 @@ class ProductionWizard {
             method: 'kniterp.api.production_wizard.create_sales_invoice',
             args: {
                 sales_order: details.sales_order
+            },
+            freeze: true,
+            freeze_message: __('Creating Sales Invoice...'),
+            callback: (r) => {
+                if (r.message) {
+                    frappe.set_route('Form', 'Sales Invoice', r.message);
+                }
+            }
+        });
+    }
+
+    create_scio_sales_invoice(details) {
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_scio_sales_invoice',
+            args: {
+                sales_order_item: details.sales_order_item
             },
             freeze: true,
             freeze_message: __('Creating Sales Invoice...'),

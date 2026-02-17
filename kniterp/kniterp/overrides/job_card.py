@@ -11,6 +11,7 @@ from erpnext.subcontracting.doctype.subcontracting_bom.subcontracting_bom import
     get_subcontracting_boms_for_finished_goods,
 )
 from frappe.utils import flt
+from frappe.query_builder.functions import Sum
 import os
 
 from erpnext.manufacturing.doctype.job_card.job_card import JobCard
@@ -183,6 +184,91 @@ class CustomJobCard(JobCard):
             "operation": self.operation,
             "items_added": len(self.items)
         })
+
+    def set_status(self, update_status=False):
+        """
+        Override ERPNext's set_status to prevent auto-completion based on quantity.
+        
+        This maintains all standard status logic EXCEPT the auto-completion when
+        manufactured_qty >= for_quantity. Users must manually complete via Production Wizard.
+        """
+        # Use ERPNext's standard status mapping
+        self.status = {0: "Open", 1: "Submitted", 2: "Cancelled"}[self.docstatus or 0]
+        
+        # Standard ERPNext logic for finished_good operations
+        if self.finished_good and self.docstatus == 1:
+            # REMOVED: Auto-completion logic (if self.manufactured_qty >= self.for_quantity)
+            # Only set to Work In Progress if there's any progress
+            if self.transferred_qty > 0 or self.skip_material_transfer:
+                self.status = "Work In Progress"
+        
+        # Standard ERPNext logic for draft with time logs
+        if self.docstatus == 0 and self.time_logs:
+            self.status = "Work In Progress"
+        
+        # Standard ERPNext logic for non-SFG operations
+        if not self.track_semi_finished_goods and self.docstatus < 2:
+            if flt(self.for_quantity) <= flt(self.transferred_qty):
+                self.status = "Material Transferred"
+            
+            if self.time_logs:
+                self.status = "Work In Progress"
+            
+            # REMOVED: Auto-completion logic for total_completed_qty
+            # Users must manually complete via Production Wizard
+        
+        # Standard ERPNext logic for paused jobs
+        if self.is_paused:
+            self.status = "On Hold"
+        
+        # Write to database if requested
+        if update_status:
+            self.db_set("status", self.status)
+        
+        # Update workstation status
+        if self.workstation:
+            self.update_workstation_status()
+
+    def set_manufactured_qty(self):
+        """
+        Override ERPNext's standard set_manufactured_qty to use our custom set_status.
+        
+        This calculates manufactured_qty correctly and updates the status in the database,
+        but won't auto-complete because our set_status() override removes that logic.
+        """
+        table_name = "Stock Entry"
+        if self.is_subcontracted:
+            table_name = "Subcontracting Receipt Item"
+
+        table = frappe.qb.DocType(table_name)
+        query = frappe.qb.from_(table).where((table.job_card == self.name) & (table.docstatus == 1))
+
+        if self.is_subcontracted:
+            query = query.select(Sum(table.qty))
+        else:
+            query = query.select(Sum(table.fg_completed_qty))
+            query = query.where(table.purpose == "Manufacture")
+
+        qty = query.run()[0][0] or 0.0
+        self.manufactured_qty = flt(qty)
+        self.db_set("manufactured_qty", self.manufactured_qty)
+
+        self.update_semi_finished_good_details()
+        
+        # Call our custom set_status which doesn't auto-complete
+        # Use update_status=True so database stays in sync (needed for cancellations)
+        self.set_status(update_status=True)
+        
+        frappe.logger().info({
+            "job_card": self.name,
+            "is_subcontracted": self.is_subcontracted,
+            "manufactured_qty": self.manufactured_qty,
+            "for_quantity": self.for_quantity,
+            "status": self.status,
+            "auto_complete_prevented": True
+        })
+
+
 
     def is_final_fg_operation(self):
         if not self.work_order or not self.operation:

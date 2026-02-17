@@ -33,6 +33,122 @@ def setup_logger():
 setup_logger()
 
 
+from erpnext.manufacturing.doctype.work_order.work_order import WorkOrder
+from frappe import _
+from frappe.utils import get_link_to_form
+
+
+class CustomWorkOrder(WorkOrder):
+    def validate_subcontracting_inward_order(self):
+        if scio := self.subcontracting_inward_order:
+            if self.source_warehouse != (
+                rm_receipt_warehouse := frappe.get_cached_value(
+                    "Subcontracting Inward Order",
+                    scio,
+                    "customer_warehouse",
+                )
+            ):
+                frappe.throw(
+                    _(
+                        "Source Warehouse {0} must be same as Customer Warehouse {1} in the Subcontracting Inward Order."
+                    ).format(
+                        get_link_to_form("Warehouse", self.source_warehouse),
+                        get_link_to_form("Warehouse", rm_receipt_warehouse),
+                    )
+                )
+
+            if self.fg_warehouse != (
+                delivery_warehouse := frappe.get_cached_value(
+                    "Subcontracting Inward Order Item",
+                    self.subcontracting_inward_order_item,
+                    "delivery_warehouse",
+                )
+            ):
+                frappe.throw(
+                    _(
+                        "Target Warehouse {0} must be same as Delivery Warehouse {1} in the Subcontracting Inward Order Item."
+                    ).format(
+                        get_link_to_form("Warehouse", self.fg_warehouse),
+                        get_link_to_form(
+                            "Warehouse",
+                            delivery_warehouse,
+                        ),
+                    )
+                )
+
+            possible_customer_provided_items = frappe.get_all(
+                "Subcontracting Inward Order Received Item",
+                {
+                    "reference_name": self.subcontracting_inward_order_item,
+                    "is_customer_provided_item": 1,
+                    "docstatus": 1,
+                },
+                ["rm_item_code", "received_qty", "returned_qty", "work_order_qty"],
+            )
+            item_codes = []
+            for item in self.required_items:
+                if item.is_customer_provided_item:
+                    if item.source_warehouse != self.source_warehouse:
+                        frappe.throw(
+                            _(
+                                "Row #{0}: Source Warehouse {1} for item {2} must be same as Source Warehouse {3} in the Work Order."
+                            ).format(
+                                item.idx,
+                                get_link_to_form("Warehouse", item.source_warehouse),
+                                get_link_to_form("Item", item.item_code),
+                                get_link_to_form("Warehouse", self.source_warehouse),
+                            )
+                        )
+                    elif item.item_code in item_codes:
+                        frappe.throw(
+                            _("Row #{0}: Customer Provided Item {1} cannot be added multiple times.").format(
+                                item.idx,
+                                get_link_to_form("Item", item.item_code),
+                            )
+                        )
+                    else:
+                        row = next(
+                            (i for i in possible_customer_provided_items if i.rm_item_code == item.item_code),
+                            None,
+                        )
+                        if row:
+                            # kniterp FIX: Use flt(..., 3) or higher precision rounding to avoid tiny floating point errors
+                            # from preventing WO submission when quantities match but have tiny diffs at 8+ decimals.
+                            available_qty = flt(row.received_qty - row.returned_qty - row.work_order_qty)
+                            if flt(item.required_qty, 3) > flt(available_qty, 3):
+                                frappe.msgprint(
+                                    _(
+                                        "Row #{0}: Customer Provided Item {1} has insufficient quantity in the Subcontracting Inward Order. Available quantity is {2}."
+                                    ).format(
+                                        item.idx,
+                                        get_link_to_form("Item", item.item_code),
+                                        frappe.bold(available_qty),
+                                    ),
+                                    indicator="orange",
+                                    alert=True
+                                )
+                            item_codes.append(item.item_code)
+                        else:
+                            frappe.throw(
+                                _(
+                                    "Row #{0}: Customer Provided Item {1} does not exist in the Required Items table linked to the Subcontracting Inward Order."
+                                ).format(
+                                    item.idx,
+                                    get_link_to_form("Item", item.item_code),
+                                )
+                            )
+                elif frappe.get_cached_value("Warehouse", item.source_warehouse, "customer"):
+                    frappe.throw(
+                        _(
+                            "Row #{0}: Source Warehouse {1} for item {2} cannot be a customer warehouse."
+                        ).format(
+                            item.idx,
+                            get_link_to_form("Warehouse", item.source_warehouse),
+                            get_link_to_form("Item", item.item_code),
+                        )
+                    )
+
+
 def set_planned_qty_on_work_order(doc, method=None):
     """
     Compute and store planned_qty on Work Order Operation

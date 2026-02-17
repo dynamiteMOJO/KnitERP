@@ -246,9 +246,36 @@ def get_pending_production_items(filters=None):
             item.work_order_qty = work_order.qty
             item.produced_qty = work_order.produced_qty
         else:
-            item.work_order = None
-            item.work_order_status = None
-            item.produced_qty = 0
+            # Fallback: Check if WO is linked via Subcontracting Inward Order (SIO)
+            # SIO-created WOs might reference the SIO but not the SO directly
+            if item.is_subcontracted:
+                # Find SIO linking to this Sales Order Item
+                sio_name = frappe.db.get_value("Subcontracting Inward Order Item", 
+                    {"sales_order_item": item.sales_order_item, "docstatus": 1}, "parent")
+                
+                if sio_name:
+                    # Find WO linked to this SIO
+                    wo_sio = frappe.db.get_value("Work Order", 
+                        {"subcontracting_inward_order": sio_name, "docstatus": ["!=", 2]},
+                        ["name", "status", "qty", "produced_qty"], as_dict=True)
+                    
+                    if wo_sio:
+                        item.work_order = wo_sio.name
+                        item.work_order_status = wo_sio.status
+                        item.work_order_qty = wo_sio.qty
+                        item.produced_qty = wo_sio.produced_qty
+                    else:
+                        item.work_order = None
+                        item.work_order_status = None
+                        item.produced_qty = 0
+                else:
+                    item.work_order = None
+                    item.work_order_status = None
+                    item.produced_qty = 0
+            else:
+                item.work_order = None
+                item.work_order_status = None
+                item.produced_qty = 0
     
     # Post-query filtering for materials_status and invoice_status (Ready to Deliver)
     materials_status = filters.get("materials_status")
@@ -325,7 +352,8 @@ def get_production_details(sales_order_item):
         "Sales Order Item",
         sales_order_item,
         ["name", "parent", "item_code", "item_name", "qty", "delivered_qty", 
-         "delivery_date", "warehouse", "bom_no", "description", "fg_item", "fg_item_qty", "stock_uom"],
+         "delivery_date", "warehouse", "bom_no", "description", "fg_item", "fg_item_qty",
+         "stock_uom", "billed_amt", "amount", "rate"],
         as_dict=True
     )
     
@@ -349,6 +377,19 @@ def get_production_details(sales_order_item):
     if bom_no:
         bom = frappe.get_doc("BOM", bom_no)
     
+    # Check BOM compatibility with Subcontracting Inward
+    bom_scio_compatible = True
+    if is_subcontracted and bom:
+        has_customer_provided = False
+        for item in bom.items:
+            if item.is_sub_assembly_item:
+                continue
+            if frappe.get_cached_value("Item", item.item_code, "is_customer_provided_item"):
+                has_customer_provided = True
+                break
+        if not has_customer_provided:
+            bom_scio_compatible = False
+    
     # Get Work Order if exists
     work_order = None
     work_order_doc = None
@@ -363,6 +404,16 @@ def get_production_details(sales_order_item):
         },
         "name"
     )
+
+    if not wo_name and is_subcontracted:
+        # Fallback: Check if WO is linked via Subcontracting Inward Order (SIO)
+        sio_name_check = frappe.db.get_value("Subcontracting Inward Order Item", 
+            {"sales_order_item": soi.name, "docstatus": 1}, "parent")
+        
+        if sio_name_check:
+            wo_name = frappe.db.get_value("Work Order", 
+                {"subcontracting_inward_order": sio_name_check, "docstatus": ["!=", 2]},
+                "name")
     
     if wo_name:
         work_order_doc = frappe.get_doc("Work Order", wo_name)
@@ -385,16 +436,20 @@ def get_production_details(sales_order_item):
     # Check for Subcontracting Inward Order
     sio_name = None
     sio_status = None
+    sio_delivered_qty = 0
+    sio_qty = 0
     
     if is_subcontracted:
         sio_item = frappe.db.get_value(
             "Subcontracting Inward Order Item",
             {"sales_order_item": soi.name, "docstatus": ["!=", 2]},
-            ["parent"],
+            ["parent", "qty", "delivered_qty"],
             as_dict=True
         )
         if sio_item:
             sio_name = sio_item.parent
+            sio_qty = flt(sio_item.qty)
+            sio_delivered_qty = flt(sio_item.delivered_qty)
             sio_status = frappe.db.get_value("Subcontracting Inward Order", sio_name, "status")
             
             # Fetch SIO received items (Customer Provided Items)
@@ -436,7 +491,7 @@ def get_production_details(sales_order_item):
             if item.is_sub_assembly_item:
                 continue
             
-            required_qty = flt(flt(item.qty) * flt(soi.qty - soi.delivered_qty) / flt(bom.quantity), 3)
+            required_qty = flt(flt(item.qty) * flt(pending_qty) / flt(bom.quantity), 3)
             original_required_qty = required_qty # Keep track for usage rate calculation
             
             # Get available qty from bin
@@ -458,32 +513,30 @@ def get_production_details(sales_order_item):
             material_consumed = False
             consumed_qty = 0
             
-            # Find the job card for this item (using job_cards list directly to avoid circular dependency on operations list)
-            target_jc_name = None
+            # Find the job card(s) for this item
+            target_jc_names = []
             if item.operation:
-                # Find matching job card by operation name
-                matches = [jc.name for jc in job_cards if jc.operation == item.operation]
-                if matches: target_jc_name = matches[0]
+                # Find matching job cards by operation name
+                target_jc_names = [jc.name for jc in job_cards if jc.operation == item.operation]
             elif job_cards:
-                 # Default to first job card if no specific op
-                 # (Logic mimics previous "operations[0].job_card")
-                 # We sort job_cards roughly? Or just pick first found.
-                 # Ideally we should sort by operation sequence if possible, but list order from get_all is unreliable without order_by
-                 # But usually first created JC is first op.
-                 target_jc_name = job_cards[0].name
+                 # Default to all job cards if no specific op is defined in BOM Item
+                 target_jc_names = [jc.name for jc in job_cards]
 
-            if target_jc_name:
-                # Sum up consumed qty from Stock Entries
-                actual_consumed = frappe.db.sql("""
+            if target_jc_names:
+                # Sum up consumed qty from Stock Entries for ALL matching job cards
+                placeholders = ', '.join(['%s'] * len(target_jc_names))
+                query_args = tuple(target_jc_names) + (item.item_code,)
+                
+                actual_consumed = frappe.db.sql(f"""
                     SELECT SUM(sed.qty)
                     FROM `tabStock Entry` se
                     JOIN `tabStock Entry Detail` sed ON sed.parent = se.name
-                    WHERE se.job_card = %s
+                    WHERE se.job_card IN ({placeholders})
                     AND se.docstatus = 1
                     AND se.purpose = 'Manufacture'
                     AND sed.item_code = %s
                     AND sed.is_finished_item = 0
-                """, (target_jc_name, item.item_code))
+                """, query_args)
                 
                 consumed_qty = flt(actual_consumed[0][0]) if actual_consumed and actual_consumed[0][0] else 0
                 
@@ -574,16 +627,16 @@ def get_production_details(sales_order_item):
 
             # Max Producible Logic
             # Use original ratio to determine usage per unit of FG/pending_qty
-            if not (is_cust_provided and status == "pending_receipt"):
-                qty_per_unit = original_required_qty / flt(pending_qty) if pending_qty else 0
+            # Remove restrictive condition to allow calculation even if partially received
+            qty_per_unit = original_required_qty / flt(pending_qty) if pending_qty else 0
+            
+            if qty_per_unit > 0:
+                available = flt(available_qty)
+                producible_from_rm = available / qty_per_unit
                 
-                if qty_per_unit > 0:
-                    available = flt(available_qty)
-                    producible_from_rm = available / qty_per_unit
-                    
-                    if max_producible_qty is None or producible_from_rm < max_producible_qty:
-                        max_producible_qty = producible_from_rm
-                        bottleneck_item = item.item_code
+                if max_producible_qty is None or producible_from_rm < max_producible_qty:
+                    max_producible_qty = producible_from_rm
+                    bottleneck_item = item.item_code
 
             rm_data = {
                 "item_code": item.item_code,
@@ -731,17 +784,11 @@ def get_production_details(sales_order_item):
                             operation_data["subcontracting_orders"] = subcontracting_orders
                             operation_data["remaining_to_subcontract"] = flt(jc.for_quantity) - total_po_qty
                             
-                            # For subcontracted ops: Calculate status based on actual progress vs. total required
-                            # Don't rely on Job Card status as it may be marked "Completed" after first batch
-                            if total_received_qty >= jc.for_quantity:
-                                # All required FG has been received - truly completed
-                                operation_data["status"] = "Completed"
-                                operation_data["completed_qty"] = total_received_qty
-                            elif total_po_qty > 0:
-                                # Some ordered but not all required - in progress
-                                operation_data["status"] = "Work In Progress"
-                                operation_data["completed_qty"] = total_received_qty
-                            # else: status remains from jc.status (Pending/Submitted/etc)
+                            # For subcontracted ops: Use actual Job Card status
+                            # User will manually complete via "Complete Job Card" button when ready
+                            # Track received qty for progress display
+                            operation_data["completed_qty"] = total_received_qty
+                            # status remains from jc.status (from DB) - no auto-completion
                     break
             
             operations.append(operation_data)
@@ -855,6 +902,7 @@ def get_production_details(sales_order_item):
         "sales_order_item": soi.name,
         "item_code": soi.item_code,
         "fg_item": soi.fg_item,
+        "fg_item_qty": soi.fg_item_qty,
         "is_subcontracted": is_subcontracted,
         "production_item": production_item,
         "item_name": soi.item_name,
@@ -874,7 +922,13 @@ def get_production_details(sales_order_item):
         "bottleneck_item": bottleneck_item,
         "subcontracting_inward_order": sio_name,
         "sio_status": sio_status,
+        "sio_qty": sio_qty,
+        "sio_delivered_qty": sio_delivered_qty,
+        "bom_scio_compatible": bom_scio_compatible,
         "uom": soi.stock_uom,
+        "billed_amt": soi.billed_amt,
+        "amount": soi.amount,
+        "rate": soi.rate,
         "draft_sales_invoice": draft_sales_invoice,
         "notes": get_notes(soi.name)
     }
@@ -951,8 +1005,76 @@ def create_work_order(sales_order, sales_order_item):
     wo.project = so.project
     wo.fg_warehouse = soi.warehouse
     wo.description = soi.description
+
+    if is_subcontracted:
+        scio_details = frappe.db.get_value(
+            "Subcontracting Inward Order", 
+            {"sales_order": sales_order, "docstatus": 1}, 
+            ["name", "customer_warehouse"],
+            as_dict=True
+        )
+        if scio_details:
+            scio_item_details = frappe.db.get_value(
+                "Subcontracting Inward Order Item", 
+                {"parent": scio_details.name, "sales_order_item": sales_order_item}, 
+                ["name", "delivery_warehouse", "qty", "include_exploded_items"],
+                as_dict=True
+            )
+            if scio_item_details:
+                wo.subcontracting_inward_order = scio_details.name
+                wo.subcontracting_inward_order_item = scio_item_details.name
+                wo.source_warehouse = scio_details.customer_warehouse
+                wo.reserve_stock = 1
+                wo.use_multi_level_bom = scio_item_details.include_exploded_items
+                if scio_item_details.delivery_warehouse:
+                    wo.fg_warehouse = scio_item_details.delivery_warehouse
+
+                # Calculate correct max_producible_qty if linked to SCIO (Core Logic from SubcontractingInwardOrder.get_production_items)
+                scio_item_qty = scio_item_details.qty
+                
+                # Get received items linked to this SCIO Item
+                received_items = frappe.get_all(
+                    "Subcontracting Inward Order Received Item",
+                    filters={
+                        "parent": wo.subcontracting_inward_order,
+                        "reference_name": wo.subcontracting_inward_order_item,
+                        "is_customer_provided_item": 1,
+                        "docstatus": 1
+                    },
+                    fields=["received_qty", "returned_qty", "work_order_qty", "required_qty", "rm_item_code"]
+                )
+                
+                possible_quantities = []
+                for ri in received_items:
+                    if flt(ri.required_qty) > 0 and flt(scio_item_qty) > 0:
+                        # Qty required per unit of FG
+                        qty_per_fg = flt(ri.required_qty) / flt(scio_item_qty)
+                        
+                        # Available RM for production
+                        available_rm = flt(ri.received_qty) - flt(ri.returned_qty) - flt(ri.work_order_qty)
+                        
+                        if qty_per_fg > 0:
+                            max_fg = available_rm / qty_per_fg
+                            possible_quantities.append(max_fg)
+                
+                if possible_quantities:
+                    # Set max producible for informational purposes (ERPNext shows a warning, not an error)
+                    # Do NOT cap wo.qty — allow full SCIO qty so the WO stays "In Process"
+                    # and supports incremental production (partial RM → partial production → partial delivery)
+                    wo.max_producible_qty = min(possible_quantities)
+    
     
     wo.set_work_order_operations()
+    wo.set_required_items()
+    
+    # Check if Source Warehouse is a Customer Warehouse and mark items as Customer Provided
+    if wo.source_warehouse:
+        is_customer_wh = frappe.get_cached_value("Warehouse", wo.source_warehouse, "customer")
+        if is_customer_wh:
+            for item in wo.required_items:
+                if not item.source_warehouse or item.source_warehouse == wo.source_warehouse:
+                    item.source_warehouse = wo.source_warehouse
+                    item.is_customer_provided_item = 1
     
     # Calculate custom planned output for each operation based on BOM requirements
     # Logic: 
@@ -1001,8 +1123,8 @@ def create_work_order(sales_order, sales_order_item):
             op.custom_planned_output_qty = planned_qty
 
     wo.flags.ignore_mandatory = True
+    wo.flags.ignore_validate = True
     wo.insert()
-    wo.save()
     
     frappe.msgprint(_("Work Order {0} created successfully").format(wo.name))
     
@@ -1038,7 +1160,7 @@ def start_work_order(work_order, operation_settings=None):
         actual_qty = flt(bin_data.get("actual_qty", 0))
         reserved_qty = flt(bin_data.get("reserved_qty", 0))
         available = actual_qty - reserved_qty
-        if available < item.required_qty:
+        if flt(available, 3) < flt(item.required_qty, 3):
             frappe.msgprint(
                 _("Warning: Insufficient stock for {0}. Available: {1}, Required: {2}").format(
                     item.item_code, available, item.required_qty
@@ -1196,7 +1318,7 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None, rate=
     # Use provided qty or remaining qty
     order_qty = remaining_to_subcontract
     if qty:
-        order_qty = min(flt(qty), remaining_to_subcontract)
+        order_qty = flt(qty)
     
     order_qty = flt(order_qty, 3)
     
@@ -1281,6 +1403,104 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None, rate=
         "subcontracting_order": sco_name,
         "supplier_warehouse": supplier_warehouse
     }
+
+
+
+def custom_get_operating_cost_per_unit(work_order=None, bom_no=None):
+    from erpnext.stock.doctype.stock_entry.stock_entry import (
+        get_consumed_operating_cost,
+    )
+    from erpnext.manufacturing.doctype.bom.bom import get_op_cost_from_sub_assemblies
+    
+    operating_cost_per_unit = 0
+    if work_order:
+        if (
+            bom_no
+            and frappe.db.get_single_value(
+                "Manufacturing Settings", "set_op_cost_and_scrap_from_sub_assemblies"
+            )
+            and frappe.get_cached_value("Work Order", work_order.name, "use_multi_level_bom")
+        ):
+            return get_op_cost_from_sub_assemblies(bom_no)
+
+        if not bom_no:
+            bom_no = work_order.bom_no
+
+        for d in work_order.get("operations"):
+            if flt(d.completed_qty):
+                # FIX: Check for division by zero (wip_qty)
+                wip_qty = flt(d.completed_qty) - flt(work_order.produced_qty)
+                if wip_qty > 0:
+                    operating_cost_per_unit += flt(
+                        d.actual_operating_cost - get_consumed_operating_cost(work_order.name, bom_no)
+                    ) / wip_qty
+            elif work_order.qty:
+                operating_cost_per_unit += flt(d.planned_operating_cost) / flt(work_order.qty)
+
+    # Get operating cost from BOM if not found in work_order.
+    if not operating_cost_per_unit and bom_no:
+        bom = frappe.db.get_value("BOM", bom_no, ["operating_cost", "quantity"], as_dict=1)
+        if bom and bom.quantity:
+            operating_cost_per_unit = flt(bom.operating_cost) / flt(bom.quantity)
+
+    return operating_cost_per_unit
+
+def custom_add_operations_cost(stock_entry, work_order=None, expense_account=None, job_card=None):
+    from erpnext.stock.doctype.stock_entry.stock_entry import get_consumed_operating_cost
+    from erpnext.manufacturing.doctype.bom.bom import add_operating_cost_component_wise
+
+    operating_cost_per_unit = custom_get_operating_cost_per_unit(work_order, stock_entry.bom_no)
+
+    if operating_cost_per_unit:
+        cost_added = add_operating_cost_component_wise(
+            stock_entry,
+            work_order,
+            get_consumed_operating_cost(work_order.name, stock_entry.bom_no),
+            expense_account,
+            job_card=job_card,
+        )
+
+        if not cost_added and not job_card:
+            stock_entry.append(
+                "additional_costs",
+                {
+                    "expense_account": expense_account,
+                    "description": _("Operating Cost as per Work Order / BOM"),
+                    "amount": operating_cost_per_unit * flt(stock_entry.fg_completed_qty),
+                    "has_operating_cost": 1,
+                },
+            )
+
+    if work_order and work_order.additional_operating_cost and work_order.qty:
+        additional_operating_cost_per_unit = flt(work_order.additional_operating_cost) / flt(work_order.qty)
+
+        if additional_operating_cost_per_unit:
+            stock_entry.append(
+                "additional_costs",
+                {
+                    "expense_account": expense_account,
+                    "description": "Additional Operating Cost",
+                    "amount": additional_operating_cost_per_unit * flt(stock_entry.fg_completed_qty),
+                },
+            )
+
+def custom_add_additional_cost(stock_entry, work_order, job_card=None):
+    from erpnext.manufacturing.doctype.bom.bom import add_non_stock_items_cost
+
+    # Add non stock items cost in the additional cost
+    stock_entry.additional_costs = []
+    company_account = frappe.db.get_value(
+        "Company",
+        work_order.company,
+        ["default_expense_account", "default_operating_cost_account"],
+        as_dict=1,
+    )
+
+    expense_account = (
+        company_account.default_operating_cost_account or company_account.default_expense_account
+    )
+    add_non_stock_items_cost(stock_entry, work_order, expense_account, job_card=job_card)
+    custom_add_operations_cost(stock_entry, work_order, expense_account, job_card=job_card)
 
 
 @frappe.whitelist()
@@ -1393,7 +1613,31 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
             
             # Add additional costs (operating costs)
             wo_doc = frappe.get_doc("Work Order", job_card.work_order)
-            add_additional_cost(ste.stock_entry, wo_doc, job_card)
+            
+            # For SCIO WOs doing incremental production, transfer any new
+            # SCIO SREs to the WO before consuming stock. When a second batch
+            # of RM is received, the SCIO creates a new SRE, but since the WO
+            # was already submitted, the transfer never happened automatically.
+            if wo_doc.subcontracting_inward_order and wo_doc.reserve_stock:
+                wo_doc._action = "update_after_submit"
+                wo_doc.update_stock_reservation()
+                wo_doc.reload()
+            
+            # FIX: Ensure Work Order Operation 'completed_qty' is updated in memory
+            # Standard update_work_order might not reflect Draft Job Card quantities in DB immediately/correctly
+            # causing ZeroDivisionError in add_additional_cost
+            if job_card.operation_id:
+                for op in wo_doc.operations:
+                    if op.name == job_card.operation_id:
+                        # If the OP qty hasn't advanced beyond Produced Qty, manual bump it
+                        # We use max() to ensure we count the current qty at minimum
+                        current_wip = flt(op.completed_qty) - flt(wo_doc.produced_qty)
+                        if current_wip <= 0:
+                             op.completed_qty = flt(wo_doc.produced_qty) + flt(qty)
+                        break
+            
+            # Use custom safer method instead of standard add_additional_cost
+            custom_add_additional_cost(ste.stock_entry, wo_doc, job_card)
             
             # Handle scrap items
             ste.stock_entry.set_scrap_items()
@@ -1404,6 +1648,71 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
             # Submit the Stock Entry
             ste.stock_entry.submit()
             stock_entry_name = ste.stock_entry.name
+            
+            # Explicitly create FG SRE for SCIO WOs
+            # Since ERPNext v15/v16 doesn't auto-create FG SREs for subsequent batches
+            # (or for Manufacture SEs generally in this context), we manually create it
+            # to ensure the produced FG is reserved against the SCIO.
+            if wo_doc.subcontracting_inward_order:
+                for row in ste.stock_entry.items:
+                    if row.is_finished_item and not row.is_scrap_item:
+                         # Check if SRE already exists to avoid duplicates
+                        existing_sre = frappe.db.get_value("Stock Reservation Entry", {
+                            "item_code": row.item_code,
+                            "warehouse": row.t_warehouse,
+                            "voucher_type": "Subcontracting Inward Order",
+                            "voucher_no": wo_doc.subcontracting_inward_order,
+                            "from_voucher_type": "Stock Entry",
+                            "from_voucher_no": ste.stock_entry.name,
+                            "from_voucher_detail_no": row.name,
+                            "docstatus": 1
+                        })
+                        
+                        if not existing_sre:
+                            scio_item_qty = frappe.db.get_value("Subcontracting Inward Order Item", wo_doc.subcontracting_inward_order_item, "qty")
+                            
+                            sre = frappe.new_doc("Stock Reservation Entry")
+                            sre.item_code = row.item_code
+                            sre.warehouse = row.t_warehouse
+                            sre.voucher_type = "Subcontracting Inward Order"
+                            sre.voucher_no = wo_doc.subcontracting_inward_order
+                            sre.voucher_detail_no = wo_doc.subcontracting_inward_order_item
+                            sre.available_qty = frappe.db.get_value("Bin", {"item_code": row.item_code, "warehouse": row.t_warehouse}, "actual_qty") or 0
+                            sre.voucher_qty = scio_item_qty
+                            sre.reserved_qty = row.qty
+                            sre.company = ste.stock_entry.company
+                            sre.stock_uom = row.stock_uom
+                            
+                            sre.from_voucher_type = "Stock Entry"
+                            sre.from_voucher_no = ste.stock_entry.name
+                            sre.from_voucher_detail_no = row.name
+                            
+                            sre.insert()
+                            sre.submit()
+            
+            # Update reserved_qty_for_production in Bin for directly consumed items.
+            # When WO has skip_transfer=0 but JC has skip_material_transfer=1,
+            # the standard formula (required_qty - transferred_qty) doesn't account
+            # for direct consumption, leaving reserved_qty_for_production stale.
+            if wo_doc.skip_transfer == 0 and wo_doc.subcontracting_inward_order:
+                wo_doc.reload()
+                for row in ste.stock_entry.items:
+                    if not row.is_finished_item and not row.is_scrap_item and row.s_warehouse:
+                        from erpnext.stock.utils import get_bin
+                        stock_bin = get_bin(row.item_code, row.s_warehouse)
+                        stock_bin.update_reserved_qty_for_production()
+                        
+                        # Standard recalc still uses required-transferred, so manually
+                        # subtract consumed_qty that the standard formula missed.
+                        wo_item = next(
+                            (d for d in wo_doc.required_items if d.item_code == row.item_code
+                             and d.source_warehouse == row.s_warehouse), None
+                        )
+                        if wo_item and flt(wo_item.consumed_qty) > 0:
+                            adjusted = max(0, flt(stock_bin.reserved_qty_for_production) - flt(wo_item.consumed_qty))
+                            stock_bin.db_set("reserved_qty_for_production", adjusted, update_modified=False)
+                            stock_bin.set_projected_qty()
+                            stock_bin.db_set("projected_qty", stock_bin.projected_qty, update_modified=False)
             
             frappe.msgprint(_("Stock Entry {0} created for {1} {2}").format(
                 frappe.utils.get_link_to_form("Stock Entry", stock_entry_name), 
@@ -1426,6 +1735,19 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
             else:
                  frappe.throw(_("Failed to create Stock Entry: {0}").format(str(e)))
 
+
+    # Defensive re-sync: ensure total_completed_qty matches the actual sum of time logs.
+    # Stock Entry submission hooks may load separate Job Card instances whose writes
+    # can leave total_completed_qty stale in the original instance.
+    actual_total = flt(frappe.db.sql("""
+        SELECT COALESCE(SUM(completed_qty), 0)
+        FROM `tabJob Card Time Log`
+        WHERE parent = %s
+    """, job_card.name)[0][0])
+    
+    if flt(job_card.total_completed_qty) != actual_total:
+        job_card.db_set("total_completed_qty", flt(actual_total, job_card.precision("total_completed_qty")))
+        job_card.total_completed_qty = actual_total
 
     return {
         "job_card": job_card.name,
@@ -1582,8 +1904,94 @@ def revert_production_entry(stock_entry):
         job_card_name = se.job_card
         qty = se.fg_completed_qty
         
+        # For SCIO WOs, cancel FG SREs linked to this Stock Entry.
+        # The SCIO auto-creates SREs for produced FG items with
+        # from_voucher_no pointing to the Manufacture SE.
+        # Frappe's link validation blocks cancelling the SE while
+        # linked SREs exist, so we must cancel the SREs first.
+        if se.work_order:
+            wo_doc = frappe.get_doc("Work Order", se.work_order)
+            if wo_doc.subcontracting_inward_order:
+                linked_sres = frappe.get_all(
+                    "Stock Reservation Entry",
+                    filters={
+                        "from_voucher_type": "Stock Entry",
+                        "from_voucher_no": se.name,
+                        "docstatus": 1,
+                    },
+                    pluck="name"
+                )
+                for sre_name in linked_sres:
+                    sre_doc = frappe.get_doc("Stock Reservation Entry", sre_name)
+                    sre_doc.cancel()
+                
+                # NEW: Also reduce reservation from ANY active SRE for this SCIO/Item/Warehouse
+                # to free up stock for the revert. This handles cases where the immediate SRE
+                # is already "Delivered" but a stale SRE blocks the stock removal.
+                qty_to_free = flt(se.fg_completed_qty)
+                fg_row = next((r for r in se.items if r.is_finished_item and not r.is_scrap_item), None)
+                
+                if fg_row and qty_to_free > 0:
+                     blocking_sres = frappe.get_all("Stock Reservation Entry",
+                        filters={
+                             "voucher_type": "Subcontracting Inward Order",
+                             "voucher_no": wo_doc.subcontracting_inward_order,
+                             "item_code": fg_row.item_code,
+                             "warehouse": fg_row.t_warehouse,
+                             "docstatus": 1,
+                             "status": ["in", ["Reserved", "Partially Delivered", "Partially Reserved"]]
+                        },
+                        fields=["name", "reserved_qty", "delivered_qty"],
+                        order_by="creation desc"
+                    )
+                    
+                     for s in blocking_sres:
+                        if qty_to_free <= 0:
+                            break
+                        
+                        current_reserved = flt(s.reserved_qty)
+                        current_delivered = flt(s.delivered_qty)
+                        net_reserved = current_reserved - current_delivered
+                        
+                        if net_reserved > 0:
+                            reduce_by = min(net_reserved, qty_to_free)
+                            
+                            sre_doc = frappe.get_doc("Stock Reservation Entry", s.name)
+                            
+                            # If fully unreserving a pure reservation (no delivery), cancel it
+                            if current_delivered <= 0 and reduce_by >= current_reserved:
+                                sre_doc.cancel()
+                            else:
+                                # Reduce reserved_qty to free up net_reserved amount
+                                new_reserved = flt(current_reserved - reduce_by)
+                                sre_doc.db_set("reserved_qty", new_reserved)
+                                sre_doc.update_status()
+                                sre_doc.update_reserved_stock_in_bin()
+                                
+                            qty_to_free -= reduce_by
+        
         # 1. Cancel Stock Entry
         se.cancel()
+        
+        # Update reserved_qty_for_production in Bin for SCIO WOs (mirrors logic in complete_operation)
+        if se.work_order:
+            wo_doc = frappe.get_doc("Work Order", se.work_order)
+            if wo_doc.skip_transfer == 0 and wo_doc.subcontracting_inward_order:
+                for row in se.items:
+                    if not row.is_finished_item and not row.is_scrap_item and row.s_warehouse:
+                        from erpnext.stock.utils import get_bin
+                        stock_bin = get_bin(row.item_code, row.s_warehouse)
+                        stock_bin.update_reserved_qty_for_production()
+                        
+                        wo_item = next(
+                            (d for d in wo_doc.required_items if d.item_code == row.item_code
+                             and d.source_warehouse == row.s_warehouse), None
+                        )
+                        if wo_item and flt(wo_item.consumed_qty) > 0:
+                            adjusted = max(0, flt(stock_bin.reserved_qty_for_production) - flt(wo_item.consumed_qty))
+                            stock_bin.db_set("reserved_qty_for_production", adjusted, update_modified=False)
+                            stock_bin.set_projected_qty()
+                            stock_bin.db_set("projected_qty", stock_bin.projected_qty, update_modified=False)
         
         # 2. Update Job Card
         if job_card_name:
@@ -1599,9 +2007,25 @@ def revert_production_entry(stock_entry):
                     break
             
             if log_to_remove is not None:
+                # Remove the time log row via direct DB delete (can't use jc.save()
+                # on submitted JC — it triggers validate_job_card which throws 
+                # when total_completed_qty != for_quantity after removing a log)
+                log_row = jc.time_logs[log_to_remove]
+                frappe.delete_doc("Job Card Time Log", log_row.name, ignore_permissions=True)
                 del jc.time_logs[log_to_remove]
-                jc.save()
+                
+                # Recalculate total_completed_qty and total_time_in_mins from remaining time logs
+                new_total_completed = sum(flt(tl.completed_qty) for tl in jc.time_logs)
+                new_total_time = sum(flt(tl.time_in_mins) for tl in jc.time_logs)
+                jc.db_set({
+                    "total_completed_qty": flt(new_total_completed, jc.precision("total_completed_qty")),
+                    "total_time_in_mins": flt(new_total_time),
+                })
+                
+                # Recalculate manufactured_qty from submitted stock entries and update status
+                jc.set_manufactured_qty()
                 jc.update_work_order()
+                
                 frappe.msgprint(_("Reverted production entry. Stock Entry {0} cancelled and Time Log removed.").format(stock_entry))
             else:
                  frappe.msgprint(_("Stock Entry {0} cancelled. However, could not find an exact matching Time Log of {1} units to remove. Please update Job Card manually if needed.").format(stock_entry, qty))
@@ -1969,8 +2393,9 @@ def create_delivery_note(sales_order, items=None):
         available_to_deliver = flt(ready_qty) - delivered_qty
         
         if available_to_deliver > 0:
-            # Cap at remaining SO qty to prevent over-delivery
-            item.qty = min(available_to_deliver, remaining_so_qty)
+            # Allow over-delivery if produced quantity is greater than remaining SO quantity
+            # We use the actual available to deliver (Produced - Delivered) even if it exceeds Planned SO Qty
+            item.qty = available_to_deliver
             items_to_keep.append(item)
             
             if flt(wo_produced) > 0:
@@ -2074,6 +2499,7 @@ def get_consolidated_shortages(filters=None):
 def create_sales_invoice(sales_order):
     """
     Create Sales Invoice for a Sales Order.
+    Prioritizes billing against Delivery Notes to support over-delivery and split deliveries.
     """
     # Check for existing draft Sales Invoice for this Sales Order
     existing_draft = frappe.db.get_value(
@@ -2090,70 +2516,102 @@ def create_sales_invoice(sales_order):
     
     si = make_sales_invoice(sales_order)
     
-    # Filter items to match delivered quantity
-    # We only want to invoice what has been delivered but not yet billed
+    # We will rebuild items to ensure proper DN linking
     final_items = []
-    for item in si.items:
-        if item.so_detail:
-            # We must fetch the SO Item to get current delivered qty
-            # make_sales_invoice defaults to 'qty - billed_qty' (ordered view)
-            # or uses pending_qty_to_bill which might differ based on settings
-            # We enforce delivered view here
-            so_item = frappe.db.get_value(
-                "Sales Order Item",
-                item.so_detail,
-                ["delivered_qty", "qty"],
-                as_dict=True
-            )
+    
+    # Fetch all Submitted Delivery Notes linked to this SO
+    # Grouped by SO Detail to easily match with SI items
+    dn_items = frappe.db.sql("""
+        SELECT 
+            dni.name as dn_detail, dni.parent as delivery_note, dni.item_code, dni.item_name, 
+            dni.qty, dni.stock_uom, dni.uom, dni.conversion_factor, dni.rate, dni.amount,
+            dni.so_detail, dni.description
+        FROM `tabDelivery Note Item` dni
+        INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+        WHERE dni.against_sales_order = %s AND dn.docstatus = 1
+        ORDER BY dn.creation ASC
+    """, sales_order, as_dict=True)
+    
+    dn_map = {} # so_detail -> list of dn_items
+    for dni in dn_items:
+        if dni.so_detail:
+            if dni.so_detail not in dn_map:
+                dn_map[dni.so_detail] = []
+            dn_map[dni.so_detail].append(dni)
 
-            if so_item:
-                # Calculate billed_qty manually as it is not stored in column
+    for item in si.items:
+        if item.so_detail and item.so_detail in dn_map:
+            # This item has Delivery Notes.
+            # Create invoice lines based on UNBILLED DN items instead of the aggregate SO item
+            
+            linked_dns = dn_map[item.so_detail]
+            item_fully_billed = True
+            
+            for dni in linked_dns:
+                 # Check billed qty for this specific DN Detail
                 billed_qty = frappe.db.sql("""
                     SELECT SUM(qty)
                     FROM `tabSales Invoice Item`
-                    WHERE so_detail = %s
+                    WHERE dn_detail = %s
                     AND docstatus = 1
-                """, item.so_detail)[0][0] or 0.0
-
-                # Calculate pending billing based on DELIVERY
-                # This ensures we don't invoice for undelivered goods
-                pending_delivery_billing = flt(so_item.delivered_qty) - flt(billed_qty)
-
-                if pending_delivery_billing > 0:
-                    item.qty = pending_delivery_billing
+                """, dni.dn_detail)[0][0] or 0.0
+                
+                pending_qty = flt(dni.qty) - flt(billed_qty)
+                
+                if pending_qty > 0:
+                    item_fully_billed = False
                     
-                    # Link to Delivery Note if possible
-                    # Find unbilled Delivery Note Item for this Sales Order Item
-                    dn_data = frappe.db.sql("""
-                        SELECT name, parent 
-                        FROM `tabDelivery Note Item`
+                    # Create new item row based on DN Item
+                    # We copy properties from the generated 'item' (from make_sales_invoice) to preserve defaults
+                    # but override with DN specific values
+                    new_item = frappe.copy_doc(item)
+                    new_item.qty = pending_qty
+                    new_item.dn_detail = dni.dn_detail
+                    new_item.delivery_note = dni.delivery_note
+                    new_item.rate = dni.rate # Trust DN rate? Or maintain SO rate? Usually DN rate comes from SO.
+                    new_item.amount = flt(pending_qty) * flt(new_item.rate)
+                    
+                    # Update description if needed?
+                    
+                    final_items.append(new_item)
+            
+            if item_fully_billed:
+                # If all DNs are billed, we don't add anything for this SO item
+                # (unless there's non-stock billing needed, but we assume stock items Bill by Delivery)
+                pass
+
+        else:
+            # No DNs found (Service item, or no delivery yet)
+            # Use original logic: Check Delivered Qty vs Billed Qty (aggregate)
+            if item.so_detail:
+                so_item = frappe.db.get_value(
+                    "Sales Order Item",
+                    item.so_detail,
+                    ["delivered_qty", "qty"],
+                    as_dict=True
+                )
+                
+                if so_item:
+                    billed_qty = frappe.db.sql("""
+                        SELECT SUM(qty)
+                        FROM `tabSales Invoice Item`
                         WHERE so_detail = %s
                         AND docstatus = 1
-                        ORDER BY creation DESC
-                    """, item.so_detail, as_dict=True)
+                    """, item.so_detail)[0][0] or 0.0
                     
-                    # We might have multiple DNs. 
-                    # Ideally we should split the invoice line if it covers multiple DNs, 
-                    # but typically 1 Invoice <= 1 DN or 1 Invoice <= Many DNs.
-                    # Here we are creating 1 Invoice for the whole SO pending qty.
-                    # If there are multiple DNs, we picked the total pending qty.
-                    # Linking to just the first remaining DN might be inexact but better than nothing.
-                    # A better approach: The system should ideally create invoice FROM Delivery Notes 
-                    # (which kniterp action center does). 
-                    # But here we are creating FROM Sales Order.
+                    pending_delivery_billing = flt(so_item.delivered_qty) - flt(billed_qty)
                     
-                    if dn_data:
-                         # Just link the first one found as a fallback reference. 
-                         # ERPNext's make_sales_invoice doesn't auto-link DNs if creating from SO.
-                         item.dn_detail = dn_data[0].name
-                         item.delivery_note = dn_data[0].parent
-
-                    final_items.append(item)
-        else:
-            # Keep items without SO link (unlikely)
-            final_items.append(item)
+                    if pending_delivery_billing > 0:
+                        item.qty = pending_delivery_billing
+                        final_items.append(item)
+            else:
+                 # No SO Detail (Ad-hoc item?) - keep it
+                 final_items.append(item)
             
     si.items = final_items
+    
+    # Remove items with 0 qty just in case
+    si.items = [d for d in si.items if d.qty > 0]
     
     if not si.items:
         frappe.throw(_("No items to invoice (Deliveries are fully billed or nothing delivered)"))
@@ -2162,6 +2620,116 @@ def create_sales_invoice(sales_order):
     si.insert()
     
     frappe.msgprint(_("Sales Invoice {0} created").format(si.name))
+    
+    return si.name
+
+
+@frappe.whitelist()
+def create_scio_sales_invoice(sales_order_item):
+    """
+    Create a partial Sales Invoice for a subcontracted (SCIO) Sales Order item.
+    
+    Invoiceable qty is calculated based on the service-to-FG ratio:
+    - SIO delivered_qty tracks how much FG has been delivered
+    - Service qty = FG delivered * (service_qty / fg_item_qty)
+    - Already billed qty is subtracted to get the invoiceable amount
+    """
+    # Get SOI details
+    soi = frappe.db.get_value(
+        "Sales Order Item",
+        sales_order_item,
+        ["name", "parent", "item_code", "item_name", "qty", "rate", "amount",
+         "fg_item", "fg_item_qty", "billed_amt", "uom", "stock_uom",
+         "delivery_date", "warehouse", "description", "conversion_factor"],
+        as_dict=True
+    )
+    
+    if not soi:
+        frappe.throw(_("Sales Order Item not found"))
+    
+    so = frappe.get_doc("Sales Order", soi.parent)
+    
+    if not so.is_subcontracted:
+        frappe.throw(_("This function is only for Subcontracted Sales Orders"))
+    
+    # Check for existing draft
+    existing_draft = frappe.db.get_value(
+        "Sales Invoice Item",
+        {"so_detail": soi.name, "docstatus": 0},
+        "parent"
+    )
+    if existing_draft:
+        frappe.msgprint(_("Opening existing Draft Sales Invoice {0}").format(existing_draft))
+        return existing_draft
+    
+    # Get SIO delivered qty (FG qty delivered)
+    sio_item = frappe.db.get_value(
+        "Subcontracting Inward Order Item",
+        {"sales_order_item": soi.name, "docstatus": 1},
+        ["qty", "delivered_qty"],
+        as_dict=True
+    )
+    
+    if not sio_item or flt(sio_item.delivered_qty) <= 0:
+        frappe.throw(_("No FG qty has been delivered via Subcontracting Inward Order yet"))
+    
+    fg_delivered = flt(sio_item.delivered_qty)
+    
+    # Calculate service-to-FG ratio
+    fg_item_qty = flt(soi.fg_item_qty)
+    service_qty = flt(soi.qty)
+    
+    if fg_item_qty <= 0:
+        frappe.throw(_("FG Item Qty is not set on the Sales Order Item"))
+    
+    ratio = service_qty / fg_item_qty  # e.g. 500 / 493.998 = 1.01215
+    
+    # Service qty corresponding to delivered FG
+    service_qty_for_delivered = flt(fg_delivered * ratio, 3)
+    
+    # Already billed qty
+    already_billed_qty = flt(frappe.db.sql("""
+        SELECT COALESCE(SUM(qty), 0)
+        FROM `tabSales Invoice Item`
+        WHERE so_detail = %s AND docstatus = 1
+    """, soi.name)[0][0])
+    
+    invoiceable_qty = flt(service_qty_for_delivered - already_billed_qty, 3)
+    
+    if invoiceable_qty <= 0:
+        frappe.throw(_("No invoiceable qty remaining. Delivered FG: {0}, Already billed: {1}").format(
+            fg_delivered, already_billed_qty
+        ))
+    
+    # Create Sales Invoice
+    si = frappe.new_doc("Sales Invoice")
+    si.customer = so.customer
+    si.company = so.company
+    si.currency = so.currency
+    si.selling_price_list = so.selling_price_list
+    si.conversion_rate = so.conversion_rate
+    si.update_stock = 0
+    
+    si.append("items", {
+        "item_code": soi.item_code,
+        "item_name": soi.item_name,
+        "description": soi.description,
+        "qty": invoiceable_qty,
+        "rate": soi.rate,
+        "uom": soi.uom or soi.stock_uom,
+        "stock_uom": soi.stock_uom,
+        "conversion_factor": soi.conversion_factor or 1,
+        "sales_order": soi.parent,
+        "so_detail": soi.name,
+        "warehouse": soi.warehouse,
+    })
+    
+    si.set_missing_values()
+    si.insert()
+    
+    frappe.msgprint(_("Sales Invoice {0} created for {1} qty (FG delivered: {2})").format(
+        si.name, invoiceable_qty, fg_delivered
+    ))
     
     return si.name
 
@@ -2281,8 +2849,8 @@ def create_subcontracting_inward_order(sales_order, sales_order_item):
     
     # Add Service Item
     service_item = sio.append("service_items", {})
-    service_item.sales_order_item = sales_order_item
-    service_item.item_code = soi.item_code
+    service_item.sales_order_item = sales_order_item # Required for populate
+    service_item.item_code = soi.item_code # Service Item
     service_item.item_name = soi.item_name
     service_item.qty = flt(soi.qty)
     service_item.uom = soi.uom
@@ -2291,19 +2859,14 @@ def create_subcontracting_inward_order(sales_order, sales_order_item):
     service_item.fg_item = soi.fg_item
     service_item.fg_item_qty = flt(soi.fg_item_qty)
     
-    # Populate Items table automatically using standard method
-    if hasattr(sio, "populate_items_table"):
-        sio.populate_items_table()
-    else:
-        # Fallback if method missing
-        item_row = sio.append("items", {})
-        item_row.item_code = production_item
-        item_row.qty = flt(soi.fg_item_qty) if soi.fg_item_qty else flt(soi.qty)
-        item_row.sales_order_item = sales_order_item
-        item_row.bom = bom_no
-        item_row.delivery_warehouse = soi.warehouse
-        item_row.stock_uom = frappe.db.get_value("Item", production_item, "stock_uom")
-        item_row.conversion_factor = 1.0 
+    # Ensure Sales Order context is set
+    sio.sales_order = sales_order
+
+    # Populate Items table using standard logic (Subcontracting BOM lookup)
+    sio.populate_items_table()
+    
+    if not sio.items:
+        frappe.throw(_("No items populated for Subcontracting Inward Order. Please check if a Subcontracting BOM is active for Service Item {0} and Finished Good {1}.").format(soi.item_code, soi.fg_item)) 
     
     # Ensure delivery warehouse is set on items (in case populate didn't set it from set_delivery_warehouse)
     for item in sio.items:
@@ -2542,25 +3105,30 @@ def complete_job_card(job_card):
         frappe.throw(_("Cannot complete a cancelled Job Card"))
     
     # For draft job cards (likely subcontracted), we need to submit them
-    # Get total received qty for this job card
-    total_received = frappe.db.sql("""
-        SELECT SUM(sri.qty) 
-        FROM `tabSubcontracting Receipt Item` sri
-        JOIN `tabSubcontracting Receipt` scr ON scr.name = sri.parent
-        WHERE sri.job_card = %s AND scr.docstatus = 1
-    """, job_card)
-    received_qty = flt(total_received[0][0]) if total_received and total_received[0][0] else 0
-    
-    if received_qty <= 0:
-        frappe.throw(_("Cannot complete Job Card with no received quantity"))
-    
     try:
-        # Add time log with total received qty
-        jc.append("time_logs", {
-            "from_time": frappe.utils.now_datetime(),
-            "to_time": frappe.utils.now_datetime(),
-            "completed_qty": received_qty
-        })
+        if jc.is_subcontracted:
+            # Get total received qty for this job card
+            total_received = frappe.db.sql("""
+                SELECT SUM(sri.qty) 
+                FROM `tabSubcontracting Receipt Item` sri
+                JOIN `tabSubcontracting Receipt` scr ON scr.name = sri.parent
+                WHERE sri.job_card = %s AND scr.docstatus = 1
+            """, job_card)
+            received_qty = flt(total_received[0][0]) if total_received and total_received[0][0] else 0
+            
+            if received_qty <= 0:
+                frappe.throw(_("Cannot complete Job Card with no received quantity"))
+        
+            # Add time log with total received qty
+            jc.append("time_logs", {
+                "from_time": frappe.utils.now_datetime(),
+                "to_time": frappe.utils.now_datetime(),
+                "completed_qty": received_qty
+            })
+        else:
+            # For internal job cards, use the already logged manufactured quantity
+            received_qty = jc.total_completed_qty
+
         jc.save()
         jc.submit()
         
@@ -2580,3 +3148,4 @@ def complete_job_card(job_card):
     except Exception as e:
         frappe.log_error(f"Error completing Job Card {job_card}: {str(e)}")
         frappe.throw(str(e))
+

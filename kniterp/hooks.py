@@ -45,7 +45,9 @@ app_include_css = [
 
 override_doctype_class = {
     "Item": "kniterp.kniterp.overrides.item.CustomItem",
-    "Job Card": "kniterp.kniterp.overrides.job_card.CustomJobCard"
+    "Job Card": "kniterp.kniterp.overrides.job_card.CustomJobCard",
+    "Subcontracting Inward Order": "kniterp.kniterp.overrides.subcontracting_inward_order.CustomSubcontractingInwardOrder",
+    "Work Order": "kniterp.kniterp.overrides.work_order.CustomWorkOrder"
 }
 
 override_whitelisted_methods = {

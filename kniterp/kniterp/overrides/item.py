@@ -187,6 +187,7 @@ class CustomItem(Item):
             # CP vs Base logic
             "is_customer_provided_item": 1 if is_cp else 0,
             "is_purchase_item": 0 if is_cp else 1,
+            "is_sub_contracted_item": 1 if is_cp else 0, # Required for Subcontracting Inward Order
             "is_sales_item": 0, # Usually neither are sales items? Or maybe Base is. 
                                 # Original code set 0 for Base created from CP.
                                 # Let's stick to: CP is never sales, Base *could* be but let's default to 0 for auto-creation safe-side.
