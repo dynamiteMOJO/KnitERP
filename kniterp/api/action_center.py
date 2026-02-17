@@ -279,31 +279,73 @@ def get_receive_rm_from_customer_fix_details():
     """Get pending RM receipts from customers."""
     try:
         orders = frappe.db.get_all('Subcontracting Inward Order', 
-            filters={'docstatus': 1, 'status': ['not in', ['Completed', 'Closed', 'Cancelled']]},
+            filters={
+                'docstatus': 1, 
+                'status': ['not in', ['Completed', 'Closed', 'Cancelled']],
+                'per_raw_material_received': ['<', 100]
+            },
             fields=['name', 'customer', 'customer_name', 'transaction_date'])
     except Exception:
         return {'title': _('Receive RM from Customer'), 'button_label': _('Receive'), 'columns': [], 'data': []}
     
     data = []
     for o in orders:
-        try:
-            items = frappe.db.get_all('Subcontracting Inward Order Item',
-                filters={'parent': o.name},
-                fields=['item_code', 'item_name', 'qty', 'received_qty', 'sales_order_item'])
-        except Exception:
-            continue
+        # Get already received items for this order
+        received = {} # item_code -> qty
+        received_items = frappe.db.get_all('Subcontracting Inward Order Received Item',
+            filters={'parent': o.name},
+            fields=['rm_item_code', 'qty'])
             
-        for item in items:
-            pending = flt(item.qty) - flt(item.received_qty)
-            if pending > 0:
-                data.append({
-                    'customer': o.customer_name,
-                    'order_name': o.name,
-                    'item_code': item.item_code,
-                    'item_name': item.item_name,
-                    'pending_qty': flt(pending, 3),
-                    'sales_order_item': item.sales_order_item
-                })
+        for ri in received_items:
+            # Note: Field might be item_code or rm_item_code depending on doctype definition, 
+            # but based on previous error it seems to be rm_item_code or similar.
+            # Let's inspect 'Subcontracting Inward Order Received Item' fields if this fails,
+            # but standard pattern suggests checking what was received.
+            # The error 'SubcontractingInwardOrderReceivedItem' object has no attribute 'item_code'. Did you mean: 'rm_item_code'?
+            # confirms it is likely rm_item_code.
+            ic = ri.get('rm_item_code') or ri.get('item_code') 
+            received[ic] = received.get(ic, 0) + flt(ri.qty)
+
+        # Get FGs to produce
+        fgs = frappe.db.get_all('Subcontracting Inward Order Item',
+            filters={'parent': o.name},
+            fields=['item_code', 'qty', 'sales_order_item', 'bom'])
+            
+        for fg in fgs:
+            # We need to find required RMs for this FG qty
+            if not fg.bom:
+                continue
+                
+            bom_items = frappe.db.get_all('BOM Item', 
+                filters={'parent': fg.bom}, 
+                fields=['item_code', 'item_name', 'qty', 'stock_qty'])
+                
+            # Get BOM Quantity to normalise
+            bom_qty = frappe.db.get_value('BOM', fg.bom, 'quantity') or 1.0
+            
+            for bom_item in bom_items:
+                required_qty = (flt(bom_item.stock_qty) / flt(bom_qty)) * flt(fg.qty)
+                received_qty = received.get(bom_item.item_code, 0)
+                
+                # Check if we have already counted this received qty for another requirement?
+                # This simple logic assumes 1:1 or pool.
+                # A robust way: deduct from pool.
+                
+                used_qty = min(received_qty, required_qty)
+                pending_qty = required_qty - used_qty
+                
+                # Update pool
+                received[bom_item.item_code] = max(0, received_qty - used_qty)
+                
+                if pending_qty > 0:
+                    data.append({
+                        'customer': o.customer_name,
+                        'order_name': o.name,
+                        'item_code': bom_item.item_code,
+                        'item_name': bom_item.item_name,
+                        'pending_qty': flt(pending_qty, 3),
+                        'sales_order_item': fg.sales_order_item
+                    })
     
     return {
         'title': _('Receive RM from Customer'),
@@ -686,9 +728,12 @@ def get_receive_rm_from_customer_items():
     # These are orders where we are the Job Worker.
     # We need to receive RM from Customer.
     
-    # Try to find the doctype for this. The user mentioned 'Subcontracting Inward Order' in step 23 logic
     orders = frappe.db.get_all('Subcontracting Inward Order', 
-        filters={'docstatus': 1, 'status': ['not in', ['Completed', 'Closed', 'Cancelled']]},
+        filters={
+            'docstatus': 1, 
+            'status': ['not in', ['Completed', 'Closed', 'Cancelled']],
+            'per_raw_material_received': ['<', 100]
+        },
         fields=['name', 'customer_name', 'transaction_date'])
         
     data = []
@@ -1039,17 +1084,29 @@ def get_pending_purchase_invoice_fix_details():
     """, as_dict=1)
     
     data = []
+    draft_data = []
+    
     for po in regular_pos + subcontracted_pos:
+        # Check for existing draft invoice linked to this PO
+        draft_invoice = frappe.db.get_value("Purchase Invoice Item", 
+            {"purchase_order": po.name, "docstatus": 0}, "parent")
+            
         pending_amount = flt(po.grand_total) * (100 - flt(po.per_billed)) / 100
-        data.append({
+        row = {
             'supplier': po.supplier_name,
             'po_name': po.name,
             'po_type': po.po_type,
             'po_date': po.transaction_date,
             'total_amount': flt(po.grand_total, 2),
             'billed_percent': flt(po.per_billed, 2),
-            'pending_amount': flt(pending_amount, 2)
-        })
+            'pending_amount': flt(pending_amount, 2),
+            'draft_invoice': draft_invoice
+        }
+        
+        if draft_invoice:
+            draft_data.append(row)
+        else:
+            data.append(row)
     
     return {
         'title': _('Create Purchase Invoices'),
@@ -1066,10 +1123,42 @@ def get_pending_purchase_invoice_fix_details():
             {'fieldname': 'action_btn', 'label': _('Actions')}
         ],
         'data': data,
+        'draft_data': draft_data,
         'row_actions': [
             {'action': 'create_pi', 'label': _('Create Invoice'), 'icon': 'fa fa-file-text'},
             {'action': 'view_po', 'label': _('View PO'), 'icon': 'fa fa-external-link'}
         ],
-        'bulk_actions': []
+        'bulk_actions': [
+            {'action': 'bulk_create_pi', 'label': _('Create Purchase Invoices'), 'icon': 'fa fa-file-text'}
+        ]
     }
+
+
+@frappe.whitelist()
+def create_purchase_invoice(po_name, bill_no=None, bill_date=None):
+    """
+    Wrapper to create and save Purchase Invoice from Purchase Order.
+    """
+    from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_invoice
+    
+    doc = make_purchase_invoice(po_name)
+    
+    if bill_no:
+        doc.bill_no = bill_no
+    if bill_date:
+        doc.bill_date = bill_date
+        
+    doc.save()
+    return doc.name
+
+
+@frappe.whitelist()
+def submit_purchase_invoice(invoice_name):
+    """
+    Wrapper to submit a Purchase Invoice.
+    """
+    doc = frappe.get_doc("Purchase Invoice", invoice_name)
+    doc.submit()
+    return doc.name
+
 

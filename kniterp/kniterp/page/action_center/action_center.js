@@ -369,6 +369,116 @@ class ActionCenter {
 
             this.handle_row_action(action, rowData, d);
         });
+
+        // Draft Invoices Table
+        if (details.draft_data && details.draft_data.length > 0) {
+            let draft_html = `
+                <div class="draft-invoices-section" style="margin-top: 20px; border-top: 1px solid var(--border-color); padding-top: 10px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <h5 style="margin: 0;">${__('Draft Invoices')}</h5>
+                        <button class="btn btn-sm btn-primary btn-bulk-submit" disabled>
+                            <i class="fa fa-paper-plane"></i> ${__('Submit Invoices')}
+                        </button>
+                    </div>
+                    <div class="fix-table-wrapper" style="overflow-x: auto; max-height: 300px;">
+                        <table class="table table-bordered table-hover table-sm" style="width: 100%;">
+                            <thead class="thead-light">
+                                <tr>
+                                    <th style="width: 40px;">
+                                        <input type="checkbox" class="select-all-draft">
+                                    </th>
+                                    ${details.columns.map(col => {
+                if (col.fieldname === 'select') return '';
+                return `<th style="white-space: nowrap;">${col.label}</th>`;
+            }).join('')}
+                                </tr>
+                            </thead>
+                            <tbody>
+            `;
+
+            details.draft_data.forEach((row, idx) => {
+                let action_button = `
+                    <button class="btn btn-xs btn-warning btn-draft-action" 
+                        data-action="view_draft_invoice"
+                        data-row-idx="${idx}"
+                        title="${__('View Draft Invoice')}">
+                        <i class="fa fa-file-text-o"></i> ${__('View Draft')}
+                    </button>
+                `;
+
+                draft_html += `<tr>`;
+                draft_html += `<td><input type="checkbox" class="row-select-draft" data-idx="${idx}"></td>`;
+
+                details.columns.forEach(col => {
+                    if (col.fieldname === 'select') {
+                        // Skip original checkbox column logic
+                    } else if (col.fieldname === 'action_btn') {
+                        draft_html += `<td style="white-space: nowrap;">${action_button}</td>`;
+                    } else if (col.fieldname === 'delivery_date' || col.fieldname === 'posting_date' || col.fieldname === 'po_date') {
+                        draft_html += `<td>${row[col.fieldname] ? frappe.datetime.str_to_user(row[col.fieldname]) : ''}</td>`;
+                    } else if (col.fieldname === 'amount' || col.fieldname === 'total_amount' || col.fieldname === 'pending_amount') {
+                        draft_html += `<td class="text-right">${frappe.format(row[col.fieldname], { fieldtype: 'Currency' })}</td>`;
+                    } else if (col.fieldname === 'billed_percent') {
+                        draft_html += `<td class="text-right">${row[col.fieldname] || 0}%</td>`;
+                    } else if (['required_qty', 'available_qty', 'shortage', 'qty', 'pending_qty', 'ordered_qty', 'delivered_qty', 'received_qty'].includes(col.fieldname)) {
+                        draft_html += `<td class="text-right">${row[col.fieldname] || 0}</td>`;
+                    } else {
+                        draft_html += `<td>${row[col.fieldname] || ''}</td>`;
+                    }
+                });
+                draft_html += `</tr>`;
+            });
+
+            draft_html += `
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            `;
+
+            $body.append(draft_html);
+
+            // Update Draft Selection Count
+            const updateDraftSelection = () => {
+                const count = $body.find('.row-select-draft:checked').length;
+                $body.find('.btn-bulk-submit').prop('disabled', count === 0);
+
+                const total = $body.find('.row-select-draft').length;
+                $body.find('.select-all-draft').prop('checked', total === count && total > 0);
+            };
+
+            // Select All Draft
+            $body.on('change', '.select-all-draft', (e) => {
+                const isChecked = $(e.target).is(':checked');
+                $body.find('.row-select-draft').prop('checked', isChecked);
+                updateDraftSelection();
+            });
+
+            // Individual Draft Select
+            $body.on('change', '.row-select-draft', () => {
+                updateDraftSelection();
+            });
+
+            // Bulk Submit Button
+            $body.on('click', '.btn-bulk-submit', () => {
+                const selectedDrafts = [];
+                $body.find('.row-select-draft:checked').each(function () {
+                    const idx = $(this).data('idx');
+                    selectedDrafts.push(details.draft_data[idx]);
+                });
+
+                this.handle_bulk_action('bulk_submit_pi', selectedDrafts, d, details);
+            });
+
+            // Event Delegation for Draft Row Actions
+            $body.on('click', '.btn-draft-action', (e) => {
+                const action = $(e.currentTarget).data('action');
+                const rowIdx = $(e.currentTarget).data('row-idx');
+                const rowData = details.draft_data[rowIdx];
+
+                this.handle_row_action(action, rowData, d);
+            });
+        }
     }
 
     handle_row_action(action, rowData, dialog) {
@@ -495,6 +605,9 @@ class ActionCenter {
                     }
                 }
             });
+        } else if (action === 'view_draft_invoice') {
+            frappe.set_route('Form', 'Purchase Invoice', rowData.draft_invoice);
+            dialog.hide();
         }
     }
 
@@ -618,6 +731,132 @@ class ActionCenter {
                         message: __('Created {0} Work Orders', [completed]),
                         indicator: 'green'
                     }, 5);
+                    dialog.hide();
+                    this.refresh();
+                }
+            );
+        } else if (action === 'bulk_create_pi') {
+            const d = new frappe.ui.Dialog({
+                title: __('Enter Invoice Details'),
+                size: 'large',
+                fields: [
+                    {
+                        fieldname: 'invoices_html',
+                        fieldtype: 'HTML'
+                    }
+                ],
+                primary_action_label: __('Create Invoices'),
+                primary_action: () => {
+                    const invoices = [];
+                    let has_error = false;
+
+                    d.$wrapper.find('.invoice-row').each(function () {
+                        const po_name = $(this).data('po');
+                        const bill_no = $(this).find('.bill-no').val();
+                        const bill_date = $(this).find('.bill-date').val();
+
+                        if (!bill_no || !bill_date) {
+                            has_error = true;
+                            $(this).find('.bill-no, .bill-date').addClass('is-invalid');
+                        } else {
+                            $(this).find('.bill-no, .bill-date').removeClass('is-invalid');
+                            invoices.push({ po_name, bill_no, bill_date });
+                        }
+                    });
+
+                    if (has_error) {
+                        frappe.msgprint(__('Please enter Bill No and Bill Date for all selected orders.'));
+                        return;
+                    }
+
+                    d.hide();
+
+                    let created = [];
+                    invoices.forEach(inv => {
+                        frappe.call({
+                            method: 'kniterp.api.action_center.create_purchase_invoice',
+                            args: {
+                                po_name: inv.po_name,
+                                bill_no: inv.bill_no,
+                                bill_date: inv.bill_date
+                            },
+                            async: false,
+                            callback: (r) => {
+                                if (r.message) {
+                                    created.push(r.message);
+                                }
+                            }
+                        });
+                    });
+
+                    if (created.length > 0) {
+                        frappe.show_alert({
+                            message: __('Created {0} Purchase Invoices', [created.length]),
+                            indicator: 'green'
+                        }, 5);
+                    }
+                    this.refresh();
+                }
+            });
+
+            let html = `
+                <table class="table table-bordered table-sm">
+                    <thead>
+                        <tr>
+                            <th>${__('Purchase Order')}</th>
+                            <th>${__('Supplier')}</th>
+                            <th class="reqd">${__('Bill No')}</th>
+                            <th class="reqd">${__('Bill Date')}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            `;
+
+            selectedRows.forEach(row => {
+                html += `
+                    <tr class="invoice-row" data-po="${row.po_name}">
+                        <td>${row.po_name}</td>
+                        <td>${row.supplier}</td>
+                        <td>
+                            <input type="text" class="form-control input-sm bill-no" placeholder="${__('Bill No')}">
+                        </td>
+                        <td>
+                            <input type="date" class="form-control input-sm bill-date" value="${frappe.datetime.get_today()}">
+                        </td>
+                    </tr>
+                `;
+            });
+
+            html += `</tbody></table>`;
+
+            d.fields_dict.invoices_html.$wrapper.html(html);
+            d.show();
+        } else if (action === 'bulk_submit_pi') {
+            frappe.confirm(
+                __('Submit {0} Purchase Invoices?', [selectedRows.length]),
+                () => {
+                    let submitted = [];
+                    selectedRows.forEach(row => {
+                        frappe.call({
+                            method: 'kniterp.api.action_center.submit_purchase_invoice',
+                            args: {
+                                invoice_name: row.draft_invoice
+                            },
+                            async: false,
+                            callback: (r) => {
+                                if (r.message) {
+                                    submitted.push(r.message);
+                                }
+                            }
+                        });
+                    });
+
+                    if (submitted.length > 0) {
+                        frappe.show_alert({
+                            message: __('Submitted {0} Purchase Invoices', [submitted.length]),
+                            indicator: 'green'
+                        }, 5);
+                    }
                     dialog.hide();
                     this.refresh();
                 }
