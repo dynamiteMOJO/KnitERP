@@ -236,7 +236,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                 try {
                     this.fg_item_select = frappe.ui.form.make_control({
                         df: {
-                            fieldname: 'final_good',
+                            fieldname: 'final_good_' + frappe.utils.get_random(5),
                             fieldtype: 'Link',
                             options: 'Item',
                             placeholder: 'Search Finished Good...',
@@ -292,7 +292,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                 try {
                     this.rm_cost_select = frappe.ui.form.make_control({
                         df: {
-                            fieldname: 'rm_cost_as_per',
+                            fieldname: 'rm_cost_as_per_' + frappe.utils.get_random(5),
                             fieldtype: 'Select',
                             options: 'Valuation Rate\nLast Purchase Rate\nPrice List',
                             default: 'Valuation Rate',
@@ -352,19 +352,23 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
         }
 
         bind_item_selector_dblclick(control, $target) {
-            const $input = $target.find('input');
-            $input.attr('placeholder', 'Double-click for attribute selector...');
-
-            $input.on('dblclick', () => {
+            $target.off('dblclick', 'input');
+            $target.on('dblclick', 'input', () => {
                 if (typeof kniterp_open_item_selector !== 'undefined') {
                     kniterp_open_item_selector({
                         on_select: (item_code) => {
-                            control.set_value(item_code);
-                            if (control.df.change) control.df.change();
+                            if (control && typeof control.set_value === 'function') {
+                                control.set_value(item_code);
+                                if (control.df.change) control.df.change();
+                            }
                         }
                     });
                 }
             });
+
+            setTimeout(() => {
+                $target.find('input').attr('placeholder', 'Double-click for attribute selector...');
+            }, 100);
         }
 
         add_operation(type) {
@@ -386,11 +390,13 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             this.update_sfg_visibility();
 
             if (type === 'dyeing') this.sync_dyeing();
+            if (type === 'yarn_processing') this.sync_yarn_output();
             if (type === 'knitting') {
                 setTimeout(() => this.sync_knitting_output(op.$el), 150);
             }
 
             this.calculate_quantities();
+            setTimeout(() => this.sync_yarn_output(), 250);
         }
 
         sort_operations() {
@@ -399,7 +405,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
         }
 
         render_operations() {
-            this.page.main.find('.workflow-stack').empty();
+            this.page.main.find('.workflow-stack').children().detach();
 
             this.operations.forEach((op, idx) => {
                 if (idx > 0) {
@@ -416,6 +422,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             this.update_buttons_visibility();
             this.update_sfg_visibility();
             this.calculate_quantities();
+            setTimeout(() => this.sync_yarn_output(), 250);
         }
 
         renumber_steps() {
@@ -436,9 +443,13 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                     let $sfg_section = $card.find('.sfg-output-section');
 
                     if (has_dyeing) {
-                        $sfg_section.show();
+                        $sfg_section.stop(true, true).show();
                     } else {
-                        $sfg_section.hide();
+                        setTimeout(() => {
+                            if (!this.operations.some(o => o.type === 'dyeing')) {
+                                $sfg_section.hide();
+                            }
+                        }, 250);
                     }
                     this.sync_knitting_output($card);
                 }
@@ -586,7 +597,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                         try {
                             let ctrl = frappe.ui.form.make_control({
                                 df: {
-                                    fieldname: 'sfg_item',
+                                    fieldname: 'sfg_item_' + frappe.utils.get_random(5),
                                     fieldtype: 'Link',
                                     options: 'Item',
                                     placeholder: 'SFG Item...',
@@ -596,6 +607,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                         if (val) {
                                             this.sync_output_display($card);
                                             this.sync_dyeing();
+                                            this.sync_yarn_output();
                                             frappe.db.get_value('Item', val, 'item_name').then(r => {
                                                 let name_val = '';
                                                 if (r && r.message) {
@@ -606,14 +618,17 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                                 $card.data('item_name', name_val);
                                                 this.sync_output_display($card);
                                                 this.sync_dyeing();
+                                                this.sync_yarn_output();
                                             }).catch(() => {
                                                 this.sync_output_display($card);
                                                 this.sync_dyeing();
+                                                this.sync_yarn_output();
                                             });
                                         } else {
                                             $card.data('item_name', '');
                                             this.sync_output_display($card);
                                             this.sync_dyeing();
+                                            this.sync_yarn_output();
                                         }
                                     }
                                 },
@@ -694,7 +709,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                     try {
                         let ctrl = frappe.ui.form.make_control({
                             df: {
-                                fieldname: 'input_item',
+                                fieldname: 'input_item_' + frappe.utils.get_random(5),
                                 fieldtype: 'Link',
                                 options: 'Item',
                                 read_only: 0,
@@ -778,6 +793,56 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                     if (ctrl && ctrl.get_value() !== knitting_sfg) {
                         ctrl.set_value(knitting_sfg);
                     }
+                }
+            }
+        }
+
+        sync_yarn_output() {
+            let yarn_op = this.operations.find(o => o.type === 'yarn_processing');
+            if (!yarn_op) return;
+
+            let yarn_sfg = yarn_op.$el.find('.sfg-output-target .form-control').val();
+            if (!yarn_sfg) return;
+
+            let knitting_op = this.operations.find(o => o.type === 'knitting');
+            let dyeing_op = this.operations.find(o => o.type === 'dyeing');
+
+            if (knitting_op) {
+                let $knit_card = knitting_op.$el;
+                let exists = false;
+                let empty_ctrl = null;
+
+                $knit_card.find('.input-row-mini').each((_, el) => {
+                    let ctrl = $(el).data('control');
+                    if (ctrl) {
+                        let val = ctrl.get_value();
+                        if (val === yarn_sfg) {
+                            exists = true;
+                        } else if (!val && !empty_ctrl) {
+                            empty_ctrl = ctrl;
+                        }
+                    }
+                });
+
+                if (!exists) {
+                    if (empty_ctrl) {
+                        empty_ctrl.set_value(yarn_sfg);
+                    } else {
+                        // Add a new row and set it
+                        this.add_input_row($knit_card);
+                        setTimeout(() => {
+                            let $last_row = $knit_card.find('.input-row-mini').last();
+                            let ctrl = $last_row.data('control');
+                            if (ctrl) ctrl.set_value(yarn_sfg);
+                        }, 250);
+                    }
+                }
+            } else if (dyeing_op) {
+                let $dye_card = dyeing_op.$el;
+                let $row = $dye_card.find('.input-row-mini').first();
+                let ctrl = $row.data('control');
+                if (ctrl && ctrl.get_value() !== yarn_sfg) {
+                    ctrl.set_value(yarn_sfg);
                 }
             }
         }
