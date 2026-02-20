@@ -1577,7 +1577,7 @@ def custom_add_additional_cost(stock_entry, work_order, job_card=None):
 
 
 @frappe.whitelist()
-def complete_operation(work_order, operation, qty, workstation=None, employee=None):
+def complete_operation(work_order, operation, qty, workstation=None, employee=None, attendance_date=None, shift=None):
     """
     Mark an in-house operation as complete by updating the Job Card.
     """
@@ -1618,6 +1618,17 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
     })
     
     job_card.save()
+    
+    if "knitting" in operation.lower() and employee and attendance_date and shift:
+        ma = frappe.new_doc("Machine Attendance")
+        ma.employee = employee
+        ma.date = attendance_date
+        ma.shift = shift
+        ma.machine = workstation or job_card.workstation
+        ma.production_qty_kg = qty
+        ma.company = job_card.company
+        ma.flags.ignore_permissions = True
+        ma.insert()
 
     # FIX: ERPNext auto-calculates process_loss_qty as (for_qty - completed_qty) on save.
     # For partial updates, this incorrectly marks the remainder as loss.

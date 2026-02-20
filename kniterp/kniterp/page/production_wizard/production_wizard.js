@@ -2128,8 +2128,26 @@ class ProductionWizard {
                             fieldtype: 'Link',
                             options: 'Employee',
                             label: __('Employee'),
-                            description: __('Person performing the operation')
+                            description: __('Person performing the operation'),
+                            reqd: operation.toLowerCase().includes('knitting') ? 1 : 0
                         },
+                        // Conditionally add fields for Knitting Machine Attendance
+                        ...(operation.toLowerCase().includes('knitting') ? [
+                            {
+                                fieldname: 'attendance_date',
+                                fieldtype: 'Date',
+                                label: __('Date'),
+                                default: frappe.datetime.get_today(),
+                                reqd: 1
+                            },
+                            {
+                                fieldname: 'shift',
+                                fieldtype: 'Link',
+                                options: 'Shift Type',
+                                label: __('Shift'),
+                                reqd: 1
+                            }
+                        ] : []),
                         {
                             fieldname: 'cb_qty',
                             fieldtype: 'Column Break'
@@ -2152,7 +2170,9 @@ class ProductionWizard {
                                 operation: operation,
                                 qty: values.qty,
                                 workstation: values.workstation,
-                                employee: values.employee
+                                employee: values.employee,
+                                attendance_date: values.attendance_date,
+                                shift: values.shift
                             },
                             freeze: true,
                             freeze_message: __('Updating Manufactured Quantity...'),
