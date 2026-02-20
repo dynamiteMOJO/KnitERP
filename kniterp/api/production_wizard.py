@@ -913,34 +913,35 @@ def get_production_details(sales_order_item):
             conversion_factor = 1.0
 
         # available_to_process (in Current Op terms) = (Available Input / Conversion Factor) - Processed
-        # available_to_process (in Current Op terms) = (Available Input / Conversion Factor) - Processed
         val_unrounded = (prev_output / conversion_factor) - current_processed
-        available_fg = flt(val_unrounded, 3)
+        available_op_qty = flt(val_unrounded, 3)
+        
         # Limit available_to_process by max_producible_qty for the first operation
         # This ensures we don't suggest processing more than we have RM for
         if idx == 0 and max_producible_qty is not None:
             # max_producible_qty is in FG units
-            # available_fg is also in FG units (calculated from Sales Order Pending Qty)
+            # available_op_qty is in Op units. We must convert max_producible_qty to Op units.
+            max_producible_op = flt(max_producible_qty) / conversion_factor
             
-            # However, available_fg as currently calculated:
-            # (prev_output / conversion_factor) where prev_output = pending_qty
-            # So available_fg represents the "Theoretical Max based on Order Size"
-            
-            # We simply cap it.
-            available_fg = min(available_fg, max_producible_qty)
+            # Instead of capping, if we overproduced, available_op_qty might be negative or 0.
+            # But we can still produce up to max_producible_op based on RM!
+            # So for the first operation, the TRUE RM availability is exactly max_producible_op.
+            # And we don't want to limit it by (pending_qty - processed) if they overproduce.
+            # We just use max_producible_op directly, and let remaining_required cap it later for the default value.
+            available_op_qty = max_producible_op
         
-        available_fg = max(0, available_fg)
+        available_op_qty = max(0, available_op_qty)
 
         # But we shouldn't exceed the total required for this operation
         total_required = flt(op.get("for_quantity") or pending_qty, 3)
         remaining_required = max(0, total_required - current_processed)
 
         # Available to process
-        op["available_to_process"] = min(available_fg, remaining_required)
+        op["available_to_process"] = min(available_op_qty, remaining_required)
         op["available_to_process"] = flt(op["available_to_process"], 3)
         
-        # Store the raw "waiting" qty specifically from flow context (in FG terms for consistency in UI)
-        op["qty_ready_from_prev"] = available_fg
+        # Store the raw "waiting" qty specifically from flow context (in Op terms for consistency in UI)
+        op["qty_ready_from_prev"] = available_op_qty
         op["conversion_factor"] = conversion_factor # Useful for UI debugging if propertie needed
     
  
@@ -1627,6 +1628,11 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
         ma.machine = workstation or job_card.workstation
         ma.production_qty_kg = qty
         ma.company = job_card.company
+        
+        # Link machine attendance to the time log we just created for easy revert
+        if job_card.time_logs:
+            ma.job_card_time_log = job_card.time_logs[-1].name
+            
         ma.flags.ignore_permissions = True
         ma.insert()
 
@@ -1696,6 +1702,10 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
             
             # Configure Stock Entry
             ste.stock_entry.flags.ignore_mandatory = True
+            
+            # FIX: Prevent ERPNext from overwriting fg_completed_qty with Job Card for_quantity
+            # ManufactureEntry does not pass work_order to stock_entry, which triggers set_job_card_data
+            ste.stock_entry.work_order = job_card.work_order
             
             # Add additional costs (operating costs)
             wo_doc = frappe.get_doc("Work Order", job_card.work_order)
@@ -1997,10 +2007,18 @@ def revert_production_entry(stock_entry):
                     break
             
             if log_to_remove is not None:
+                # Cancel linked Machine Attendance if it exists
+                log_row = jc.time_logs[log_to_remove]
+                ma_name = frappe.db.get_value("Machine Attendance", {"job_card_time_log": log_row.name}, "name")
+                if ma_name:
+                    ma = frappe.get_doc("Machine Attendance", ma_name)
+                    ma.flags.ignore_permissions = True
+                    # Just delete it to keep it truly reverted
+                    ma.delete()
+
                 # Remove the time log row via direct DB delete (can't use jc.save()
                 # on submitted JC — it triggers validate_job_card which throws 
                 # when total_completed_qty != for_quantity after removing a log)
-                log_row = jc.time_logs[log_to_remove]
                 frappe.delete_doc("Job Card Time Log", log_row.name, ignore_permissions=True)
                 del jc.time_logs[log_to_remove]
                 
@@ -3304,3 +3322,324 @@ def _complete_job_card_subcontracted(job_card):
     except Exception as e:
         frappe.log_error(f"Error completing Job Card {job_card}: {str(e)}")
         frappe.throw(str(e))
+
+
+@frappe.whitelist()
+def get_order_activity_log(sales_order_item):
+    """
+    Get a comprehensive, chronological activity log for a Sales Order Item.
+
+    Aggregates events from all linked documents:
+    - Sales Order
+    - Work Order (creation, status changes)
+    - Job Cards (operations, audit comments)
+    - Stock Entries (manufacture, material transfer, reversals)
+    - Purchase Orders (subcontracting)
+    - Subcontracting Orders & Receipts
+    - Delivery Notes
+    - Sales Invoices
+    - Production Wizard Notes
+    """
+    soi = frappe.db.get_value(
+        "Sales Order Item", sales_order_item,
+        ["name", "parent", "item_code", "item_name", "qty"],
+        as_dict=True
+    )
+
+    if not soi:
+        frappe.throw(_("Sales Order Item not found"))
+
+    events = []
+
+    def _add(timestamp, event_type, icon, color, title, description="",
+             actor="", linked_doctype="", linked_name=""):
+        actor_name = ""
+        if actor:
+            actor_name = frappe.get_cached_value("User", actor, "full_name") or actor
+        events.append({
+            "timestamp": str(timestamp),
+            "event_type": event_type,
+            "icon": icon,
+            "color": color,
+            "title": title,
+            "description": description,
+            "actor": actor,
+            "actor_name": actor_name,
+            "linked_doctype": linked_doctype,
+            "linked_name": linked_name,
+        })
+
+    # ── 1. Sales Order ──
+    so_creation = frappe.db.get_value(
+        "Sales Order", soi.parent, ["creation", "owner"], as_dict=True
+    )
+    if so_creation:
+        _add(
+            so_creation.creation, "order", "fa-file-text-o", "#1976d2",
+            f"Sales Order {soi.parent} created",
+            f"Item {soi.item_code} — Qty {soi.qty}",
+            so_creation.owner, "Sales Order", soi.parent
+        )
+
+    # ── 2. Work Order ──
+    wo = frappe.db.get_value(
+        "Work Order",
+        {"sales_order_item": sales_order_item, "docstatus": ["!=", 2]},
+        ["name", "status", "qty", "produced_qty", "creation", "owner", "modified"],
+        as_dict=True
+    )
+
+    wo_name = wo.name if wo else None
+
+    if wo:
+        _add(
+            wo.creation, "work_order", "fa-cogs", "#7b1fa2",
+            f"Work Order {wo.name} created",
+            f"Qty: {wo.qty} | Status: {wo.status}",
+            wo.owner, "Work Order", wo.name
+        )
+
+        # Work Order comments (includes status changes, audit logs)
+        wo_comments = frappe.get_all(
+            "Comment",
+            filters={"reference_doctype": "Work Order", "reference_name": wo.name,
+                      "comment_type": "Comment"},
+            fields=["content", "creation", "owner"],
+            order_by="creation asc"
+        )
+        for c in wo_comments:
+            is_audit = "[PRODUCTION ACTION]" in (c.content or "")
+            _add(
+                c.creation,
+                "audit" if is_audit else "comment",
+                "fa-shield" if is_audit else "fa-comment",
+                "#e65100" if is_audit else "#546e7a",
+                "Production Audit Log" if is_audit else "Comment on Work Order",
+                c.content or "",
+                c.owner, "Work Order", wo.name
+            )
+
+    # ── 3. Job Cards ──
+    job_cards = []
+    if wo_name:
+        job_cards = frappe.get_all(
+            "Job Card",
+            filters={"work_order": wo_name, "docstatus": ["!=", 2]},
+            fields=["name", "operation", "status", "for_quantity", "total_completed_qty",
+                     "is_subcontracted", "creation", "owner", "modified"],
+            order_by="creation asc"
+        )
+
+    for jc in job_cards:
+        _add(
+            jc.creation, "job_card", "fa-wrench", "#00897b",
+            f"Job Card {jc.name} created — {jc.operation}",
+            f"Qty: {jc.for_quantity} | {'Subcontracted' if jc.is_subcontracted else 'In-house'}",
+            jc.owner, "Job Card", jc.name
+        )
+
+        # Job Card comments (audit logs from log_manual_production_action)
+        jc_comments = frappe.get_all(
+            "Comment",
+            filters={"reference_doctype": "Job Card", "reference_name": jc.name,
+                      "comment_type": "Comment"},
+            fields=["content", "creation", "owner"],
+            order_by="creation asc"
+        )
+        for c in jc_comments:
+            is_audit = "[PRODUCTION ACTION]" in (c.content or "")
+            _add(
+                c.creation,
+                "audit" if is_audit else "comment",
+                "fa-shield" if is_audit else "fa-comment",
+                "#e65100" if is_audit else "#546e7a",
+                f"{'Production Audit' if is_audit else 'Comment'} — {jc.operation}",
+                c.content or "",
+                c.owner, "Job Card", jc.name
+            )
+
+    # ── 4. Stock Entries (Manufacture, Material Transfer, Reversals) ──
+    if wo_name:
+        stock_entries = frappe.get_all(
+            "Stock Entry",
+            filters={"work_order": wo_name, "docstatus": ["!=", 2]},
+            fields=["name", "purpose", "fg_completed_qty", "posting_date",
+                     "creation", "owner", "docstatus"],
+            order_by="creation asc"
+        )
+
+        purpose_config = {
+            "Manufacture": ("fa-industry", "#388e3c", "Manufactured"),
+            "Material Transfer for Manufacture": ("fa-exchange", "#1565c0", "Material Transfer"),
+            "Send to Subcontractor": ("fa-truck", "#6a1b9a", "Sent to Subcontractor"),
+        }
+
+        for se in stock_entries:
+            cfg = purpose_config.get(se.purpose, ("fa-cube", "#757575", se.purpose))
+            qty_txt = f" — {se.fg_completed_qty} qty" if se.fg_completed_qty else ""
+            status_txt = " (Draft)" if se.docstatus == 0 else ""
+            _add(
+                se.creation, "stock_entry", cfg[0], cfg[1],
+                f"{cfg[2]}{qty_txt}{status_txt}",
+                f"Stock Entry {se.name} | {se.purpose}",
+                se.owner, "Stock Entry", se.name
+            )
+
+    # ── 5. Purchase Orders (Subcontracting POs) ──
+    if wo_name:
+        po_data = frappe.db.sql("""
+            SELECT DISTINCT
+                poi.parent as po_name, po.supplier, po.supplier_name,
+                po.creation, po.owner, po.docstatus
+            FROM `tabPurchase Order Item` poi
+            INNER JOIN `tabPurchase Order` po ON po.name = poi.parent
+            INNER JOIN `tabJob Card` jc ON jc.name = poi.job_card
+            WHERE jc.work_order = %s
+            AND po.docstatus != 2
+            ORDER BY po.creation ASC
+        """, wo_name, as_dict=True)
+
+        for po in po_data:
+            _add(
+                po.creation, "subcontracting", "fa-shopping-cart", "#ad1457",
+                f"Purchase Order {po.po_name} — {po.supplier_name or po.supplier}",
+                "Subcontracting PO",
+                po.owner, "Purchase Order", po.po_name
+            )
+
+    # ── 6. Subcontracting Orders ──
+    if wo_name:
+        sco_data = frappe.db.sql("""
+            SELECT DISTINCT
+                sco.name, sco.supplier, sco.supplier_name,
+                sco.creation, sco.owner
+            FROM `tabSubcontracting Order` sco
+            INNER JOIN `tabPurchase Order` po ON po.name = sco.purchase_order
+            INNER JOIN `tabPurchase Order Item` poi ON poi.parent = po.name
+            INNER JOIN `tabJob Card` jc ON jc.name = poi.job_card
+            WHERE jc.work_order = %s
+            AND sco.docstatus = 1
+            ORDER BY sco.creation ASC
+        """, wo_name, as_dict=True)
+
+        for sco in sco_data:
+            _add(
+                sco.creation, "subcontracting", "fa-share-square-o", "#6a1b9a",
+                f"Subcontracting Order {sco.name}",
+                f"Supplier: {sco.supplier_name or sco.supplier}",
+                sco.owner, "Subcontracting Order", sco.name
+            )
+
+    # ── 7. Subcontracting Receipts ──
+    if wo_name:
+        scr_data = frappe.db.sql("""
+            SELECT DISTINCT
+                scr.name, scr.supplier, scr.supplier_name,
+                scr.creation, scr.owner
+            FROM `tabSubcontracting Receipt` scr
+            INNER JOIN `tabSubcontracting Receipt Item` sri ON sri.parent = scr.name
+            INNER JOIN `tabSubcontracting Order` sco ON sco.name = sri.subcontracting_order
+            INNER JOIN `tabPurchase Order` po ON po.name = sco.purchase_order
+            INNER JOIN `tabPurchase Order Item` poi ON poi.parent = po.name
+            INNER JOIN `tabJob Card` jc ON jc.name = poi.job_card
+            WHERE jc.work_order = %s
+            AND scr.docstatus = 1
+            ORDER BY scr.creation ASC
+        """, wo_name, as_dict=True)
+
+        for scr in scr_data:
+            _add(
+                scr.creation, "subcontracting", "fa-check-square-o", "#2e7d32",
+                f"Subcontracting Receipt {scr.name}",
+                f"Received from {scr.supplier_name or scr.supplier}",
+                scr.owner, "Subcontracting Receipt", scr.name
+            )
+
+    # ── 8. Subcontracting Inward Order (SCIO) ──
+    sio_item = frappe.db.get_value(
+        "Subcontracting Inward Order Item",
+        {"sales_order_item": sales_order_item, "docstatus": ["!=", 2]},
+        ["parent", "qty", "delivered_qty"],
+        as_dict=True
+    )
+    if sio_item:
+        sio = frappe.db.get_value(
+            "Subcontracting Inward Order", sio_item.parent,
+            ["name", "status", "creation", "owner"],
+            as_dict=True
+        )
+        if sio:
+            _add(
+                sio.creation, "subcontracting", "fa-share-square-o", "#6a1b9a",
+                f"Subcontracting Inward Order {sio.name}",
+                f"Status: {sio.status} | Qty: {sio_item.qty} | Delivered: {sio_item.delivered_qty}",
+                sio.owner, "Subcontracting Inward Order", sio.name
+            )
+
+    # ── 9. Delivery Notes ──
+    dn_data = frappe.db.sql("""
+        SELECT
+            dni.parent as dn_name, dn.posting_date, dni.qty,
+            dn.creation, dn.owner
+        FROM `tabDelivery Note Item` dni
+        INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
+        WHERE dni.so_detail = %s
+        AND dn.docstatus != 2
+        ORDER BY dn.creation ASC
+    """, sales_order_item, as_dict=True)
+
+    for dn in dn_data:
+        _add(
+            dn.creation, "delivery", "fa-truck", "#2e7d32",
+            f"Delivery Note {dn.dn_name} — {dn.qty} qty",
+            f"Posting Date: {dn.posting_date}",
+            dn.owner, "Delivery Note", dn.dn_name
+        )
+
+    # ── 10. Sales Invoices ──
+    si_data = frappe.db.sql("""
+        SELECT
+            sii.parent as si_name, si.posting_date, sii.qty, sii.amount,
+            si.creation, si.owner, si.docstatus
+        FROM `tabSales Invoice Item` sii
+        INNER JOIN `tabSales Invoice` si ON si.name = sii.parent
+        WHERE sii.so_detail = %s
+        AND si.docstatus != 2
+        ORDER BY si.creation ASC
+    """, sales_order_item, as_dict=True)
+
+    for si in si_data:
+        status_txt = " (Draft)" if si.docstatus == 0 else ""
+        _add(
+            si.creation, "invoice", "fa-file-text", "#f57f17",
+            f"Sales Invoice {si.si_name}{status_txt}",
+            f"Qty: {si.qty} | Amount: {si.amount}",
+            si.owner, "Sales Invoice", si.si_name
+        )
+
+    # ── 11. Production Wizard Notes ──
+    notes = frappe.get_all(
+        "Production Wizard Note",
+        filters={"sales_order_item": sales_order_item},
+        fields=["name", "note", "owner", "creation"],
+        order_by="creation asc"
+    )
+    for n in notes:
+        _add(
+            n.creation, "note", "fa-sticky-note", "#5d4037",
+            "Production Note",
+            n.note,
+            n.owner, "Production Wizard Note", n.name
+        )
+
+    # Sort all events newest-first
+    events.sort(key=lambda e: e["timestamp"], reverse=True)
+
+    return {
+        "sales_order": soi.parent,
+        "sales_order_item": sales_order_item,
+        "item_code": soi.item_code,
+        "item_name": soi.item_name,
+        "total_events": len(events),
+        "events": events
+    }

@@ -456,3 +456,145 @@ html[data-theme="dark"] .material-row.shortage td {
 html[data-theme="dark"] .material-row.low td {
 	background: rgba(255, 152, 0, 0.1);
 }
+
+/* Activity Log Styles */
+.activity-log-container {
+	max-height: 70vh;
+	overflow-y: auto;
+	padding: 0 5px;
+}
+
+.activity-log-filters {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	padding-bottom: 12px;
+	border-bottom: 1px solid var(--border-color);
+}
+
+.activity-log-filters .btn {
+	font-size: 11px;
+	border-radius: 15px;
+	padding: 3px 10px;
+}
+
+.activity-log-timeline {
+	position: relative;
+	padding-left: 35px;
+	margin-top: 15px;
+}
+
+.activity-log-timeline::before {
+	content: '';
+	position: absolute;
+	left: 15px;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+	background: var(--border-color);
+}
+
+.activity-log-item {
+	position: relative;
+	display: flex;
+	gap: 12px;
+	margin-bottom: 16px;
+	padding-bottom: 16px;
+	border-bottom: 1px solid var(--light-border-color, rgba(0,0,0,0.05));
+}
+
+.activity-log-item:last-child {
+	border-bottom: none;
+	margin-bottom: 0;
+	padding-bottom: 0;
+}
+
+.activity-log-node {
+	position: absolute;
+	left: -35px;
+	width: 28px;
+	height: 28px;
+	border-radius: 50%;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex-shrink: 0;
+	z-index: 1;
+	box-shadow: 0 0 0 3px var(--fg-color);
+}
+
+.activity-log-node i {
+	color: white;
+	font-size: 12px;
+}
+
+.activity-log-content {
+	flex: 1;
+	min-width: 0;
+}
+
+.activity-log-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-start;
+	gap: 10px;
+	margin-bottom: 4px;
+}
+
+.activity-log-title {
+	font-weight: 600;
+	font-size: 13px;
+	color: var(--text-color);
+}
+
+.activity-log-time {
+	font-size: 11px;
+	color: var(--text-muted);
+	white-space: nowrap;
+	flex-shrink: 0;
+}
+
+.activity-log-desc {
+	font-size: 12px;
+	color: var(--text-muted);
+	margin-bottom: 4px;
+	line-height: 1.5;
+	word-break: break-word;
+	max-height: 80px;
+	overflow-y: auto;
+}
+
+.activity-log-footer {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	font-size: 11px;
+	color: var(--text-light);
+}
+
+.activity-log-actor i {
+	margin-right: 3px;
+}
+
+.activity-log-link {
+	color: var(--primary);
+	font-weight: 500;
+}
+
+.activity-log-link:hover {
+	text-decoration: underline;
+}
+
+.activity-log-summary .badge {
+	font-size: 12px;
+	padding: 4px 10px;
+}
+
+/* Dark mode for activity log */
+html[data-theme="dark"] .activity-log-node {
+	box-shadow: 0 0 0 3px var(--fg-color);
+}
+
+html[data-theme="dark"] .activity-log-item {
+	border-bottom-color: rgba(255,255,255,0.05);
+}

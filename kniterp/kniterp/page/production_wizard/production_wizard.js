@@ -544,11 +544,16 @@ class ProductionWizard {
                             ${details.is_subcontracted ? `<br><small class="text-muted">${__('Service')}: ${details.item_name}</small>` : ''}
                         </span>
 					</div>
+					<div class="d-flex align-items-start">
+					<button class="btn btn-sm btn-default btn-view-activity-log mr-3" title="${__('View Activity Log')}">
+						<i class="fa fa-history"></i> ${__('Activity Log')}
+					</button>
 					<div class="qty-info">
 						<div class="big-number">${frappe.format(details.projected_qty, { fieldtype: 'Float', precision: 2 })}</div>
 						<div class="text-muted">${__('Projected FG Qty')}</div>
 					</div>
 				</div>
+			</div>
 
 				<!-- Info Cards -->
 				<div class="info-cards">
@@ -1514,6 +1519,11 @@ class ProductionWizard {
                 return_to: 'production-wizard'
             });
         });
+
+        // View Activity Log
+        this.$details_content.find('.btn-view-activity-log').on('click', () => {
+            this.show_order_activity_log(details);
+        });
     }
 
     receive_customer_rm(sio_name) {
@@ -2013,7 +2023,9 @@ class ProductionWizard {
                 const remaining = total_qty - completed_qty;
 
                 // Get max producible based on available RM (from backend calculation)
-                const max_producible = details.max_producible_qty || 0;
+                const raw_max_producible = details.max_producible_qty || 0;
+                const conversion_factor = op.conversion_factor || 1.0;
+                const max_producible = raw_max_producible / conversion_factor;
                 const bottleneck = details.bottleneck_item || '';
 
                 // Get available from previous operation (batch flow)
@@ -2073,8 +2085,8 @@ class ProductionWizard {
                 // Show max producible based on available RM (ONLY if not already covered above)
                 // If is_rm_limited is true, we already showed the bottleneck info in the first alert.
                 // We only show this secondary alert if max_producible is DIFFERENT (usually higher) than available_from_prev
-                // but still lower than remaining (indicating a future ceiling).
-                if (max_producible > 0 && max_producible < remaining) {
+                // but still lower than remaining (indicating a future ceiling), or if we have overproduced (remaining <= 0).
+                if (max_producible > 0 && (max_producible < remaining || remaining <= 0)) {
                     const is_rm_limited = op.qty_ready_from_prev !== undefined && Math.abs(available_from_prev - max_producible) < 0.01;
 
                     if (!is_rm_limited) {
@@ -2852,6 +2864,120 @@ class ProductionWizard {
                 if (r.message) {
                     frappe.set_route('Form', 'Sales Invoice', r.message);
                 }
+            }
+        });
+    }
+
+    show_order_activity_log(details) {
+        frappe.call({
+            method: 'kniterp.api.production_wizard.get_order_activity_log',
+            args: { sales_order_item: details.sales_order_item },
+            freeze: true,
+            freeze_message: __('Loading Activity Log...'),
+            callback: (r) => {
+                if (!r.message) return;
+                const data = r.message;
+                const events = data.events || [];
+
+                // Build filter tabs
+                const event_types = [...new Set(events.map(e => e.event_type))];
+                const type_labels = {
+                    order: __('Orders'),
+                    work_order: __('Work Order'),
+                    job_card: __('Job Cards'),
+                    stock_entry: __('Production'),
+                    subcontracting: __('Subcontracting'),
+                    delivery: __('Delivery'),
+                    invoice: __('Invoice'),
+                    audit: __('Audit'),
+                    comment: __('Comments'),
+                    note: __('Notes')
+                };
+
+                let filter_html = `<div class="activity-log-filters mb-3">
+                    <button class="btn btn-xs btn-primary activity-filter active" data-type="all">${__('All')} (${events.length})</button>`;
+                for (const t of event_types) {
+                    const count = events.filter(e => e.event_type === t).length;
+                    filter_html += `<button class="btn btn-xs btn-default activity-filter" data-type="${t}">${type_labels[t] || t} (${count})</button>`;
+                }
+                filter_html += '</div>';
+
+                // Build timeline HTML
+                let timeline_html = '<div class="activity-log-timeline">';
+                for (const evt of events) {
+                    const time_ago = frappe.datetime.prettyDate(evt.timestamp);
+                    const full_time = frappe.datetime.str_to_user(evt.timestamp);
+                    const link_html = evt.linked_name
+                        ? `<a href="/app/${frappe.router.slug(evt.linked_doctype)}/${evt.linked_name}" class="activity-log-link">${evt.linked_doctype}: ${evt.linked_name}</a>`
+                        : '';
+
+                    // Escape and format description (preserve newlines for audit logs)
+                    let desc = (evt.description || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    desc = desc.replace(/\n/g, '<br>');
+
+                    timeline_html += `
+                        <div class="activity-log-item" data-event-type="${evt.event_type}">
+                            <div class="activity-log-node" style="background-color: ${evt.color};">
+                                <i class="fa ${evt.icon}"></i>
+                            </div>
+                            <div class="activity-log-content">
+                                <div class="activity-log-header">
+                                    <span class="activity-log-title">${evt.title}</span>
+                                    <span class="activity-log-time" title="${full_time}">${time_ago}</span>
+                                </div>
+                                ${desc ? `<div class="activity-log-desc">${desc}</div>` : ''}
+                                <div class="activity-log-footer">
+                                    ${evt.actor_name ? `<span class="activity-log-actor"><i class="fa fa-user"></i> ${evt.actor_name}</span>` : ''}
+                                    ${link_html}
+                                </div>
+                            </div>
+                        </div>`;
+                }
+                timeline_html += '</div>';
+
+                if (events.length === 0) {
+                    timeline_html = `<div class="text-muted text-center p-5">
+                        <i class="fa fa-info-circle fa-2x mb-2"></i>
+                        <div>${__('No activity recorded for this order yet.')}</div>
+                    </div>`;
+                }
+
+                const d = new frappe.ui.Dialog({
+                    title: __('Activity Log \u2014 {0}', [data.item_code]),
+                    size: 'extra-large',
+                    fields: [
+                        {
+                            fieldname: 'log_html',
+                            fieldtype: 'HTML',
+                            options: `
+                                <div class="activity-log-container">
+                                    <div class="activity-log-summary mb-3">
+                                        <span class="badge badge-info">${data.total_events} ${__('events')}</span>
+                                        <span class="text-muted ml-2">${data.item_name}</span>
+                                    </div>
+                                    ${filter_html}
+                                    ${timeline_html}
+                                </div>
+                            `
+                        }
+                    ]
+                });
+
+                d.show();
+
+                // Bind filter click events
+                d.$wrapper.find('.activity-filter').on('click', function () {
+                    d.$wrapper.find('.activity-filter').removeClass('btn-primary active').addClass('btn-default');
+                    $(this).removeClass('btn-default').addClass('btn-primary active');
+
+                    const type = $(this).data('type');
+                    if (type === 'all') {
+                        d.$wrapper.find('.activity-log-item').show();
+                    } else {
+                        d.$wrapper.find('.activity-log-item').hide();
+                        d.$wrapper.find(`.activity-log-item[data-event-type="${type}"]`).show();
+                    }
+                });
             }
         });
     }
