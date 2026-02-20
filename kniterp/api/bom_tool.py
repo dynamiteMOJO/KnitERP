@@ -1,10 +1,13 @@
 import frappe
 from frappe import _
 from frappe.utils import flt
+from kniterp.api.access_control import require_production_write_access
 
 
 @frappe.whitelist()
 def create_multilevel_bom(data):
+    require_production_write_access("create multilevel BOMs")
+
     if isinstance(data, str):
         data = frappe.parse_json(data)
 

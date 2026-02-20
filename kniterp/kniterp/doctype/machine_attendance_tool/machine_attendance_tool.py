@@ -5,9 +5,12 @@ import frappe
 from frappe.model.document import Document
 from frappe.utils import add_days
 import json
+from kniterp.api.access_control import require_production_write_access
 
 @frappe.whitelist()
 def generate_attendance(date, company, entries):
+    require_production_write_access("generate machine attendance")
+
     if isinstance(entries, str):
         entries = json.loads(entries)
 

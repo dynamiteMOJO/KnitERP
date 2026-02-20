@@ -1,6 +1,7 @@
 import frappe
 from frappe import _
 from frappe.utils import flt, nowdate, add_days
+from kniterp.api.access_control import require_action_center_write_access
 
 @frappe.whitelist()
 def get_action_items():
@@ -1139,6 +1140,7 @@ def create_purchase_invoice(po_name, bill_no=None, bill_date=None):
     """
     Wrapper to create and save Purchase Invoice from Purchase Order.
     """
+    require_action_center_write_access("create purchase invoices")
     from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_invoice
     
     doc = make_purchase_invoice(po_name)
@@ -1157,8 +1159,8 @@ def submit_purchase_invoice(invoice_name):
     """
     Wrapper to submit a Purchase Invoice.
     """
+    require_action_center_write_access("submit purchase invoices")
     doc = frappe.get_doc("Purchase Invoice", invoice_name)
     doc.submit()
     return doc.name
-
 

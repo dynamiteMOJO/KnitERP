@@ -1,24 +1,24 @@
 import frappe
 from frappe.utils import flt
-from erpnext.subcontracting.doctype.subcontracting_receipt.subcontracting_receipt import (
-    SubcontractingReceipt
-)
-
-_original_validate = SubcontractingReceipt.validate
 
 
-def patched_validate(self):
-    # TEMP FIX: ERPNext bug (v16)
-    if not getattr(self, "customer_warehouse", None):
+def before_validate_set_customer_warehouse(doc, method=None):
+    """
+    doc_events handler: Subcontracting Receipt → before_validate
+
+    ERPNext's subcontracting controller reads customer_warehouse for customer-provided
+    RM routing (subcontracting_controller.py ~line 624), but the SCR doctype does not
+    natively carry that field in all paths. This handler injects it from supplier_warehouse
+    when missing, ensuring downstream validation/stock logic has the correct warehouse.
+
+    Registered via hooks.py doc_events. Not a monkey patch.
+    """
+    if not getattr(doc, "customer_warehouse", None):
         frappe.logger("kniterp").warning(
-            f"[SCR PATCH] Injecting customer_warehouse from supplier_warehouse for {self.name}"
+            f"[SCR] customer_warehouse missing on {doc.name!r} — "
+            f"injecting from supplier_warehouse ({doc.supplier_warehouse!r})"
         )
-        self.customer_warehouse = self.supplier_warehouse
-
-    return _original_validate(self)
-
-
-SubcontractingReceipt.validate = patched_validate
+        doc.customer_warehouse = doc.supplier_warehouse
 
 
 def on_submit_complete_job_cards(doc, method):
@@ -119,39 +119,5 @@ def _update_job_card_consumed_qty(jc, subcontracting_order, received_qty):
         "job_card_consumed_updated": jc.name,
         "consumed_map": consumed_map
     })
-
-
-def _check_and_complete_work_order(work_order_name):
-    """
-    Check if all Job Cards for a Work Order are complete and update WO status.
-    """
-    # Commit DB first to ensure the just-submitted Job Card is visible
-    frappe.db.commit()
-    
-    # Count pending (draft) Job Cards for this Work Order
-    pending_jcs = frappe.db.count(
-        "Job Card",
-        filters={
-            "work_order": work_order_name,
-            "docstatus": 0,  # Draft = not submitted
-        }
-    )
-    
-    if pending_jcs == 0:
-        # All Job Cards are submitted - update Work Order status
-        wo = frappe.get_doc("Work Order", work_order_name)
-        
-        if wo.status != "Completed":
-            try:
-                # Update manufactured qty from job cards
-                wo.update_work_order_qty()
-                
-                # Use the correct method - update_status()
-                wo.update_status()
-                
-                frappe.msgprint(f"Work Order {work_order_name} status updated to: {wo.status}", alert=True)
-            except Exception as e:
-                frappe.log_error(f"Error updating Work Order {work_order_name}: {str(e)}")
-                frappe.msgprint(f"Could not update Work Order status: {str(e)}", indicator="orange", alert=True)
 
 

@@ -13,6 +13,7 @@ from erpnext.subcontracting.doctype.subcontracting_bom.subcontracting_bom import
 from frappe.utils import flt
 from frappe.query_builder.functions import Sum
 import os
+from kniterp.api.access_control import require_production_write_access
 
 from erpnext.manufacturing.doctype.job_card.job_card import JobCard
 
@@ -52,6 +53,7 @@ def make_subcontracting_po(source_name, target_doc=None):
     """
     Fixed version of make_subcontracting_po that uses production_item instead of finished_good.
     """
+    require_production_write_access("create subcontracting purchase orders from job cards")
 
     def set_missing_values(source, target):
         # Use production_item instead of finished_good
@@ -330,6 +332,8 @@ class CustomJobCard(JobCard):
         
         Also scales raw material consumption proportionally to the actual manufactured qty.
         """
+        require_production_write_access("create semi-finished stock entries")
+
         from erpnext.stock.doctype.stock_entry_type.stock_entry_type import ManufactureEntry
         from erpnext.manufacturing.doctype.bom.bom import add_additional_cost
 

@@ -1416,7 +1416,7 @@ class ProductionWizard {
                 __('Complete Job Card {0} with {1} qty received? No additional subcontracting orders can be created after this.', [job_card, received]),
                 () => {
                     frappe.call({
-                        method: 'kniterp.api.production_wizard.complete_job_card',
+                        method: 'kniterp.api.production_wizard.complete_subcontracted_job_card',
                         args: { job_card: job_card },
                         freeze: true,
                         freeze_message: __('Completing Job Card...'),

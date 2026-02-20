@@ -11,6 +11,73 @@ from frappe.utils import flt, nowdate, getdate, add_days, cint
 import json
 from erpnext.stock.doctype.stock_entry_type.stock_entry_type import ManufactureEntry
 from erpnext.manufacturing.doctype.bom.bom import add_additional_cost
+from kniterp.api.access_control import require_production_write_access
+
+
+def log_manual_production_action(
+    action,
+    jc=None,
+    se=None,
+    wo=None,
+    qty_before=None,
+    qty_after=None,
+    status_before=None,
+    status_after=None,
+    mode=None,
+    outcome="success",
+    message=None,
+):
+    """
+    Append a structured timeline comment to the primary document(s) involved in a
+    manual production action (P1.4 audit trail).
+
+    Comment format:
+      [PRODUCTION ACTION] {action}
+      Actor: {user} | {timestamp}
+      Job Card: {jc} | WO: {wo} | SE: {se}
+      Qty: {qty_before} → {qty_after} | Status: {status_before} → {status_after}
+      Mode: {mode}
+      Outcome: {outcome} — {message}
+    """
+    import frappe.utils
+
+    timestamp = frappe.utils.now()
+    actor = frappe.session.user
+
+    text = (
+        f"[PRODUCTION ACTION] {action}\n"
+        f"Actor: {actor} | {timestamp}\n"
+        f"Job Card: {jc or '-'} | WO: {wo or '-'} | SE: {se or '-'}\n"
+        f"Qty: {qty_before if qty_before is not None else '-'} → {qty_after if qty_after is not None else '-'} "
+        f"| Status: {status_before or '-'} → {status_after or '-'}\n"
+        f"Mode: {mode or '-'}\n"
+        f"Outcome: {outcome} — {message or ''}"
+    )
+
+    # Add comment to Job Card (primary)
+    if jc:
+        try:
+            jc_doc = frappe.get_doc("Job Card", jc) if isinstance(jc, str) else jc
+            jc_doc.add_comment("Comment", text)
+        except Exception:
+            frappe.logger("kniterp").warning(f"[audit] Failed to add comment to Job Card {jc}")
+
+    # Echo to Stock Entry when SE is involved
+    if se:
+        try:
+            se_doc = frappe.get_doc("Stock Entry", se) if isinstance(se, str) else se
+            se_doc.add_comment("Comment", text)
+        except Exception:
+            frappe.logger("kniterp").warning(f"[audit] Failed to add comment to Stock Entry {se}")
+
+    # Echo to Work Order for WO-level visibility
+    if wo:
+        try:
+            wo_doc = frappe.get_doc("Work Order", wo) if isinstance(wo, str) else wo
+            wo_doc.add_comment("Comment", text)
+        except Exception:
+            frappe.logger("kniterp").warning(f"[audit] Failed to add comment to Work Order {wo}")
+
 
 
 def check_rm_availability(item_code, required_qty):
@@ -940,6 +1007,8 @@ def create_work_order(sales_order, sales_order_item):
     Create Work Order for a Sales Order item.
     Returns the created Work Order name.
     """
+    require_production_write_access("create work orders")
+
     # Get Sales Order Item
     soi = frappe.db.get_value(
         "Sales Order Item",
@@ -1137,6 +1206,8 @@ def start_work_order(work_order, operation_settings=None):
     Submit Work Order to start production.
     This will create Job Cards for each operation.
     """
+    require_production_write_access("start work orders")
+
     if operation_settings and isinstance(operation_settings, str):
         operation_settings = json.loads(operation_settings)
 
@@ -1233,6 +1304,8 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None, rate=
     This creates PO, submits it. ERPNext may auto-create SCO on PO submit (based on settings).
     If not auto-created, we create it manually.
     """
+    require_production_write_access("create subcontracting orders")
+
     wo = frappe.get_doc("Work Order", work_order)
     
     if wo.docstatus != 1:
@@ -1508,6 +1581,8 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
     """
     Mark an in-house operation as complete by updating the Job Card.
     """
+    require_production_write_access("complete operations")
+
     qty = flt(qty)
     
     # Find the job card
@@ -1614,14 +1689,13 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
             # Add additional costs (operating costs)
             wo_doc = frappe.get_doc("Work Order", job_card.work_order)
             
-            # For SCIO WOs doing incremental production, transfer any new
-            # SCIO SREs to the WO before consuming stock. When a second batch
-            # of RM is received, the SCIO creates a new SRE, but since the WO
-            # was already submitted, the transfer never happened automatically.
-            if wo_doc.subcontracting_inward_order and wo_doc.reserve_stock:
-                wo_doc._action = "update_after_submit"
-                wo_doc.update_stock_reservation()
-                wo_doc.reload()
+            # Sync SCIO SREs to WO before consuming stock (service layer — P1.2)
+            from kniterp.api.stock_reservation_service import (
+                sync_scio_sre_before_manufacture,
+                ensure_scio_fg_sre,
+                recalculate_bin_reserved_for_direct_consumption,
+            )
+            sync_scio_sre_before_manufacture(wo_doc)
             
             # FIX: Ensure Work Order Operation 'completed_qty' is updated in memory
             # Standard update_work_order might not reflect Draft Job Card quantities in DB immediately/correctly
@@ -1649,70 +1723,12 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
             ste.stock_entry.submit()
             stock_entry_name = ste.stock_entry.name
             
-            # Explicitly create FG SRE for SCIO WOs
-            # Since ERPNext v15/v16 doesn't auto-create FG SREs for subsequent batches
-            # (or for Manufacture SEs generally in this context), we manually create it
-            # to ensure the produced FG is reserved against the SCIO.
-            if wo_doc.subcontracting_inward_order:
-                for row in ste.stock_entry.items:
-                    if row.is_finished_item and not row.is_scrap_item:
-                         # Check if SRE already exists to avoid duplicates
-                        existing_sre = frappe.db.get_value("Stock Reservation Entry", {
-                            "item_code": row.item_code,
-                            "warehouse": row.t_warehouse,
-                            "voucher_type": "Subcontracting Inward Order",
-                            "voucher_no": wo_doc.subcontracting_inward_order,
-                            "from_voucher_type": "Stock Entry",
-                            "from_voucher_no": ste.stock_entry.name,
-                            "from_voucher_detail_no": row.name,
-                            "docstatus": 1
-                        })
-                        
-                        if not existing_sre:
-                            scio_item_qty = frappe.db.get_value("Subcontracting Inward Order Item", wo_doc.subcontracting_inward_order_item, "qty")
-                            
-                            sre = frappe.new_doc("Stock Reservation Entry")
-                            sre.item_code = row.item_code
-                            sre.warehouse = row.t_warehouse
-                            sre.voucher_type = "Subcontracting Inward Order"
-                            sre.voucher_no = wo_doc.subcontracting_inward_order
-                            sre.voucher_detail_no = wo_doc.subcontracting_inward_order_item
-                            sre.available_qty = frappe.db.get_value("Bin", {"item_code": row.item_code, "warehouse": row.t_warehouse}, "actual_qty") or 0
-                            sre.voucher_qty = scio_item_qty
-                            sre.reserved_qty = row.qty
-                            sre.company = ste.stock_entry.company
-                            sre.stock_uom = row.stock_uom
-                            
-                            sre.from_voucher_type = "Stock Entry"
-                            sre.from_voucher_no = ste.stock_entry.name
-                            sre.from_voucher_detail_no = row.name
-                            
-                            sre.insert()
-                            sre.submit()
+            # Create FG SRE for SCIO WOs (service layer — P1.2)
+            ensure_scio_fg_sre(wo_doc, ste.stock_entry)
             
-            # Update reserved_qty_for_production in Bin for directly consumed items.
-            # When WO has skip_transfer=0 but JC has skip_material_transfer=1,
-            # the standard formula (required_qty - transferred_qty) doesn't account
-            # for direct consumption, leaving reserved_qty_for_production stale.
-            if wo_doc.skip_transfer == 0 and wo_doc.subcontracting_inward_order:
-                wo_doc.reload()
-                for row in ste.stock_entry.items:
-                    if not row.is_finished_item and not row.is_scrap_item and row.s_warehouse:
-                        from erpnext.stock.utils import get_bin
-                        stock_bin = get_bin(row.item_code, row.s_warehouse)
-                        stock_bin.update_reserved_qty_for_production()
-                        
-                        # Standard recalc still uses required-transferred, so manually
-                        # subtract consumed_qty that the standard formula missed.
-                        wo_item = next(
-                            (d for d in wo_doc.required_items if d.item_code == row.item_code
-                             and d.source_warehouse == row.s_warehouse), None
-                        )
-                        if wo_item and flt(wo_item.consumed_qty) > 0:
-                            adjusted = max(0, flt(stock_bin.reserved_qty_for_production) - flt(wo_item.consumed_qty))
-                            stock_bin.db_set("reserved_qty_for_production", adjusted, update_modified=False)
-                            stock_bin.set_projected_qty()
-                            stock_bin.db_set("projected_qty", stock_bin.projected_qty, update_modified=False)
+            # Recalculate Bin reserved_qty_for_production for direct consumption (service layer — P1.2)
+            wo_doc.reload()
+            recalculate_bin_reserved_for_direct_consumption(wo_doc, ste.stock_entry, mode="complete")
             
             frappe.msgprint(_("Stock Entry {0} created for {1} {2}").format(
                 frappe.utils.get_link_to_form("Stock Entry", stock_entry_name), 
@@ -1760,6 +1776,19 @@ def complete_operation(work_order, operation, qty, workstation=None, employee=No
 @frappe.whitelist()
 def complete_job_card(job_card, additional_qty=0, process_loss_qty=0, 
                       wip_warehouse=None, skip_material_transfer=None, source_warehouses=None):
+    require_production_write_access("complete job cards")
+    return _complete_job_card_inhouse(
+        job_card=job_card,
+        additional_qty=additional_qty,
+        process_loss_qty=process_loss_qty,
+        wip_warehouse=wip_warehouse,
+        skip_material_transfer=skip_material_transfer,
+        source_warehouses=source_warehouses,
+    )
+
+
+def _complete_job_card_inhouse(job_card, additional_qty=0, process_loss_qty=0, 
+                               wip_warehouse=None, skip_material_transfer=None, source_warehouses=None):
     """
     Complete a Job Card - validate, submit it and create stock entry.
     
@@ -1839,8 +1868,28 @@ def complete_job_card(job_card, additional_qty=0, process_loss_qty=0,
     # if there are no pending operations
     wo = frappe.get_doc("Work Order", jc.work_order)
     wo.update_status()
-    
-    return jc.name
+
+    # Audit trail (P1.4)
+    log_manual_production_action(
+        action="complete_job_card_inhouse",
+        jc=jc.name,
+        wo=jc.work_order,
+        qty_before=flt(jc.total_completed_qty) - flt(additional_qty),
+        qty_after=flt(jc.total_completed_qty),
+        status_before="Draft",
+        status_after="Submitted",
+        mode="inhouse",
+        outcome="success",
+        message=f"Job Card manually completed. process_loss_qty={process_loss_qty}",
+    )
+
+    return {
+        "success": True,
+        "job_card": jc.name,
+        "message": _("Job Card {0} completed successfully").format(jc.name),
+        "mode": "inhouse",
+        "received_qty": None,
+    }
 
 @frappe.whitelist()
 def get_production_logs(job_card):
@@ -1896,6 +1945,8 @@ def revert_production_entry(stock_entry):
     1. Cancel the Stock Entry.
     2. Remove the corresponding Time Log from Job Card.
     """
+    require_production_write_access("revert production entries")
+
     try:
         se = frappe.get_doc("Stock Entry", stock_entry)
         if se.docstatus != 1:
@@ -1904,94 +1955,22 @@ def revert_production_entry(stock_entry):
         job_card_name = se.job_card
         qty = se.fg_completed_qty
         
-        # For SCIO WOs, cancel FG SREs linked to this Stock Entry.
-        # The SCIO auto-creates SREs for produced FG items with
-        # from_voucher_no pointing to the Manufacture SE.
-        # Frappe's link validation blocks cancelling the SE while
-        # linked SREs exist, so we must cancel the SREs first.
+        # Release SCIO FG SREs before cancelling SE (service layer — P1.2)
+        wo_doc = None
         if se.work_order:
             wo_doc = frappe.get_doc("Work Order", se.work_order)
-            if wo_doc.subcontracting_inward_order:
-                linked_sres = frappe.get_all(
-                    "Stock Reservation Entry",
-                    filters={
-                        "from_voucher_type": "Stock Entry",
-                        "from_voucher_no": se.name,
-                        "docstatus": 1,
-                    },
-                    pluck="name"
-                )
-                for sre_name in linked_sres:
-                    sre_doc = frappe.get_doc("Stock Reservation Entry", sre_name)
-                    sre_doc.cancel()
-                
-                # NEW: Also reduce reservation from ANY active SRE for this SCIO/Item/Warehouse
-                # to free up stock for the revert. This handles cases where the immediate SRE
-                # is already "Delivered" but a stale SRE blocks the stock removal.
-                qty_to_free = flt(se.fg_completed_qty)
-                fg_row = next((r for r in se.items if r.is_finished_item and not r.is_scrap_item), None)
-                
-                if fg_row and qty_to_free > 0:
-                     blocking_sres = frappe.get_all("Stock Reservation Entry",
-                        filters={
-                             "voucher_type": "Subcontracting Inward Order",
-                             "voucher_no": wo_doc.subcontracting_inward_order,
-                             "item_code": fg_row.item_code,
-                             "warehouse": fg_row.t_warehouse,
-                             "docstatus": 1,
-                             "status": ["in", ["Reserved", "Partially Delivered", "Partially Reserved"]]
-                        },
-                        fields=["name", "reserved_qty", "delivered_qty"],
-                        order_by="creation desc"
-                    )
-                    
-                     for s in blocking_sres:
-                        if qty_to_free <= 0:
-                            break
-                        
-                        current_reserved = flt(s.reserved_qty)
-                        current_delivered = flt(s.delivered_qty)
-                        net_reserved = current_reserved - current_delivered
-                        
-                        if net_reserved > 0:
-                            reduce_by = min(net_reserved, qty_to_free)
-                            
-                            sre_doc = frappe.get_doc("Stock Reservation Entry", s.name)
-                            
-                            # If fully unreserving a pure reservation (no delivery), cancel it
-                            if current_delivered <= 0 and reduce_by >= current_reserved:
-                                sre_doc.cancel()
-                            else:
-                                # Reduce reserved_qty to free up net_reserved amount
-                                new_reserved = flt(current_reserved - reduce_by)
-                                sre_doc.db_set("reserved_qty", new_reserved)
-                                sre_doc.update_status()
-                                sre_doc.update_reserved_stock_in_bin()
-                                
-                            qty_to_free -= reduce_by
+            from kniterp.api.stock_reservation_service import (
+                release_scio_fg_sres_on_revert,
+                recalculate_bin_reserved_for_direct_consumption,
+            )
+            release_scio_fg_sres_on_revert(wo_doc, se)
         
         # 1. Cancel Stock Entry
         se.cancel()
         
-        # Update reserved_qty_for_production in Bin for SCIO WOs (mirrors logic in complete_operation)
-        if se.work_order:
-            wo_doc = frappe.get_doc("Work Order", se.work_order)
-            if wo_doc.skip_transfer == 0 and wo_doc.subcontracting_inward_order:
-                for row in se.items:
-                    if not row.is_finished_item and not row.is_scrap_item and row.s_warehouse:
-                        from erpnext.stock.utils import get_bin
-                        stock_bin = get_bin(row.item_code, row.s_warehouse)
-                        stock_bin.update_reserved_qty_for_production()
-                        
-                        wo_item = next(
-                            (d for d in wo_doc.required_items if d.item_code == row.item_code
-                             and d.source_warehouse == row.s_warehouse), None
-                        )
-                        if wo_item and flt(wo_item.consumed_qty) > 0:
-                            adjusted = max(0, flt(stock_bin.reserved_qty_for_production) - flt(wo_item.consumed_qty))
-                            stock_bin.db_set("reserved_qty_for_production", adjusted, update_modified=False)
-                            stock_bin.set_projected_qty()
-                            stock_bin.db_set("projected_qty", stock_bin.projected_qty, update_modified=False)
+        # Recalculate Bin reserved_qty_for_production after cancel (service layer — P1.2)
+        if wo_doc:
+            recalculate_bin_reserved_for_direct_consumption(wo_doc, se, mode="revert")
         
         # 2. Update Job Card
         if job_card_name:
@@ -2026,6 +2005,21 @@ def revert_production_entry(stock_entry):
                 jc.set_manufactured_qty()
                 jc.update_work_order()
                 
+                # Audit trail (P1.4)
+                log_manual_production_action(
+                    action="revert_production_entry",
+                    jc=job_card_name,
+                    se=stock_entry,
+                    wo=se.work_order,
+                    qty_before=flt(qty),
+                    qty_after=flt(new_total_completed),
+                    status_before="Submitted",
+                    status_after="Cancelled",
+                    mode="inhouse",
+                    outcome="success",
+                    message=f"Stock Entry cancelled and Time Log removed.",
+                )
+
                 frappe.msgprint(_("Reverted production entry. Stock Entry {0} cancelled and Time Log removed.").format(stock_entry))
             else:
                  frappe.msgprint(_("Stock Entry {0} cancelled. However, could not find an exact matching Time Log of {1} units to remove. Please update Job Card manually if needed.").format(stock_entry, qty))
@@ -2039,6 +2033,8 @@ def update_production_entry(stock_entry, qty, employee, workstation):
     """
     Update a production entry (Revert + New Entry).
     """
+    require_production_write_access("update production entries")
+
     try:
         # 1. Get details before reverting
         se = frappe.get_doc("Stock Entry", stock_entry)
@@ -2063,7 +2059,22 @@ def update_production_entry(stock_entry, qty, employee, workstation):
             workstation=workstation,
             employee=employee
         )
-        
+
+        # Audit trail (P1.4)
+        log_manual_production_action(
+            action="update_production_entry",
+            jc=job_card_name,
+            se=stock_entry,
+            wo=work_order_name,
+            qty_before=flt(se.fg_completed_qty),
+            qty_after=flt(qty),
+            status_before="Submitted",
+            status_after="Cancelled+Recreated",
+            mode="inhouse",
+            outcome="success",
+            message=f"Stock Entry replaced. New qty={qty}, workstation={workstation}, employee={employee}.",
+        )
+
         frappe.msgprint(_("Production entry updated successfully."))
         
     except Exception as e:
@@ -2081,6 +2092,8 @@ def receive_subcontracted_goods(purchase_order, qty=None, rate=None, supplier_de
     Create Subcontracting Receipt to receive goods from subcontractor.
     Auto-updates Job Card and Work Order status.
     """
+    require_production_write_access("receive subcontracted goods")
+
     po = frappe.get_doc("Purchase Order", purchase_order)
     
     if po.docstatus != 1:
@@ -2156,6 +2169,8 @@ def create_purchase_orders_for_shortage(items, supplier, schedule_date=None, war
         warehouse: Target warehouse (optional, uses item's warehouse if not provided)
         submit: If True, submit the PO (default: True)
     """
+    require_production_write_access("create purchase orders for shortages")
+
     if isinstance(items, str):
         items = json.loads(items)
     
@@ -2232,6 +2247,8 @@ def transfer_materials_to_subcontractor(subcontracting_order):
     """
     Create Stock Entry to transfer materials to subcontractor warehouse.
     """
+    require_production_write_access("transfer materials to subcontractor")
+
     sco = frappe.get_doc("Subcontracting Order", subcontracting_order)
     
     if sco.docstatus != 1:
@@ -2329,6 +2346,8 @@ def create_delivery_note(sales_order, items=None):
     Uses actual produced/received qty instead of Sales Order pending qty.
     Checks for existing draft DN before creating new one.
     """
+    require_production_write_access("create delivery notes")
+
     # 1. Check for existing draft Delivery Note for this Sales Order
     existing_draft = frappe.db.get_value(
         "Delivery Note Item",
@@ -2501,6 +2520,8 @@ def create_sales_invoice(sales_order):
     Create Sales Invoice for a Sales Order.
     Prioritizes billing against Delivery Notes to support over-delivery and split deliveries.
     """
+    require_production_write_access("create sales invoices")
+
     # Check for existing draft Sales Invoice for this Sales Order
     existing_draft = frappe.db.get_value(
         "Sales Invoice Item",
@@ -2634,6 +2655,8 @@ def create_scio_sales_invoice(sales_order_item):
     - Service qty = FG delivered * (service_qty / fg_item_qty)
     - Already billed qty is subtracted to get the invoiceable amount
     """
+    require_production_write_access("create SCIO sales invoices")
+
     # Get SOI details
     soi = frappe.db.get_value(
         "Sales Order Item",
@@ -2738,6 +2761,8 @@ def create_subcontracting_inward_order(sales_order, sales_order_item):
     """
     Create Subcontracting Inward Order for a Sales Order item.
     """
+    require_production_write_access("create subcontracting inward orders")
+
     soi = frappe.db.get_value(
         "Sales Order Item",
         sales_order_item,
@@ -2900,6 +2925,8 @@ def add_production_note(sales_order_item, note):
     """
     Add a new note to the production wizard item.
     """
+    require_production_write_access("add production notes")
+
     if not note:
         frappe.throw(_("Note content is required"))
 
@@ -2923,6 +2950,8 @@ def delete_production_note(note_name):
     Delete a production wizard note.
     Only the creator or System Manager can delete.
     """
+    require_production_write_access("delete production notes")
+
     if not frappe.db.exists("Production Wizard Note", note_name):
         frappe.throw(_("Note not found"))
 
@@ -2934,13 +2963,90 @@ def delete_production_note(note_name):
     note.delete()
     return "deleted"
 
+def _validate_so_item_bom_mutation_allowed(sales_order_item, bom_no):
+    """
+    Guard helper for update_so_item_bom (P1.3).
+
+    Rejects BOM mutation when:
+      - WO already exists (any non-cancelled state) — BOM is already consumed for planning/operations.
+      - SCIO Item already exists — subcontracting is in flight with this BOM.
+      - BOM is inactive or not submitted.
+      - BOM's item doesn't match the SO Item's production context.
+    """
+    soi = frappe.db.get_value(
+        "Sales Order Item",
+        sales_order_item,
+        ["item_code", "fg_item", "parent", "bom_no"],
+        as_dict=True
+    )
+    if not soi:
+        frappe.throw(_("Sales Order Item {0} not found").format(sales_order_item))
+
+    so = frappe.db.get_value("Sales Order", soi.parent, "is_subcontracted")
+    production_item = soi.fg_item if so else soi.item_code
+
+    # --- Lifecycle guard: Work Order ---
+    blocking_wo = frappe.db.get_value(
+        "Work Order",
+        {"sales_order_item": sales_order_item, "docstatus": ["!=", 2]},
+        "name"
+    )
+    if blocking_wo:
+        frappe.throw(
+            _("Cannot change BOM: Work Order <b>{0}</b> already exists for this Sales Order Item. "
+              "Cancel and close the Work Order before modifying the BOM.").format(blocking_wo)
+        )
+
+    # --- Lifecycle guard: Subcontracting Inward Order ---
+    blocking_scio_item = frappe.db.get_value(
+        "Subcontracting Inward Order Item",
+        {"sales_order_item": sales_order_item, "docstatus": ["!=", 2]},
+        "parent"
+    )
+    if blocking_scio_item:
+        frappe.throw(
+            _("Cannot change BOM: Subcontracting Inward Order <b>{0}</b> already exists for this "
+              "Sales Order Item. Cancel the order before modifying the BOM.").format(blocking_scio_item)
+        )
+
+    # --- BOM validity ---
+    bom = frappe.db.get_value(
+        "BOM",
+        bom_no,
+        ["name", "item", "is_active", "docstatus"],
+        as_dict=True
+    )
+    if not bom:
+        frappe.throw(_("BOM {0} not found.").format(bom_no))
+    if bom.docstatus != 1:
+        frappe.throw(_("BOM {0} is not submitted (current status: {1}).").format(bom_no, bom.docstatus))
+    if not bom.is_active:
+        frappe.throw(_("BOM {0} is inactive. Only active BOMs can be assigned.").format(bom_no))
+    if bom.item != production_item:
+        frappe.throw(
+            _("BOM {0} is for item <b>{1}</b>, but this Sales Order Item requires a BOM for <b>{2}</b>.").format(
+                bom_no, bom.item, production_item
+            )
+        )
+
+    return soi.bom_no  # return old BOM for audit/response
+
+
 @frappe.whitelist()
 def update_so_item_bom(sales_order_item, bom_no):
     """
     Update the BOM number for a specific Sales Order Item.
+    Guarded: rejects if WO or SCIO exists, or BOM is invalid/inactive.
     """
+    require_production_write_access("update sales order item BOM")
+
+    old_bom = _validate_so_item_bom_mutation_allowed(sales_order_item, bom_no)
     frappe.db.set_value("Sales Order Item", sales_order_item, "bom_no", bom_no)
-    return {"message": "BOM Updated"}
+    return {
+        "message": "BOM Updated",
+        "old_bom": old_bom,
+        "new_bom": bom_no,
+    }
 
 
 @frappe.whitelist()
@@ -3089,7 +3195,12 @@ def get_batch_production_summary(sales_order_item):
 
 
 @frappe.whitelist()
-def complete_job_card(job_card):
+def complete_subcontracted_job_card(job_card):
+    require_production_write_access("complete subcontracted job cards")
+    return _complete_job_card_subcontracted(job_card)
+
+
+def _complete_job_card_subcontracted(job_card):
     """
     Manually complete a subcontracted Job Card from the Production Wizard.
     This is used when the user decides no more subcontracting orders will be created.
@@ -3097,9 +3208,30 @@ def complete_job_card(job_card):
     jc = frappe.get_doc("Job Card", job_card)
     
     if jc.docstatus == 1:
-        # Already submitted - just update status
+        # Already submitted — just force status; audit this high-risk path explicitly.
+        prev_status = jc.status
         jc.db_set("status", "Completed")
-        return {"success": True, "message": f"Job Card {job_card} marked as Completed"}
+
+        # Audit trail (P1.4 — submitted-doc force path)
+        log_manual_production_action(
+            action="complete_subcontracted_job_card_force_status",
+            jc=jc.name,
+            wo=jc.work_order,
+            qty_after=flt(jc.manufactured_qty),
+            status_before=prev_status,
+            status_after="Completed",
+            mode="subcontracted",
+            outcome="success",
+            message="Status forced on already-submitted Job Card (no re-submission).",
+        )
+
+        return {
+            "success": True,
+            "job_card": jc.name,
+            "message": _("Job Card {0} marked as Completed").format(job_card),
+            "mode": "subcontracted",
+            "received_qty": flt(jc.manufactured_qty),
+        }
     
     if jc.docstatus == 2:
         frappe.throw(_("Cannot complete a cancelled Job Card"))
@@ -3137,15 +3269,27 @@ def complete_job_card(job_card):
             wo = frappe.get_doc("Work Order", jc.work_order)
             wo.update_work_order_qty()
             wo.update_status()
-        
-        frappe.db.commit()
-        
+
+        # Audit trail (P1.4)
+        log_manual_production_action(
+            action="complete_subcontracted_job_card",
+            jc=jc.name,
+            wo=jc.work_order,
+            qty_after=received_qty,
+            status_before="Draft",
+            status_after="Submitted",
+            mode="subcontracted",
+            outcome="success",
+            message=f"Subcontracted Job Card manually completed. received_qty={received_qty}",
+        )
+
         return {
-            "success": True, 
-            "message": f"Job Card {job_card} completed with {received_qty} qty",
-            "received_qty": received_qty
+            "success": True,
+            "job_card": jc.name,
+            "message": _("Job Card {0} completed with {1} qty").format(job_card, received_qty),
+            "mode": "subcontracted",
+            "received_qty": received_qty,
         }
     except Exception as e:
         frappe.log_error(f"Error completing Job Card {job_card}: {str(e)}")
         frappe.throw(str(e))
-

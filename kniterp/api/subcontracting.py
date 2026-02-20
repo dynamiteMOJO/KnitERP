@@ -1,4 +1,5 @@
 import frappe
+from kniterp.api.access_control import require_production_write_access
 
 @frappe.whitelist()
 def get_subcontract_po_items(sales_order):
@@ -29,6 +30,7 @@ def get_subcontract_po_items(sales_order):
 
 @frappe.whitelist()
 def make_subcontract_purchase_order(sales_order, supplier, items):
+    require_production_write_access("create subcontract purchase orders")
     items = frappe.parse_json(items)
 
     po = frappe.new_doc("Purchase Order")

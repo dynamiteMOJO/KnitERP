@@ -1,5 +1,6 @@
-import kniterp.kniterp.overrides.subcontracting_receipt
 import kniterp.kniterp.overrides.job_card
+import kniterp.kniterp.overrides.sre_dashboard_fix  # guarded patch — see module docstring
+
 
 app_name = "kniterp"
 app_title = "Kniterp"
@@ -68,6 +69,7 @@ doc_events = {
         "on_submit": "kniterp.subcontracting.on_pr_submit_complete_job_cards"
     },
     "Subcontracting Receipt": {
+        "before_validate": "kniterp.kniterp.overrides.subcontracting_receipt.before_validate_set_customer_warehouse",
         "on_submit": "kniterp.kniterp.overrides.subcontracting_receipt.on_submit_complete_job_cards"
     },
     "Stock Entry": {
