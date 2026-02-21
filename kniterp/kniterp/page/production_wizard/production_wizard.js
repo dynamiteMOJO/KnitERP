@@ -2596,6 +2596,10 @@ class ProductionWizard {
         // Round to 3 decimals
         initial_plan_qty = parseFloat(initial_plan_qty.toFixed(3));
 
+        // Calculate remaining to produce for Total Planning Mode
+        const produced = details.work_order?.produced_qty || 0;
+        const remaining_to_produce = Math.max(0, base_parent_qty - produced);
+
         const d = new frappe.ui.Dialog({
             title: title,
             size: 'large',
@@ -2642,12 +2646,13 @@ class ProductionWizard {
                     fieldname: 'include_available_stock',
                     fieldtype: 'Check',
                     label: __('Consider Available Stock for Planning'),
-                    default: 0,
+                    default: 1,
                     description: __('If checked, the calculator will deduct available raw material stock from the required quantity. Default plan quantity will be set to remaining production (Pending - Produced).'),
                     onchange: function () {
                         const checked = this.get_value();
                         if (checked) {
                             // Switch to Total Planning Mode
+
                             // Default to Remaining Production: Total Pending (Sales) - Already Produced
                             const produced = details.work_order?.produced_qty || 0;
                             const remaining_to_produce = Math.max(0, base_parent_qty - produced);
@@ -2664,7 +2669,7 @@ class ProductionWizard {
                     fieldname: 'parent_qty',
                     fieldtype: 'Float',
                     label: __('Plan for Quantity of ' + (details.production_item || details.item_code)),
-                    default: initial_plan_qty,
+                    default: remaining_to_produce,
                     onchange: function () {
                         const new_parent_qty = this.get_value() || 0;
                         const include_stock = d.get_value('include_available_stock');
@@ -2787,6 +2792,18 @@ class ProductionWizard {
 
         d.fields_dict.items_html.$wrapper.html(items_html);
         d.show();
+
+        // Bind manual editing events to inputs
+        d.$wrapper.find('.item-qty').on('input', function () {
+            self._recalculate_manual_qty(d, shortage_items, base_parent_qty);
+        });
+
+        // Trigger initial calculation to ensure the dialog state matches the checked option
+        setTimeout(() => {
+            if (d && d.fields_dict && d.fields_dict.parent_qty) {
+                d.fields_dict.parent_qty.df.onchange.call(d.fields_dict.parent_qty);
+            }
+        }, 100);
     }
 
     _create_po_from_dialog(dialog, values, shortage_items, open_form) {
@@ -2844,6 +2861,112 @@ class ProductionWizard {
                 }
             }
         });
+    }
+
+    _recalculate_manual_qty(d, shortage_items, base_parent_qty) {
+        const include_stock = d.get_value('include_available_stock');
+
+        let min_producible_fg = Infinity;
+        let limiting_item = null;
+
+        const manual_quantities = [];
+
+        // 1. First Pass: Find the Limiting RM and Max Producible FG
+        shortage_items.forEach((item, i) => {
+            const $input = d.$wrapper.find(`.item-qty[data-idx="${i}"]`);
+            const order_qty = parseFloat($input.val()) || 0;
+            manual_quantities.push(order_qty);
+
+            const net_req = item.required_qty || 0;
+            const consumed = item.consumed_qty || 0;
+            const total_req_for_batch = net_req + consumed;
+            if (total_req_for_batch <= 0) return;
+
+            const ratio = total_req_for_batch / base_parent_qty;
+
+            let total_available_for_production = order_qty;
+            if (include_stock) {
+                total_available_for_production += Math.max(0, parseFloat(item.available_qty || 0));
+            }
+
+            const producible_fg = total_available_for_production / ratio;
+            if (producible_fg < min_producible_fg) {
+                min_producible_fg = producible_fg;
+                limiting_item = item;
+            }
+        });
+
+        if (min_producible_fg === Infinity || !limiting_item) return;
+
+        // 2. Second Pass: Calculate differences
+        let info_html = `<div class="mt-4 p-3 mb-0" style="background-color: var(--control-bg); border-radius: 4px; border: 1px solid var(--border-color);">`;
+        info_html += `<div class="font-weight-bold mb-2"><i class="fa fa-info-circle text-info"></i> ${__('Manual Input Analysis')}</div>`;
+        info_html += `<div class="small mb-2">${__('Based on the quantities entered below, you can produce a maximum of')} <strong class="text-success">${parseFloat(min_producible_fg).toFixed(3)}</strong> ${__('units of Finished Goods.')}</div>`;
+        let excess_html = '';
+
+        // Find max FG possible if limiting_item wasn't limiting (to find how much limiting item is needed to balance)
+        let max_producible_fg_without_limit = 0;
+
+        shortage_items.forEach((item, i) => {
+            if (item.item_code === limiting_item.item_code) return;
+
+            const net_req = item.required_qty || 0;
+            const consumed = item.consumed_qty || 0;
+            const ratio = (net_req + consumed) / base_parent_qty;
+
+            let actual_available = manual_quantities[i];
+            if (include_stock) {
+                actual_available += Math.max(0, parseFloat(item.available_qty || 0));
+            }
+
+            const fg_possible = actual_available / ratio;
+            if (fg_possible > max_producible_fg_without_limit) {
+                max_producible_fg_without_limit = fg_possible;
+            }
+
+            const required_for_fg = min_producible_fg * ratio;
+            const excess = actual_available - required_for_fg;
+
+            if (excess > 0.001) {
+                excess_html += `<li class="mt-1 border-bottom pb-1"><strong>${item.item_code}</strong>: ${__('Excess of')} <span class="text-warning font-weight-bold">${parseFloat(excess).toFixed(3)}</span> ${item.uom || ''}</li>`;
+            }
+        });
+
+        info_html += `<div class="small mb-2 pt-1">`;
+        info_html += `<div>${__('Limiting Raw Material:')} <strong class="text-danger">${limiting_item.item_code}</strong></div>`;
+
+        if (excess_html) {
+            // Calculate how much limiting item is needed to balance the highest excess
+            const limit_ratio = ((limiting_item.required_qty || 0) + (limiting_item.consumed_qty || 0)) / base_parent_qty;
+            const limiting_item_qty_needed = max_producible_fg_without_limit * limit_ratio;
+
+            let current_limit_qty = parseFloat(d.$wrapper.find(`.item-qty[data-idx="${shortage_items.findIndex(m => m.item_code === limiting_item.item_code)}"]`).val()) || 0;
+            if (include_stock) {
+                current_limit_qty += Math.max(0, parseFloat(limiting_item.available_qty || 0));
+            }
+
+            const limiting_shortage = limiting_item_qty_needed - current_limit_qty;
+
+            if (limiting_shortage > 0.001) {
+                info_html += `<div class="text-danger mt-1 pl-2 mb-2" style="border-left: 2px solid #ff5858; opacity: 0.9;">
+                     <i class="fa fa-exclamation-triangle"></i> 
+                     ${__('Short by <strong>{0}</strong> {1}',
+                    [parseFloat(limiting_shortage).toFixed(3), limiting_item.uom || ''])}
+                 </div>`;
+            }
+        }
+        info_html += `</div>`;
+
+        if (excess_html) {
+            info_html += `<div class="small mt-2 pt-2 border-top"><strong>${__('Excess Materials Ordered:')}</strong><ul class="mb-0 pl-3 list-unstyled">` + excess_html + '</ul></div>';
+            info_html += `<div class="mt-2 text-muted small"><i class="fa fa-lightbulb-o text-warning"></i> ${__('Tip: To balance this order, either add the exact short amount to your limit material, or reduce the excess amounts.')}</div>`;
+        } else {
+            info_html += `<div class="small mt-2 pt-2 border-top text-success"><i class="fa fa-check"></i> ${__('Materials are perfectly balanced.')}</div>`;
+        }
+
+        info_html += `</div>`;
+
+        d.fields_dict.calc_info.$wrapper.html(info_html);
     }
 
     create_delivery_note(details) {
