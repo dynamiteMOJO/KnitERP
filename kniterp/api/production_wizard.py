@@ -420,7 +420,7 @@ def get_production_details(sales_order_item):
         sales_order_item,
         ["name", "parent", "item_code", "item_name", "qty", "delivered_qty", 
          "delivery_date", "warehouse", "bom_no", "description", "fg_item", "fg_item_qty",
-         "stock_uom", "billed_amt", "amount", "rate"],
+         "stock_uom", "billed_amt", "amount", "rate", "custom_transaction_params_json"],
         as_dict=True
     )
     
@@ -998,7 +998,8 @@ def get_production_details(sales_order_item):
         "amount": soi.amount,
         "rate": soi.rate,
         "draft_sales_invoice": draft_sales_invoice,
-        "notes": get_notes(soi.name)
+        "notes": get_notes(soi.name),
+        "transaction_parameters": json.loads(soi.custom_transaction_params_json or '[]')
     }
 
 
@@ -1445,6 +1446,18 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None, rate=
             
     po.flags.ignore_mandatory = True
     po.insert()
+
+    # Copy transaction parameters from linked Sales Order Item to PO item (per-item via JSON field)
+    so_item_name = wo.sales_order_item
+    if so_item_name and po.items:
+        so_item_doc = frappe.get_doc("Sales Order Item", so_item_name)
+        params_json = so_item_doc.custom_transaction_params_json or '[]'
+        if params_json and params_json != '[]':
+            po_doc = frappe.get_doc("Purchase Order", po.name)
+            po_doc.items[0].custom_transaction_params_json = params_json
+            po_doc.save(ignore_permissions=True)
+            po = po_doc
+
     po.submit()
     
     # Check if SCO was auto-created by ERPNext (based on Buying Settings)
@@ -2948,6 +2961,108 @@ def get_notes(sales_order_item):
         note.user_image = user.user_image
 
     return notes
+
+@frappe.whitelist()
+def get_transaction_parameters(sales_order_item):
+    """
+    Fetch all transaction parameters for a specific sales order item.
+    Returns list of {name, parameter, value}.
+    """
+    return frappe.get_all(
+        "SO Transaction Parameter",
+        filters={"sales_order_item": sales_order_item},
+        fields=["name", "parameter", "value"],
+        order_by="creation asc"
+    )
+
+@frappe.whitelist()
+def save_transaction_parameters(sales_order, sales_order_item, item_code, params):
+    """
+    Bulk save transaction parameters for a sales order item.
+    Deletes existing params and recreates from the provided list.
+    
+    Args:
+        sales_order: Sales Order name
+        sales_order_item: Sales Order Item row name
+        item_code: Item Code (for reference)
+        params: list of {parameter, value}
+    """
+    import json
+    if isinstance(params, str):
+        params = json.loads(params)
+    
+    # Delete existing params for this SO Item
+    existing = frappe.get_all(
+        "SO Transaction Parameter",
+        filters={"sales_order_item": sales_order_item},
+        pluck="name"
+    )
+    for name in existing:
+        frappe.delete_doc("SO Transaction Parameter", name, ignore_permissions=True)
+    
+    # Create new params
+    count = 0
+    for p in params:
+        if p.get("parameter") and p.get("value"):
+            doc = frappe.get_doc({
+                "doctype": "SO Transaction Parameter",
+                "sales_order": sales_order,
+                "sales_order_item": sales_order_item,
+                "item_code": item_code,
+                "parameter": p["parameter"],
+                "value": p["value"]
+            })
+            doc.insert(ignore_permissions=True)
+            count += 1
+    
+    frappe.db.commit()
+    return {"count": count}
+
+@frappe.whitelist()
+def get_po_transaction_parameters(purchase_order_item):
+    """
+    Fetch all transaction parameters for a specific purchase order item.
+    """
+    return frappe.get_all(
+        "PO Transaction Parameter",
+        filters={"purchase_order_item": purchase_order_item},
+        fields=["name", "parameter", "value"],
+        order_by="creation asc"
+    )
+
+@frappe.whitelist()
+def save_po_transaction_parameters(purchase_order, purchase_order_item, item_code, params):
+    """
+    Bulk save transaction parameters for a purchase order item.
+    """
+    import json
+    if isinstance(params, str):
+        params = json.loads(params)
+    
+    existing = frappe.get_all(
+        "PO Transaction Parameter",
+        filters={"purchase_order_item": purchase_order_item},
+        pluck="name"
+    )
+    for name in existing:
+        frappe.delete_doc("PO Transaction Parameter", name, ignore_permissions=True)
+    
+    count = 0
+    for p in params:
+        if p.get("parameter") and p.get("value"):
+            doc = frappe.get_doc({
+                "doctype": "PO Transaction Parameter",
+                "purchase_order": purchase_order,
+                "purchase_order_item": purchase_order_item,
+                "item_code": item_code,
+                "parameter": p["parameter"],
+                "value": p["value"]
+            })
+            doc.insert(ignore_permissions=True)
+            count += 1
+    
+    frappe.db.commit()
+    return {"count": count}
 
 @frappe.whitelist()
 def add_production_note(sales_order_item, note):

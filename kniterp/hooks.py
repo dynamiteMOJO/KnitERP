@@ -37,7 +37,8 @@ app_include_js = [
     "/assets/kniterp/js/item_selector_form_botton.js",
     "/assets/kniterp/js/item_client_script.js",
     "/assets/kniterp/js/sales_order_subcontracting_fix.js",
-    "/assets/kniterp/js/sales_order.js"
+    "/assets/kniterp/js/sales_order.js",
+    "/assets/kniterp/js/purchase_order.js",
 ]
 
 app_include_css = [
@@ -58,6 +59,14 @@ override_whitelisted_methods = {
 doc_events = {
     "Salary Slip": {
         "before_save": "kniterp.payroll.calculate_variable_pay"
+    },
+    "Sales Order": {
+        "on_update": "kniterp.api.transaction_parameters.sync_so_params",
+        "on_update_after_submit": "kniterp.api.transaction_parameters.sync_so_params"
+    },
+    "Purchase Order": {
+        "on_update": "kniterp.api.transaction_parameters.sync_po_params",
+        "on_update_after_submit": "kniterp.api.transaction_parameters.sync_po_params"
     },
     "Work Order": {
         "before_submit": "kniterp.kniterp.overrides.work_order.set_planned_qty_on_work_order"
@@ -86,6 +95,7 @@ fixtures = [
     },
     "Textile Attribute",
     "Textile Attribute Value",
+    "Transaction Parameter",
     "Item Attribute Applies To Values",
     {
         "doctype": "Designation",

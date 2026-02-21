@@ -639,9 +639,35 @@ class ProductionWizard {
 		`;
 
         this.$details_content.html(html);
+        this.render_transaction_parameters_section(details);
         this.render_notes_section(details);
         this.bind_action_events(details);
         this.bind_note_events(details);
+    }
+
+    render_transaction_parameters_section(details) {
+        const params = details.transaction_parameters || [];
+        if (!params.length) return;
+
+        const badges_html = params.map(p =>
+            `<span class="badge mr-1 mb-1" style="background:#e6f7f5;color:#0d7377;border:1px solid #b2e0db;font-size:12px;font-weight:500;padding:4px 9px;border-radius:12px;">
+                <span style="opacity:0.7;">${frappe.utils.escape_html(p.parameter)}:</span>&nbsp;<strong>${frappe.utils.escape_html(p.value)}</strong>
+            </span>`
+        ).join('');
+
+        const section_html = `
+            <div class="tx-params-bar mt-2 mb-1 pb-2 border-bottom" style="padding:0 2px;">
+                <div class="d-flex flex-wrap align-items-center">
+                    <span class="text-muted mr-2" style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;white-space:nowrap;">
+                        <i class="fa fa-sliders mr-1"></i>${__('Process Params')}:
+                    </span>
+                    ${badges_html}
+                </div>
+            </div>
+        `;
+
+        // Insert after .info-cards, before .primary-actions
+        this.$details_content.find('.info-cards').after(section_html);
     }
 
     render_notes_section(details) {

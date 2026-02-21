@@ -1,0 +1,22 @@
+[
+ {
+  "applies_to": null,
+  "description": null,
+  "docstatus": 0,
+  "doctype": "Transaction Parameter",
+  "is_active": 1,
+  "modified": "2026-02-20 23:57:04.445771",
+  "name": "GSM",
+  "parameter_name": "GSM"
+ },
+ {
+  "applies_to": null,
+  "description": null,
+  "docstatus": 0,
+  "doctype": "Transaction Parameter",
+  "is_active": 1,
+  "modified": "2026-02-20 23:57:15.939323",
+  "name": "Color",
+  "parameter_name": "Color"
+ }
+]

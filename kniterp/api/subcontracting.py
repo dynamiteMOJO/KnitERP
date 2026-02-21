@@ -55,4 +55,20 @@ def make_subcontract_purchase_order(sales_order, supplier, items):
 
     po.insert()
 
+    # Copy transaction parameters from SO Items to PO Items (per-item via JSON field)
+    po_doc = frappe.get_doc("Purchase Order", po.name)
+    changed = False
+    for idx, row in enumerate(items):
+        so_item_name = row.get("so_item")
+        if not so_item_name:
+            continue
+        if idx < len(po_doc.items):
+            so_item_doc = frappe.get_doc("Sales Order Item", so_item_name)
+            params_json = so_item_doc.custom_transaction_params_json or '[]'
+            if params_json and params_json != '[]':
+                po_doc.items[idx].custom_transaction_params_json = params_json
+                changed = True
+    if changed:
+        po_doc.save(ignore_permissions=True)
+
     return po.name
