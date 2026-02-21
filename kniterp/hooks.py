@@ -92,10 +92,6 @@ doc_events = {
 
 
 fixtures = [
-    {
-        "doctype": "Page",
-        "filters": [["module", "=", "Kniterp"]]
-    },
     "Textile Attribute",
     "Textile Attribute Value",
     "Transaction Parameter",
