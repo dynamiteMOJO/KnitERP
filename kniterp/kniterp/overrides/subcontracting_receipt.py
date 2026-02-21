@@ -60,7 +60,7 @@ def on_submit_complete_job_cards(doc, method):
                 WHERE sri.job_card = %s
                 AND scr.docstatus = 1
             """, jc.name)
-            received_qty = flt(total_received[0][0]) if total_received and total_received[0][0] else 0
+            received_qty = flt(total_received[0][0], 3) if total_received and total_received[0][0] else 0
             
             # Update manufactured_qty to track progress
             jc.db_set("manufactured_qty", received_qty, update_modified=False)
@@ -108,7 +108,7 @@ def _update_job_card_consumed_qty(jc, subcontracting_order, received_qty):
         GROUP BY scr_si.rm_item_code
     """, jc.name, as_dict=True)
     
-    consumed_map = {row.rm_item_code: flt(row.total_consumed) for row in consumed_data}
+    consumed_map = {row.rm_item_code: flt(row.total_consumed, 3) for row in consumed_data}
     
     # Update each Job Card Item
     for jc_item in jc.items:

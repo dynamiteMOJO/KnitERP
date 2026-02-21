@@ -114,7 +114,7 @@ class CustomWorkOrder(WorkOrder):
                         if row:
                             # kniterp FIX: Use flt(..., 3) or higher precision rounding to avoid tiny floating point errors
                             # from preventing WO submission when quantities match but have tiny diffs at 8+ decimals.
-                            available_qty = flt(row.received_qty - row.returned_qty - row.work_order_qty)
+                            available_qty = flt(flt(row.received_qty, 3) - flt(row.returned_qty, 3) - flt(row.work_order_qty, 3), 3)
                             if flt(item.required_qty, 3) > flt(available_qty, 3):
                                 frappe.msgprint(
                                     _(
@@ -189,13 +189,13 @@ def set_planned_qty_on_work_order(doc, method=None):
                     "Work Order Operation",
                     wo_op.name,
                     "planned_qty",
-                    flt(doc.qty)
+                    flt(doc.qty, 3)
                 )
                 continue
 
             # Final FG operation
             if bom_op.is_final_finished_good:
-                wo_op.planned_qty = flt(doc.qty)
+                wo_op.planned_qty = flt(doc.qty, 3)
                 logger.info(
                     f"[WO {doc.name}] Operation '{wo_op.operation}' "
                     f"is final FG → planned_qty={doc.qty}"
@@ -203,14 +203,15 @@ def set_planned_qty_on_work_order(doc, method=None):
                 continue
 
             
-            planned_qty = (
-                flt(doc.qty)
-                * flt(bom_op.finished_good_qty)
-                / flt(bom.quantity)
+            planned_qty = flt(
+                flt(doc.qty, 3)
+                * flt(bom_op.finished_good_qty, 3)
+                / flt(bom.quantity, 3),
+                3
             )
 
 
-            wo_op.planned_qty = flt(planned_qty)
+            wo_op.planned_qty = flt(planned_qty, 3)
 
             # frappe.db.set_value(
             #     "Work Order Operation",

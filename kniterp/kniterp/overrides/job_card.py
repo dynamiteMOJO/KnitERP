@@ -69,8 +69,8 @@ def make_subcontracting_po(source_name, target_doc=None):
         _item_details = get_subcontracting_boms_for_finished_goods(fg_item)
 
         pending_qty = source.for_quantity - source.manufactured_qty
-        service_item_qty = flt(_item_details.service_item_qty) or 1.0
-        fg_item_qty = flt(_item_details.finished_good_qty) or 1.0
+        service_item_qty = flt(_item_details.service_item_qty, 3) or 1.0
+        fg_item_qty = flt(_item_details.finished_good_qty, 3) or 1.0
 
         target.is_subcontracted = 1
         target.supplier_warehouse = source.wip_warehouse
@@ -83,8 +83,8 @@ def make_subcontracting_po(source_name, target_doc=None):
                 "stock_uom": _item_details.service_item_uom,
                 "conversion_factor": _item_details.conversion_factor or 1,
                 "item_name": _item_details.service_item,
-                "qty": pending_qty * service_item_qty / fg_item_qty,
-                "fg_item_qty": pending_qty,
+                "qty": flt(pending_qty * service_item_qty / fg_item_qty, 3),
+                "fg_item_qty": flt(pending_qty, 3),
                 "job_card": source.name,
                 "bom": source.semi_fg_bom,
                 "warehouse": source.target_warehouse,
@@ -252,7 +252,7 @@ class CustomJobCard(JobCard):
             query = query.where(table.purpose == "Manufacture")
 
         qty = query.run()[0][0] or 0.0
-        self.manufactured_qty = flt(qty)
+        self.manufactured_qty = flt(qty, 3)
         self.db_set("manufactured_qty", self.manufactured_qty)
 
         self.update_semi_finished_good_details()
@@ -382,11 +382,11 @@ class CustomJobCard(JobCard):
         # We need to scale them up proportionally if overpricing occurred
         if self.semi_fg_bom:
             bom_doc = frappe.get_cached_doc("BOM", self.semi_fg_bom)
-            bom_qty = flt(bom_doc.quantity) or 1.0
+            bom_qty = flt(bom_doc.quantity, 3) or 1.0
             
             # Ratio: How much we are making vs BOM batch size
             # If BOM is for 100kg and we make 320kg, ratio is 3.2
-            ratio = actual_qty_to_manufacture / bom_qty
+            ratio = flt(actual_qty_to_manufacture / bom_qty, 3)
             
             for item in ste.stock_entry.items:
                 # Skip the finished good itself and scrap items
@@ -397,12 +397,12 @@ class CustomJobCard(JobCard):
                 bom_item_qty = 0
                 for bi in bom_doc.items:
                     if bi.item_code == item.item_code:
-                        bom_item_qty = flt(bi.qty)
+                        bom_item_qty = flt(bi.qty, 3)
                         break
                 
                 if bom_item_qty > 0:
                     new_qty = flt(bom_item_qty * ratio, 3)
-                    if abs(flt(item.qty) - new_qty) > 0.001:
+                    if abs(flt(item.qty, 3) - new_qty) > 0.001:
                         logger.info(
                             f"[JC {self.name}] Updating RM {item.item_code} qty: {item.qty} -> {new_qty} (Ratio: {ratio})"
                         )
@@ -448,7 +448,7 @@ class CustomJobCard(JobCard):
             if not self.for_quantity or self.for_quantity == 0:
                 return
                 
-            ratio = flt(self.total_completed_qty) / flt(self.for_quantity)
+            ratio = flt(flt(self.total_completed_qty, 3) / flt(self.for_quantity, 3), 3)
             if ratio <= 1.0:
                 return
 
@@ -491,7 +491,7 @@ class CustomJobCard(JobCard):
             )
             
             for jc in job_cards:
-                new_qty = flt(jc.for_quantity) * ratio
+                new_qty = flt(flt(jc.for_quantity, 3) * ratio, 3)
                 
                 frappe.db.set_value("Job Card", jc.name, "for_quantity", new_qty)
                 

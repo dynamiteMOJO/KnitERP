@@ -305,7 +305,7 @@ def get_receive_rm_from_customer_fix_details():
             # The error 'SubcontractingInwardOrderReceivedItem' object has no attribute 'item_code'. Did you mean: 'rm_item_code'?
             # confirms it is likely rm_item_code.
             ic = ri.get('rm_item_code') or ri.get('item_code') 
-            received[ic] = received.get(ic, 0) + flt(ri.qty)
+            received[ic] = flt(received.get(ic, 0) + flt(ri.qty, 3), 3)
 
         # Get FGs to produce
         fgs = frappe.db.get_all('Subcontracting Inward Order Item',
@@ -325,18 +325,18 @@ def get_receive_rm_from_customer_fix_details():
             bom_qty = frappe.db.get_value('BOM', fg.bom, 'quantity') or 1.0
             
             for bom_item in bom_items:
-                required_qty = (flt(bom_item.stock_qty) / flt(bom_qty)) * flt(fg.qty)
-                received_qty = received.get(bom_item.item_code, 0)
+                required_qty = flt((flt(bom_item.stock_qty, 3) / flt(bom_qty, 3)) * flt(fg.qty, 3), 3)
+                received_qty = flt(received.get(bom_item.item_code, 0), 3)
                 
                 # Check if we have already counted this received qty for another requirement?
                 # This simple logic assumes 1:1 or pool.
                 # A robust way: deduct from pool.
                 
-                used_qty = min(received_qty, required_qty)
-                pending_qty = required_qty - used_qty
+                used_qty = flt(min(received_qty, required_qty), 3)
+                pending_qty = flt(required_qty - used_qty, 3)
                 
                 # Update pool
-                received[bom_item.item_code] = max(0, received_qty - used_qty)
+                received[bom_item.item_code] = flt(max(0, received_qty - used_qty), 3)
                 
                 if pending_qty > 0:
                     data.append({
@@ -556,13 +556,13 @@ def check_rm_availability(item_code, required_qty):
         return None # No BOM - cannot determine shortage
         
     bom_no = bom_data.name
-    bom_qty = flt(bom_data.quantity) or 1.0
+    bom_qty = flt(bom_data.quantity, 3) or 1.0
 
     # Get RMs from BOM
     rms = frappe.db.get_all('BOM Item', filters={'parent': bom_no}, fields=['item_code', 'qty', 'uom'])
     
     for rm in rms:
-        needed = (flt(rm.qty) / bom_qty) * flt(required_qty)
+        needed = flt((flt(rm.qty, 3) / bom_qty) * flt(required_qty, 3), 3)
         actual = get_stock_balance(rm.item_code)
         if actual < needed:
             return False
@@ -575,7 +575,7 @@ def get_stock_balance(item_code):
     bal = frappe.db.sql("""
         SELECT sum(actual_qty) FROM `tabBin` WHERE item_code = %s
     """, (item_code,))
-    return flt(bal[0][0]) if bal and bal[0][0] else 0.0
+    return flt(bal[0][0], 3) if bal and bal[0][0] else 0.0
 
 def get_rm_shortage_items():
     shortage_items = []
@@ -787,8 +787,8 @@ def get_pending_delivery_items():
         """, (o.name,), as_dict=1)
         
         for item in items:
-            delivered_qty = flt(item.delivered_qty)
-            pending_to_deliver = flt(item.qty) - delivered_qty
+            delivered_qty = flt(item.delivered_qty, 3)
+            pending_to_deliver = flt(flt(item.qty, 3) - delivered_qty, 3)
             
             # Check manufactured qty from Work Orders
             wo_data = frappe.db.sql("""
@@ -799,15 +799,15 @@ def get_pending_delivery_items():
                     AND docstatus = 1
             """, (o.name, item.name))
             
-            manufactured_qty = flt(wo_data[0][0] if wo_data else 0)
+            manufactured_qty = flt(wo_data[0][0] if wo_data else 0, 3)
             
             # Ready to deliver = manufactured - already delivered
             if manufactured_qty == 0:
                 # No WO - check stock
                 stock_qty = get_available_stock(item.item_code)
-                ready_qty = min(stock_qty, pending_to_deliver)
+                ready_qty = flt(min(stock_qty, pending_to_deliver), 3)
             else:
-                ready_qty = max(0, manufactured_qty - delivered_qty)
+                ready_qty = flt(max(0, manufactured_qty - delivered_qty), 3)
             
             # Only add if ready to deliver
             if ready_qty > 0:

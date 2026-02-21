@@ -57,6 +57,9 @@ override_whitelisted_methods = {
 }
 
 doc_events = {
+    "Item": {
+        "before_save": "kniterp.api.item.enforce_batch_tracking_for_fabric_yarn"
+    },
     "Salary Slip": {
         "before_save": "kniterp.payroll.calculate_variable_pay"
     },

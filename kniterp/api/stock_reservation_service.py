@@ -119,9 +119,9 @@ def ensure_scio_fg_sre(wo_doc, se_doc):
         sre.voucher_type = "Subcontracting Inward Order"
         sre.voucher_no = wo_doc.subcontracting_inward_order
         sre.voucher_detail_no = wo_doc.subcontracting_inward_order_item
-        sre.available_qty = flt(available_qty)
-        sre.voucher_qty = flt(scio_item_qty)
-        sre.reserved_qty = flt(row.qty)
+        sre.available_qty = flt(available_qty, 3)
+        sre.voucher_qty = flt(scio_item_qty, 3)
+        sre.reserved_qty = flt(row.qty, 3)
         sre.company = se_doc.company
         sre.stock_uom = row.stock_uom
         sre.from_voucher_type = "Stock Entry"
@@ -177,7 +177,7 @@ def release_scio_fg_sres_on_revert(wo_doc, se_doc):
 
     # Step 2: reduce any blocking SCIO-level SREs that are partially/fully reserved
     # (handles case where the direct SRE is already Delivered but stale SREs block SE cancel)
-    qty_to_free = flt(se_doc.fg_completed_qty)
+    qty_to_free = flt(se_doc.fg_completed_qty, 3)
     fg_row = next(
         (r for r in se_doc.items if r.is_finished_item and not r.is_scrap_item), None
     )
@@ -203,14 +203,14 @@ def release_scio_fg_sres_on_revert(wo_doc, se_doc):
         if qty_to_free <= 0:
             break
 
-        current_reserved = flt(s.reserved_qty)
-        current_delivered = flt(s.delivered_qty)
-        net_reserved = current_reserved - current_delivered
+        current_reserved = flt(s.reserved_qty, 3)
+        current_delivered = flt(s.delivered_qty, 3)
+        net_reserved = flt(current_reserved - current_delivered, 3)
 
         if net_reserved <= 0:
             continue
 
-        reduce_by = min(net_reserved, qty_to_free)
+        reduce_by = flt(min(net_reserved, qty_to_free), 3)
         sre_doc = frappe.get_doc("Stock Reservation Entry", s.name)
 
         if current_delivered <= 0 and reduce_by >= current_reserved:
@@ -221,7 +221,7 @@ def release_scio_fg_sres_on_revert(wo_doc, se_doc):
                 "reduced_by": reduce_by,
             })
         else:
-            new_reserved = flt(current_reserved - reduce_by)
+            new_reserved = flt(current_reserved - reduce_by, 3)
             sre_doc.db_set("reserved_qty", new_reserved)
             sre_doc.update_status()
             sre_doc.update_reserved_stock_in_bin()
@@ -273,9 +273,9 @@ def recalculate_bin_reserved_for_direct_consumption(wo_doc, se_doc, mode="comple
                  if d.item_code == row.item_code and d.source_warehouse == row.s_warehouse),
                 None
             )
-            if wo_item and flt(wo_item.consumed_qty) > 0:
-                adjusted = max(0, flt(stock_bin.reserved_qty_for_production) - flt(wo_item.consumed_qty))
-                if adjusted != flt(stock_bin.reserved_qty_for_production):
+            if wo_item and flt(wo_item.consumed_qty, 3) > 0:
+                adjusted = flt(max(0, flt(stock_bin.reserved_qty_for_production, 3) - flt(wo_item.consumed_qty, 3)), 3)
+                if adjusted != flt(stock_bin.reserved_qty_for_production, 3):
                     stock_bin.db_set("reserved_qty_for_production", adjusted, update_modified=False)
                     stock_bin.reserved_qty_for_production = adjusted
                     stock_bin.set_projected_qty()

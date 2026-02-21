@@ -1899,15 +1899,25 @@ class ProductionWizard {
     }
 
     send_raw_material_to_supplier(purchase_order, sco_name) {
-        if (sco_name) {
-            frappe.new_doc('Stock Entry', {
-                'purpose': 'Send to Subcontractor',
-                'subcontracting_order': sco_name
+        const create_ste = (sco) => {
+            frappe.call({
+                method: 'kniterp.api.production_wizard.auto_split_subcontract_stock_entry',
+                args: { sco_name: sco },
+                freeze: true,
+                freeze_message: __('Drafting Stock Entry and allocating batches...'),
+                callback: (r) => {
+                    if (r.message) {
+                        frappe.set_route('Form', 'Stock Entry', r.message);
+                    }
+                }
             });
+        };
+
+        if (sco_name) {
+            create_ste(sco_name);
             return;
         }
 
-        // Open the Stock Entry form with Send to Subcontractor purpose
         frappe.call({
             method: 'frappe.client.get_value',
             args: {
@@ -1917,10 +1927,7 @@ class ProductionWizard {
             },
             callback: (r) => {
                 if (r.message && r.message.name) {
-                    frappe.new_doc('Stock Entry', {
-                        'purpose': 'Send to Subcontractor',
-                        'subcontracting_order': r.message.name
-                    });
+                    create_ste(r.message.name);
                 } else {
                     frappe.msgprint(__('No submitted Subcontracting Order found for this Purchase Order'));
                 }
@@ -1945,25 +1952,102 @@ class ProductionWizard {
                     fieldtype: 'Float',
                     label: __('Quantity to Receive'),
                     reqd: 1,
-                    default: 0 // Will auto-focus
+                    default: 0
                 },
                 {
                     fieldname: 'rate',
                     fieldtype: 'Currency',
                     label: __('Rate (Final)'),
                     reqd: 0
+                },
+                {
+                    fieldname: 'sb_lot',
+                    fieldtype: 'Section Break',
+                    label: __('Lot Traceability')
+                },
+                {
+                    fieldname: 'num_batches',
+                    fieldtype: 'Int',
+                    label: __('Number of Output Batches Received'),
+                    description: __('How many different dyeing batches did you receive for this quantity?'),
+                    default: 1,
+                    onchange: function () {
+                        const num_batches = cint(this.value) || 1;
+                        let html = '<table class="table table-bordered table-condensed"><thead><tr><th>' + __('Quantity') + '</th><th>' + __('Output Dyeing Lot No') + '</th></tr></thead><tbody>';
+                        for (let i = 0; i < num_batches; i++) {
+                            html += `
+                                <tr class="scr-batch-row">
+                                    <td><input type="number" class="form-control batch-qty" min="0" step="any" placeholder="${__('Qty')}"></td>
+                                    <td><input type="text" class="form-control batch-lot" placeholder="${__('Lot No / Batch No')}"></td>
+                                </tr>
+                            `;
+                        }
+                        html += '</tbody></table>';
+                        d.fields_dict.batch_table_html.$wrapper.html(html);
+
+                        // Auto-calculate total qty when batch-qty changes
+                        d.$wrapper.find('.batch-qty').on('input', function () {
+                            let total = 0;
+                            d.$wrapper.find('.batch-qty').each(function () {
+                                total += flt($(this).val());
+                            });
+                            d.set_value('qty', total);
+                        });
+                    }
+                },
+                {
+                    fieldname: 'batch_table_html',
+                    fieldtype: 'HTML'
                 }
             ],
             primary_action_label: __('Create & Submit Receipt'),
             primary_action: (values) => {
+                const received_batches = [];
+                let total_batch_qty = 0;
+                let has_error = false;
+
+                d.$wrapper.find('.scr-batch-row').each(function () {
+                    const row_qty = flt($(this).find('.batch-qty').val());
+                    const row_lot = $(this).find('.batch-lot').val().trim();
+
+                    if (!row_qty || row_qty <= 0) {
+                        frappe.msgprint(__('Please enter a valid quantity for all batches.'));
+                        has_error = true;
+                        return false;
+                    }
+                    if (!row_lot) {
+                        frappe.msgprint(__('Please enter a Lot No / Batch No for all batches.'));
+                        has_error = true;
+                        return false;
+                    }
+
+                    received_batches.push({
+                        qty: row_qty,
+                        batch_no: row_lot
+                    });
+                    total_batch_qty += row_qty;
+                });
+
+                if (has_error) return;
+
+                if (Math.abs(total_batch_qty - flt(values.qty)) > 0.001) {
+                    frappe.msgprint(__('Total batch quantities ({0}) must equal the Quantity to Receive ({1})', [total_batch_qty, values.qty]));
+                    return;
+                }
+
+                if (d.max_receivable_qty && total_batch_qty > d.max_receivable_qty) {
+                    frappe.msgprint(__('Total batch quantities ({0}) exceed the maximum receivable quantity ({1})', [total_batch_qty, d.max_receivable_qty]));
+                    return;
+                }
+
                 frappe.call({
                     method: 'kniterp.api.production_wizard.receive_subcontracted_goods',
                     args: {
                         purchase_order: po_name,
                         subcontracting_order: sco_name,
-                        qty: values.qty,
                         rate: values.rate,
-                        supplier_delivery_note: values.supplier_delivery_note
+                        supplier_delivery_note: values.supplier_delivery_note,
+                        received_batches: JSON.stringify(received_batches)
                     },
                     freeze: true,
                     freeze_message: __('Creating Subcontracting Receipt...'),
@@ -1974,7 +2058,6 @@ class ProductionWizard {
                                 message: __('Subcontracting Receipt Created and Submitted'),
                                 indicator: 'green'
                             });
-                            // Reload to show updated status
                             self.load_production_details(self.selected_item);
                         }
                     }
@@ -2004,7 +2087,9 @@ class ProductionWizard {
                                 rate = item.rate; // Use last item rate
                             });
                         }
+                        d.max_receivable_qty = pending;
                         d.set_value('qty', pending);
+                        d.set_df_property('qty', 'description', __('Maximum receivable quantity: {0}', [pending]));
                         d.set_value('rate', rate);
                     }
                     d.show();
@@ -2024,6 +2109,8 @@ class ProductionWizard {
         }
 
         const job_card = op.job_card;
+        // batch_map will be populated after fetching availability: { item_code: [{batch_no, qty}] }
+        let _batch_map = {};
 
         // Fetch Job Card details to pre-populate dialog
         frappe.call({
@@ -2140,103 +2227,311 @@ class ProductionWizard {
                     info_html += `<p class="text-muted small">${__('This will add to the existing completed quantity (batch production).')}</p>`;
                 }
 
-                const d = new frappe.ui.Dialog({
-                    title: __('Update Manufactured Quantity: {0}', [operation]),
-                    fields: [
-                        {
-                            fieldname: 'info_section',
-                            fieldtype: 'HTML',
-                            options: info_html
-                        },
-                        {
-                            fieldname: 'sb_progress',
-                            fieldtype: 'Section Break',
-                            label: __('Production Details')
-                        },
-                        {
-                            fieldname: 'workstation',
-                            fieldtype: 'Link',
-                            options: 'Workstation',
-                            label: __('Machine / Workstation'),
-                            default: jc.workstation || op.workstation || '',
-                            reqd: 1
-                        },
-                        {
-                            fieldname: 'employee',
-                            fieldtype: 'Link',
-                            options: 'Employee',
-                            label: __('Employee'),
-                            description: __('Person performing the operation'),
-                            reqd: operation.toLowerCase().includes('knitting') ? 1 : 0
-                        },
-                        // Conditionally add fields for Knitting Machine Attendance
-                        ...(operation.toLowerCase().includes('knitting') ? [
-                            {
-                                fieldname: 'attendance_date',
-                                fieldtype: 'Date',
-                                label: __('Date'),
-                                default: frappe.datetime.get_today(),
-                                reqd: 1
-                            },
-                            {
-                                fieldname: 'shift',
-                                fieldtype: 'Link',
-                                options: 'Shift Type',
-                                label: __('Shift'),
-                                reqd: 1
-                            }
-                        ] : []),
-                        {
-                            fieldname: 'cb_qty',
-                            fieldtype: 'Column Break'
-                        },
-                        {
-                            fieldname: 'qty',
-                            fieldtype: 'Float',
-                            label: __('Quantity to Manufacture in this Batch'),
-                            default: default_qty,
-                            reqd: 1,
-                            description: __('Enter the quantity you produced in this batch. You can produce more batches later.')
-                        }
-                    ],
-                    primary_action_label: __('Update'),
-                    primary_action(values) {
-                        frappe.call({
-                            method: 'kniterp.api.production_wizard.complete_operation',
-                            args: {
-                                work_order: details.work_order.name,
-                                operation: operation,
-                                qty: values.qty,
-                                workstation: values.workstation,
-                                employee: values.employee,
-                                attendance_date: values.attendance_date,
-                                shift: values.shift
-                            },
-                            freeze: true,
-                            freeze_message: __('Updating Manufactured Quantity...'),
-                            callback: (r) => {
-                                if (r.message) {
-                                    d.hide();
-                                    frappe.show_alert({
-                                        message: __('Operation {0} updated with qty {1}', [operation, values.qty]),
-                                        indicator: 'green'
-                                    }, 3);
-                                    self.refresh_pending_items();
-                                    self.load_production_details(self.selected_item);
-                                }
+                // Mutable map of item_code → required qty for this production batch.
+                // Updated whenever the user changes the 'qty' field.
+                const rm_items_for_lots = (jc.items && jc.items.length > 0) ? jc.items : [];
+                const _need_qtys = {};
+                const _lot_fieldnames = []; // tracks lot field names for badge refresh
+                let _check_submit_eligibility = null; // assigned inside _show_dialog once d exists
+
+                const _refresh_lot_badge = (fieldname, avail_fname) => {
+                    if (!d || !d.fields_dict[fieldname]) return;
+                    const raw = d.get_value(fieldname);
+                    const $badge = d.fields_dict[avail_fname].$wrapper;
+                    if (!raw || raw === __('-- No Lot / Skip --')) { $badge.html(''); return; }
+                    const batch_no = raw.split('  (')[0].trim();
+                    const item_code = d.fields_dict[fieldname]._item_code;
+                    const batches = _batch_map[item_code] || [];
+                    const b = batches.find(x => x.batch_no === batch_no);
+                    if (!b) { $badge.html(''); return; }
+                    const avail = parseFloat(b.qty);
+                    const needed = _need_qtys[item_code] || 0;
+                    let badge_html;
+                    if (needed > 0 && avail < needed) {
+                        badge_html = `<div class="alert alert-danger py-1 px-2 mb-1" style="font-size:12px;">
+                            <i class="fa fa-exclamation-triangle"></i>
+                            ${__('Only {0} available, need {1}', [avail.toFixed(3), needed.toFixed(3)])}
+                            <br><small>${__('The system will consume what is available.')}</small>
+                        </div>`;
+                    } else {
+                        badge_html = `<div class="alert alert-success py-1 px-2 mb-1" style="font-size:12px;">
+                            <i class="fa fa-check-circle"></i>
+                            ${__('Available: {0}', [avail.toFixed(3)])}
+                            ${needed > 0 ? ` — ${__('Need: {0}', [needed.toFixed(3)])}` : ''}
+                        </div>`;
+                    }
+                    $badge.html(badge_html);
+                };
+
+                const _build_lot_fields = () => {
+                    let lot_fields = [];
+
+                    const _add_lot_select = (fieldname, label, item_code, item_name, base_required_qty) => {
+                        const batches = _batch_map[item_code] || [];
+                        const avail_fname = fieldname + '_avail_html';
+
+                        // Initialise need_qty based on current default_qty
+                        const ratio = flt(default_qty, 3) / flt(jc.for_quantity || 1);
+                        _need_qtys[item_code] = flt(base_required_qty * ratio, 3);
+
+                        // Build options: all batches shown, zero-stock ones marked
+                        let options_list = [__('-- No Lot / Skip --')];
+                        batches.forEach(b => {
+                            const avail = parseFloat(b.qty);
+                            if (avail > 0) {
+                                options_list.push(`${b.batch_no}  (${__('Avail')}: ${avail.toFixed(3)})`);
+                            } else {
+                                options_list.push(`${b.batch_no}  (${__('No stock')})`);
                             }
                         });
-                    },
-                    secondary_action_label: __('View Logs'),
-                    secondary_action() {
-                        self.show_production_logs(op.job_card);
-                    }
-                });
 
-                d.show();
-            }
-        });
-    }
+                        const need_now = _need_qtys[item_code];
+                        const desc_text = item_name
+                            ? `${item_name}${need_now > 0 ? ' — ' + __('Need: {0}', [need_now]) : ''}`
+                            : '';
+
+                        const field_def = {
+                            fieldname: fieldname,
+                            fieldtype: 'Select',
+                            label: label,
+                            options: options_list.join('\n'),
+                            description: (batches.length === 0)
+                                ? `⚠ ${__('No batches found for this item')}${item_name ? ' — ' + item_name : ''}`
+                                : desc_text,
+                            _item_code: item_code,
+                            onchange: function () {
+                                _refresh_lot_badge(fieldname, avail_fname);
+                                _check_submit_eligibility();
+                            }
+                        };
+                        lot_fields.push(field_def);
+                        lot_fields.push({ fieldname: avail_fname, fieldtype: 'HTML', options: '' });
+                        _lot_fieldnames.push({ fieldname, avail_fname, item_code });
+                    };
+
+                    if (rm_items_for_lots.length > 0) {
+                        rm_items_for_lots.forEach(item => {
+                            const fname = 'consumed_lot_' + item.item_code.replace(/[^a-zA-Z0-9]/g, '_');
+                            _add_lot_select(fname, __('Consumed Lot: {0}', [item.item_code]), item.item_code, item.item_name || '', item.required_qty || 0);
+                        });
+                    } else {
+                        // Fallback: no JC items, show a generic lot field
+                        lot_fields.push({
+                            fieldname: 'consumed_yarn_lot',
+                            fieldtype: 'Select',
+                            label: __('Consumed Lot No (Input)'),
+                            options: [__('-- No Lot / Skip --')].join('\n'),
+                            description: __('Select the Yarn/Fabric lot consumed in this operation.')
+                        });
+                    }
+
+                    return lot_fields;
+                };
+
+                const _show_dialog = () => {
+                    const d = new frappe.ui.Dialog({
+                        title: __('Update Manufactured Quantity: {0}', [operation]),
+                        fields: [
+                            {
+                                fieldname: 'info_section',
+                                fieldtype: 'HTML',
+                                options: info_html
+                            },
+                            {
+                                fieldname: 'sb_progress',
+                                fieldtype: 'Section Break',
+                                label: __('Production Details')
+                            },
+                            {
+                                fieldname: 'workstation',
+                                fieldtype: 'Link',
+                                options: 'Workstation',
+                                label: __('Machine / Workstation'),
+                                default: jc.workstation || op.workstation || '',
+                                reqd: 1
+                            },
+                            {
+                                fieldname: 'employee',
+                                fieldtype: 'Link',
+                                options: 'Employee',
+                                label: __('Employee'),
+                                description: __('Person performing the operation'),
+                                reqd: operation.toLowerCase().includes('knitting') ? 1 : 0
+                            },
+                            // Conditionally add fields for Knitting Machine Attendance
+                            ...(operation.toLowerCase().includes('knitting') ? [
+                                {
+                                    fieldname: 'attendance_date',
+                                    fieldtype: 'Date',
+                                    label: __('Date'),
+                                    default: frappe.datetime.get_today(),
+                                    reqd: 1
+                                },
+                                {
+                                    fieldname: 'shift',
+                                    fieldtype: 'Link',
+                                    options: 'Shift Type',
+                                    label: __('Shift'),
+                                    reqd: 1
+                                }
+                            ] : []),
+                            {
+                                fieldname: 'cb_qty',
+                                fieldtype: 'Column Break'
+                            },
+                            {
+                                fieldname: 'qty',
+                                fieldtype: 'Float',
+                                label: __('Quantity to Manufacture in this Batch'),
+                                default: default_qty,
+                                reqd: 1,
+                                description: __('Enter the quantity you produced in this batch. You can produce more batches later.'),
+                                onchange: function () {
+                                    // Recalculate required qty per RM item and refresh all lot badges
+                                    const new_qty = flt(this.value) || 0;
+                                    const jc_qty = flt(jc.for_quantity) || 1;
+                                    rm_items_for_lots.forEach(item => {
+                                        _need_qtys[item.item_code] = flt((item.required_qty || 0) * new_qty / jc_qty, 3);
+                                        const fname = 'consumed_lot_' + item.item_code.replace(/[^a-zA-Z0-9]/g, '_');
+                                        const f = d.fields_dict[fname];
+                                        if (f) {
+                                            const need_now = _need_qtys[item.item_code];
+                                            const iname = item.item_name || '';
+                                            const batches = _batch_map[item.item_code] || [];
+                                            const desc_text = iname ? `${iname}${need_now > 0 ? ' — ' + __('Need: {0}', [need_now]) : ''}` : '';
+                                            const full_desc = (batches.length === 0)
+                                                ? `⚠ ${__('No batches found for this item')}${iname ? ' — ' + iname : ''}`
+                                                : desc_text;
+                                            f.set_description(full_desc);
+                                        }
+                                    });
+                                    _lot_fieldnames.forEach(({ fieldname, avail_fname }) => {
+                                        _refresh_lot_badge(fieldname, avail_fname);
+                                    });
+                                    if (_check_submit_eligibility) _check_submit_eligibility();
+                                }
+                            },
+                            {
+                                fieldname: 'sb_lot_tracking',
+                                fieldtype: 'Section Break',
+                                label: __('Lot Traceability')
+                            },
+                            ..._build_lot_fields(),
+                            {
+                                fieldname: 'output_batch_no',
+                                fieldtype: 'Data',
+                                label: __('Output Batch No (Auto Generated)'),
+                                description: __('An auto-generated lot number for the new production batch.'),
+                                default: jc.name + '-' + frappe.datetime.now_datetime().replace(/[-: ]/g, '').substring(2, 12),
+                                read_only: 1
+                            }
+                        ],
+                        primary_action_label: __('Update'),
+                        primary_action(values) {
+                            // Build item_code → batch_no map to preserve mapping on the backend.
+                            // Select field values look like "BATCH-001  (Avail: 250.000)" — strip annotation.
+                            const _extract_batch = (raw) => {
+                                if (!raw || raw === __('-- No Lot / Skip --')) return null;
+                                return raw.split('  (')[0].trim();
+                            };
+
+                            let consumed_lots_map = {};
+                            if (values.consumed_yarn_lot) {
+                                const b = _extract_batch(values.consumed_yarn_lot);
+                                if (b) consumed_lots_map['__fallback__'] = b;
+                            }
+                            if (jc.items && jc.items.length > 0) {
+                                jc.items.forEach(item => {
+                                    let fname = 'consumed_lot_' + item.item_code.replace(/[^a-zA-Z0-9]/g, '_');
+                                    let b = _extract_batch(values[fname]);
+                                    if (b) consumed_lots_map[item.item_code] = b;
+                                });
+                            }
+
+                            frappe.call({
+                                method: 'kniterp.api.production_wizard.complete_operation',
+                                args: {
+                                    work_order: details.work_order.name,
+                                    operation: operation,
+                                    qty: values.qty,
+                                    workstation: values.workstation,
+                                    employee: values.employee,
+                                    attendance_date: values.attendance_date,
+                                    shift: values.shift,
+                                    consumed_lots: JSON.stringify(consumed_lots_map),
+                                    output_batch_no: values.output_batch_no || null
+                                },
+                                freeze: true,
+                                freeze_message: __('Updating Manufactured Quantity...'),
+                                callback: (r) => {
+                                    if (r.message) {
+                                        d.hide();
+                                        frappe.show_alert({
+                                            message: __('Operation {0} updated with qty {1}', [operation, values.qty]),
+                                            indicator: 'green'
+                                        }, 3);
+                                        self.refresh_pending_items();
+                                        self.load_production_details(self.selected_item);
+                                    }
+                                }
+                            });
+                        },
+                        secondary_action_label: __('View Logs'),
+                        secondary_action() {
+                            self.show_production_logs(op.job_card);
+                        }
+                    });
+
+                    d.show();
+
+                    // Wire up submit eligibility checking now that d is available.
+                    // This is defined here (after d is assigned) and also hoisted
+                    // via the outer _check_submit_eligibility variable.
+                    _check_submit_eligibility = () => {
+                        let blocked = false;
+                        _lot_fieldnames.forEach(({ fieldname, item_code }) => {
+                            const raw = d.get_value(fieldname);
+                            if (!raw || raw === __('-- No Lot / Skip --')) return;
+                            const batch_no = raw.split('  (')[0].trim();
+                            const batches = _batch_map[item_code] || [];
+                            const b = batches.find(x => x.batch_no === batch_no);
+                            if (!b) return;
+                            const avail = parseFloat(b.qty);
+                            const needed = _need_qtys[item_code] || 0;
+                            if (needed > 0 && avail < needed) blocked = true;
+                        });
+                        const $btn = d.get_primary_btn();
+                        if (blocked) {
+                            $btn.prop('disabled', true).attr('title', __('Selected lot does not have sufficient stock'));
+                        } else {
+                            $btn.prop('disabled', false).removeAttr('title');
+                        }
+                    };
+                    _check_submit_eligibility(); // initial state
+                }; // end _show_dialog
+
+                // Fetch batch availability WITHOUT warehouse filter so all lots with
+                // positive stock are shown regardless of which warehouse they're in.
+                // (The SE backend will consume from the correct source warehouse.)
+                if (rm_items_for_lots.length > 0) {
+                    let pending_calls = rm_items_for_lots.length;
+                    rm_items_for_lots.forEach(item => {
+                        frappe.call({
+                            method: 'kniterp.api.production_wizard.get_available_batches',
+                            args: { item_code: item.item_code },  // no warehouse filter
+                            callback: (br) => {
+                                _batch_map[item.item_code] = br.message || [];
+                                pending_calls--;
+                                if (pending_calls === 0) _show_dialog();
+                            }
+                        });
+                    });
+                } else {
+                    _show_dialog();
+                }
+            } // end JC callback
+        }); // end frappe.call for Job Card
+    } // end complete_operation
 
     show_production_logs(job_card) {
         const self = this;

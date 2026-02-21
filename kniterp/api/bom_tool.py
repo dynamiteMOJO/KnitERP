@@ -321,7 +321,7 @@ def find_or_create_subcontracting_bom(op_data, bom_no, sales_order=None, forced_
 
     sb.service_item = service_item
 
-    total_input_qty = sum(flt(inp.get('qty', 0)) for inp in op_data.get('inputs', []))
+    total_input_qty = flt(sum(flt(inp.get('qty', 0), 3) for inp in op_data.get('inputs', [])), 3)
     sb.service_item_qty = flt(total_input_qty, 3)
     sb.conversion_factor = 1
 
@@ -508,15 +508,15 @@ def get_multilevel_bom(bom_no):
         if op.bom_no:
             sub_bom = frappe.get_doc("BOM", op.bom_no)
 
-            total_input = sum(flt(item.qty) for item in sub_bom.items)
-            output = sub_bom.quantity
+            total_input = flt(sum(flt(item.qty, 3) for item in sub_bom.items), 3)
+            output = flt(sub_bom.quantity, 3)
 
             if total_input > 0:
-                loss_val = 100.0 * (1.0 - (flt(output) / flt(total_input)))
+                loss_val = 100.0 * (1.0 - (flt(output, 3) / flt(total_input, 3)))
                 op_data["loss_percent"] = max(0, float("{:.2f}".format(loss_val)))
 
             for item in sub_bom.items:
-                mix_val = (flt(item.qty) / total_input) * 100
+                mix_val = flt((flt(item.qty, 3) / total_input) * 100, 3)
 
                 inp_data = {
                     "item": item.item_code,

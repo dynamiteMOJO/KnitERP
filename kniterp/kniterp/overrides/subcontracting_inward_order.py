@@ -34,28 +34,27 @@ class CustomSubcontractingInwardOrder(SubcontractingInwardOrder):
             qty_list = []
             for item in self.get("received_items"):
                 if item.reference_name == d.name and item.is_customer_provided_item and item.required_qty:
-                    # FIX: Do NOT round the ratio to precision. Use full float precision.
-                    # Original: ratio = flt(item.required_qty / d.qty, d.precision("qty"))
-                    ratio = flt(item.required_qty / d.qty)
+                    # FIX: Round ratio to 9 decimal places for intermediate precision, final qty to 3
+                    ratio = flt(flt(item.required_qty, 3) / flt(d.qty, 3))
 
                     qty = flt(
-                        (item.received_qty - item.returned_qty - item.work_order_qty) / ratio,
-                        d.precision("qty")
+                        (flt(item.received_qty, 3) - flt(item.returned_qty, 3) - flt(item.work_order_qty, 3)) / ratio,
+                        3
                     )
                     qty_list.append(qty)
             
             if qty_list:
-                qty = min(qty_list)
+                qty = flt(min(qty_list), 3)
             else:
                 # If no RMs, fallback to remaining qty
-                qty = d.qty - d.produced_qty
+                qty = flt(flt(d.qty, 3) - flt(d.produced_qty, 3), 3)
             
             # --- MODIFIED LOGIC END ---
 
-            qty = min(
+            qty = flt(min(
                 int(qty) if frappe.get_cached_value("UOM", d.stock_uom, "must_be_whole_number") else qty,
-                d.qty - d.produced_qty,
-            )
+                flt(d.qty, 3) - flt(d.produced_qty, 3),
+            ), 3)
 
             item_details.update({"qty": qty, "max_producible_qty": qty})
             item_list.append(item_details)
@@ -90,11 +89,11 @@ class CustomSubcontractingInwardOrder(SubcontractingInwardOrder):
         allow_over = frappe.get_single_value("Selling Settings", "allow_delivery_of_overproduced_qty")
         for fg_item in self.items:
             # FIX: Always subtract delivered_qty!
-            produced_limit = fg_item.produced_qty
+            produced_limit = flt(fg_item.produced_qty, 3)
             if not allow_over:
-                produced_limit = min(fg_item.qty, fg_item.produced_qty)
+                produced_limit = flt(min(flt(fg_item.qty, 3), flt(fg_item.produced_qty, 3)), 3)
             
-            qty = produced_limit - fg_item.delivered_qty 
+            qty = flt(produced_limit - flt(fg_item.delivered_qty, 3), 3)
 
             # Only add if there is pending quantity or if negative (return?)
             # Usually only positive qty is delivered here. 
@@ -124,11 +123,11 @@ class CustomSubcontractingInwardOrder(SubcontractingInwardOrder):
                 scrap_item for scrap_item in self.scrap_items if scrap_item.reference_name in scio_details
             ]
             for scrap_item in scrap_items:
-                qty = scrap_item.produced_qty - scrap_item.delivered_qty
+                qty = flt(flt(scrap_item.produced_qty, 3) - flt(scrap_item.delivered_qty, 3), 3)
                 if qty > 0:
                     items_dict = {
                         scrap_item.item_code: {
-                            "qty": scrap_item.produced_qty - scrap_item.delivered_qty,
+                            "qty": flt(flt(scrap_item.produced_qty, 3) - flt(scrap_item.delivered_qty, 3), 3),
                             "from_warehouse": scrap_item.warehouse,
                             "stock_uom": scrap_item.stock_uom,
                             "scio_detail": scrap_item.name,
