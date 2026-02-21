@@ -121,6 +121,13 @@ fixtures = [
             "Selling", "Buying", "Subcontracting", "Manufacturing", "Stock", "Payroll", "Shift & Attendance", "People", "Invoicing",
             "Website", "Recruitment", "Projects", "Expenses", "Performance", "Tenure", "Quality", "Support", "CRM"
         ]]]
+    },
+    {
+        "doctype": "Workspace Sidebar",
+        "filters": [["name", "in", [
+            "Selling - KnitERP", "Buying - KnitERP", "Subcontracting - KnitERP", "Manufacturing - KnitERP",
+            "Stock - KnitERP", "Payroll - KnitERP", "Shift & Attendance - KnitERP", "People - KnitERP", "Invoicing - KnitERP"
+        ]]]
     }
 ]
 
