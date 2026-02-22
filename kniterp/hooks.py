@@ -117,13 +117,18 @@ fixtures = [
         "filters": [["name", "in", [
             "KnitERP",
             "Selling - KnitERP", "Buying - KnitERP", "Subcontracting - KnitERP", "Manufacturing - KnitERP",
-            "Stock - KnitERP", "Payroll - KnitERP", "Shift & Attendance - KnitERP", "People - KnitERP", "Invoicing - KnitERP",
-            "Selling", "Buying", "Subcontracting", "Manufacturing", "Stock", "Payroll", "Shift & Attendance", "People", "Invoicing",
-            "Website", "Recruitment", "Projects", "Expenses", "Performance", "Tenure", "Quality", "Support", "CRM"
+            "Stock - KnitERP", "Payroll - KnitERP", "Shift & Attendance - KnitERP", "People - KnitERP", "Invoicing - KnitERP"
         ]]]
     },
     {
         "doctype": "Workspace Sidebar",
+        "filters": [["name", "in", [
+            "KnitERP", "Selling - KnitERP", "Buying - KnitERP", "Subcontracting - KnitERP", "Manufacturing - KnitERP",
+            "Stock - KnitERP", "Payroll - KnitERP", "Shift & Attendance - KnitERP", "People - KnitERP", "Invoicing - KnitERP"
+        ]]]
+    },
+    {
+        "doctype": "Desktop Icon",
         "filters": [["name", "in", [
             "KnitERP", "Selling - KnitERP", "Buying - KnitERP", "Subcontracting - KnitERP", "Manufacturing - KnitERP",
             "Stock - KnitERP", "Payroll - KnitERP", "Shift & Attendance - KnitERP", "People - KnitERP", "Invoicing - KnitERP"
@@ -187,6 +192,7 @@ fixtures = [
 
 # before_install = "kniterp.install.before_install"
 # after_install = "kniterp.install.after_install"
+after_migrate = "kniterp.kniterp.install.after_migrate"
 
 # Uninstallation
 # ------------

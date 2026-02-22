@@ -10,12 +10,12 @@
  "label": "KnitERP",
  "link_to": "KnitERP",
  "link_type": "Workspace Sidebar",
- "modified": "2026-02-22 07:47:11.146883",
+ "modified": "2026-02-22 09:24:18.060871",
  "modified_by": "Administrator",
  "name": "KnitERP",
  "owner": "Administrator",
  "restrict_removal": 0,
  "roles": [],
- "sidebar": "KnitERP",
+ "sidebar": "",
  "standard": 1
 }
