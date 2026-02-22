@@ -1,0 +1,21 @@
+{
+ "app": "kniterp",
+ "bg_color": "blue",
+ "creation": "2026-02-22 14:45:21.052895",
+ "docstatus": 0,
+ "doctype": "Desktop Icon",
+ "hidden": 0,
+ "icon": "sales",
+ "icon_type": "Link",
+ "idx": 0,
+ "label": "Sales",
+ "link_to": "Sales",
+ "link_type": "Workspace Sidebar",
+ "modified": "2026-02-22 16:34:12.224051",
+ "modified_by": "Administrator",
+ "name": "Sales",
+ "owner": "Administrator",
+ "restrict_removal": 0,
+ "roles": [],
+ "standard": 1
+}

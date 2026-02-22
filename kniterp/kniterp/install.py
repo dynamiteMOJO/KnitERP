@@ -34,7 +34,10 @@ def hide_unwanted_workspaces():
     })
 
     # 3. Hide the Desktop Icons and add Administrator role
-    frappe.db.set_value("Desktop Icon", {"name": ("in", modules_to_hide)}, "hidden", 1)
+    frappe.db.set_value("Desktop Icon", {"name": ("in", modules_to_hide)}, {
+        "hidden": 1,
+        "standard": 0
+    })
     
     for icon_name in modules_to_hide:
         if frappe.db.exists("Desktop Icon", icon_name):
@@ -43,5 +46,17 @@ def hide_unwanted_workspaces():
             if not has_admin_role:
                 icon_doc.append("roles", {"role": "Administrator"})
                 icon_doc.save(ignore_permissions=True)
+
+    # 4. Push all non-KnitERP Desktop Icons & Workspaces to the bottom
+    frappe.db.sql("""
+        UPDATE `tabDesktop Icon`
+        SET idx = idx + 100
+        WHERE app != 'kniterp' AND idx < 100
+    """)
+    frappe.db.sql("""
+        UPDATE `tabWorkspace`
+        SET sequence_id = sequence_id + 100
+        WHERE module != 'Kniterp' AND sequence_id < 100
+    """)
 
     frappe.db.commit()

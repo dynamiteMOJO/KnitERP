@@ -1,0 +1,21 @@
+{
+ "app": "kniterp",
+ "bg_color": "blue",
+ "creation": "2026-02-22 15:50:37.855670",
+ "docstatus": 0,
+ "doctype": "Desktop Icon",
+ "hidden": 0,
+ "icon": "projects",
+ "icon_type": "Link",
+ "idx": 0,
+ "label": "Outsourcing",
+ "link_to": "Outsourcing",
+ "link_type": "Workspace Sidebar",
+ "modified": "2026-02-22 16:34:12.245605",
+ "modified_by": "Administrator",
+ "name": "Outsourcing",
+ "owner": "Administrator",
+ "restrict_removal": 0,
+ "roles": [],
+ "standard": 1
+}

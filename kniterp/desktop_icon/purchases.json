@@ -1,0 +1,21 @@
+{
+ "app": "kniterp",
+ "bg_color": "blue",
+ "creation": "2026-02-22 15:50:37.882180",
+ "docstatus": 0,
+ "doctype": "Desktop Icon",
+ "hidden": 0,
+ "icon": "buying",
+ "icon_type": "Link",
+ "idx": 0,
+ "label": "Purchases",
+ "link_to": "Purchases",
+ "link_type": "Workspace Sidebar",
+ "modified": "2026-02-22 16:34:12.229725",
+ "modified_by": "Administrator",
+ "name": "Purchases",
+ "owner": "Administrator",
+ "restrict_removal": 0,
+ "roles": [],
+ "standard": 1
+}
