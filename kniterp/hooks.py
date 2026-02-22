@@ -125,7 +125,7 @@ fixtures = [
     {
         "doctype": "Workspace Sidebar",
         "filters": [["name", "in", [
-            "Selling - KnitERP", "Buying - KnitERP", "Subcontracting - KnitERP", "Manufacturing - KnitERP",
+            "KnitERP", "Selling - KnitERP", "Buying - KnitERP", "Subcontracting - KnitERP", "Manufacturing - KnitERP",
             "Stock - KnitERP", "Payroll - KnitERP", "Shift & Attendance - KnitERP", "People - KnitERP", "Invoicing - KnitERP"
         ]]]
     }
