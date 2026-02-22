@@ -191,12 +191,11 @@
    "label": "Settings",
    "link_to": "Buying Settings",
    "link_type": "DocType",
-   "navigate_to_tab": "subcontract",
    "show_arrow": 0,
    "type": "Link"
   }
  ],
- "modified": "2026-02-22 16:24:42.982384",
+ "modified": "2026-02-22 17:21:45.081008",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "Outsourcing",

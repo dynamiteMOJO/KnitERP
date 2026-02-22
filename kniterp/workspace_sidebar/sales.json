@@ -33,18 +33,6 @@
   {
    "child": 0,
    "collapsible": 1,
-   "icon": "receipt-text",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Quotation",
-   "link_to": "Quotation",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
    "icon": "sell",
    "indent": 0,
    "keep_closed": 0,
@@ -227,50 +215,6 @@
    "collapsible": 1,
    "indent": 0,
    "keep_closed": 0,
-   "label": "Territory",
-   "link_to": "Territory",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Campaign",
-   "link_to": "Campaign",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Sales Person",
-   "link_to": "Sales Person",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Sales Partner",
-   "link_to": "Sales Partner",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
    "label": "Monthly Distribution",
    "link_to": "Monthly Distribution",
    "link_type": "DocType",
@@ -295,28 +239,6 @@
    "keep_closed": 0,
    "label": "Tax Template",
    "link_to": "Sales Taxes and Charges Template",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Product Bundle",
-   "link_to": "Product Bundle",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "UTM Source",
-   "link_to": "UTM Source",
    "link_type": "DocType",
    "show_arrow": 0,
    "type": "Link"
@@ -425,75 +347,9 @@
    "collapsible": 1,
    "indent": 0,
    "keep_closed": 0,
-   "label": "Sales Partners Commission",
-   "link_to": "Sales Partners Commission",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Available Stock for Packing Items",
-   "link_to": "Available Stock for Packing Items",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Territory Target Variance Based On Item Group",
-   "link_to": "Territory Target Variance Based On Item Group",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Sales Person Target Variance Based On Item Group",
-   "link_to": "Sales Person Target Variance Based On Item Group",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Sales Partner Target Variance Based On Item Group",
-   "link_to": "Sales Partner Target Variance based on Item Group",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
    "label": "Pending SO Items For Purchase Request",
    "link_to": "Pending SO Items For Purchase Request",
    "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Sales Funnel",
-   "link_to": "sales-funnel",
-   "link_type": "Page",
    "show_arrow": 0,
    "type": "Link"
   },
@@ -524,17 +380,6 @@
    "collapsible": 1,
    "indent": 0,
    "keep_closed": 0,
-   "label": "Quotation Trends",
-   "link_to": "Quotation Trends",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
    "label": "Sales Order Trends",
    "link_to": "Sales Order Trends",
    "link_type": "Report",
@@ -553,17 +398,6 @@
    "type": "Link"
   },
   {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Sales Person-wise Transaction Summary",
-   "link_to": "Sales Person-wise Transaction Summary",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
    "child": 0,
    "collapsible": 1,
    "icon": "settings",
@@ -576,7 +410,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-02-22 16:24:32.588900",
+ "modified": "2026-02-22 17:07:56.008169",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "Sales",

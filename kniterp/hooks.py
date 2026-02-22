@@ -111,28 +111,6 @@ fixtures = [
     {
         "doctype": "Custom Field",
         "filters": [["module", "=", "Kniterp"]]
-    },
-    {
-        "doctype": "Workspace",
-        "filters": [["name", "in", [
-            "KnitERP",
-            "Selling - KnitERP", "Buying - KnitERP", "Subcontracting - KnitERP", "Manufacturing - KnitERP",
-            "Stock - KnitERP", "Payroll - KnitERP", "Shift & Attendance - KnitERP", "People - KnitERP", "Invoicing - KnitERP"
-        ]]]
-    },
-    {
-        "doctype": "Workspace Sidebar",
-        "filters": [["name", "in", [
-            "KnitERP", "Selling - KnitERP", "Buying - KnitERP", "Subcontracting - KnitERP", "Manufacturing - KnitERP",
-            "Stock - KnitERP", "Payroll - KnitERP", "Shift & Attendance - KnitERP", "People - KnitERP", "Invoicing - KnitERP"
-        ]]]
-    },
-    {
-        "doctype": "Desktop Icon",
-        "filters": [["name", "in", [
-            "KnitERP", "Selling - KnitERP", "Buying - KnitERP", "Subcontracting - KnitERP", "Manufacturing - KnitERP",
-            "Stock - KnitERP", "Payroll - KnitERP", "Shift & Attendance - KnitERP", "People - KnitERP", "Invoicing - KnitERP"
-        ]]]
     }
 ]
 

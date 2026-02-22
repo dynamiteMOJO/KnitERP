@@ -80,73 +80,6 @@
   {
    "child": 0,
    "collapsible": 1,
-   "icon": "getting-started",
-   "indent": 1,
-   "keep_closed": 1,
-   "label": "Material Planning",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Section Break"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Production Plan",
-   "link_to": "Production Plan",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "icon": "",
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Forecasting",
-   "link_to": "Exponential Smoothing Forecasting",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Master Production Schedule",
-   "link_to": "Master Production Schedule",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Sales Forecast",
-   "link_to": "Sales Forecast",
-   "link_type": "DocType",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Production Planning Report",
-   "link_to": "Production Planning Report",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 0,
-   "collapsible": 1,
    "icon": "tool",
    "indent": 1,
    "keep_closed": 1,
@@ -200,6 +133,18 @@
    "type": "Link"
   },
   {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "git-pull-request-create-arrow",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "BOM Designer",
+   "link_to": "bom_designer",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
    "child": 0,
    "collapsible": 1,
    "icon": "notepad-text",
@@ -228,17 +173,6 @@
    "keep_closed": 0,
    "label": "Work Order Summary",
    "link_to": "Work Order Summary",
-   "link_type": "Report",
-   "show_arrow": 0,
-   "type": "Link"
-  },
-  {
-   "child": 1,
-   "collapsible": 1,
-   "indent": 0,
-   "keep_closed": 0,
-   "label": "Quality Inspection Summary",
-   "link_to": "Quality Inspection Summary",
    "link_type": "Report",
    "show_arrow": 0,
    "type": "Link"
@@ -424,7 +358,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-02-22 16:24:36.734326",
+ "modified": "2026-02-22 17:19:14.258389",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "Production",
