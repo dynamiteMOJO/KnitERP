@@ -22,11 +22,11 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-01-04 08:11:04.426591",
+ "modified": "2026-02-23 08:59:35.288703",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "Item Attribute Applies To Values",
- "naming_rule": "Expression",
+ "naming_rule": "Expression (old style)",
  "owner": "Administrator",
  "permissions": [
   {
@@ -37,7 +37,7 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "System Manager",
+   "role": "Item Manager",
    "share": 1,
    "write": 1
   }

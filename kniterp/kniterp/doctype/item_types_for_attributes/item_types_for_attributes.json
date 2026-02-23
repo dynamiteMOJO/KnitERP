@@ -21,7 +21,7 @@
  "grid_page_length": 50,
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2025-12-23 15:46:14.451081",
+ "modified": "2026-02-23 08:59:35.205824",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "Item types for attributes",
@@ -35,7 +35,7 @@
    "print": 1,
    "read": 1,
    "report": 1,
-   "role": "System Manager",
+   "role": "Item Manager",
    "share": 1,
    "write": 1
   }
