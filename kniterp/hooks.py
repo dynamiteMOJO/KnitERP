@@ -170,6 +170,7 @@ fixtures = [
 
 # before_install = "kniterp.install.before_install"
 # after_install = "kniterp.install.after_install"
+after_install = "kniterp.kniterp.install.after_migrate"
 after_migrate = "kniterp.kniterp.install.after_migrate"
 
 # Uninstallation
