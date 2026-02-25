@@ -358,7 +358,7 @@ class KniterpHome {
             if (tool === "attendance") {
                 frappe.set_route("Form", "Employee Attendance Tool");
             } else if (tool === "payroll") {
-                frappe.set_route("Workspaces", "Payroll");
+                frappe.set_route("Workspaces", "Payroll Management");
             } else if (tool === "conveyance") {
                 // Assuming Monthly Conveyance based on previous conversations maybe
                 frappe.set_route("List", "Monthly Conveyance");
