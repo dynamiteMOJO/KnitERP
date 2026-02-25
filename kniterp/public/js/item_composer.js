@@ -7,14 +7,15 @@ window.kniterp_open_item_composer = function (opts = {}) {
     const {
         on_select = null,
         prefill = {},
-        classification = "Fabric"
+        classification = "Fabric",
+        quick_fill_text = ""
     } = opts;
 
     frappe.call({
         method: "kniterp.api.item_composer.get_composer_options",
         callback(r) {
             const options = r.message || {};
-            _show_composer_dialog(options, on_select, prefill, classification);
+            _show_composer_dialog(options, on_select, prefill, classification, quick_fill_text);
         }
     });
 };
@@ -23,7 +24,7 @@ window.kniterp_open_item_composer = function (opts = {}) {
 // ──────────────────────────────────────────────
 // BUILD & SHOW DIALOG
 // ──────────────────────────────────────────────
-function _show_composer_dialog(options, on_select, prefill, initial_classification) {
+function _show_composer_dialog(options, on_select, prefill, initial_classification, quick_fill_text) {
 
     // Build autocomplete option lists per dimension
     const ac_lists = {};
@@ -205,6 +206,7 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
 
     dialog._composer_options = options;
     dialog._ac_lists = ac_lists;
+    dialog._composer_on_select = on_select;
     dialog.show();
 
     // Setup awesomplete alias matching on autocomplete fields
@@ -226,6 +228,13 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
     if (prefill.structure) dialog.set_value("structure", prefill.structure);
     if (prefill.state) dialog.set_value("state", prefill.state);
     if (prefill.lycra) dialog.set_value("lycra", prefill.lycra);
+
+    // Auto Quick Fill if text was provided (e.g., from Link field)
+    if (quick_fill_text) {
+        dialog.set_value("quick_fill", quick_fill_text);
+        // Trigger quick fill after a short delay to let dialog render
+        setTimeout(() => _do_quick_fill(dialog), 300);
+    }
 }
 
 
@@ -262,6 +271,11 @@ function _do_quick_fill(dialog) {
     if (!text || !text.trim()) return;
 
     const result_wrapper = dialog.get_field("quick_fill_result")?.$wrapper;
+
+    // Clear all dimension slots first
+    ["count", "fiber", "modifier1", "modifier2", "structure", "lycra", "state"].forEach(f => {
+        dialog.set_value(f, "");
+    });
 
     frappe.call({
         method: "kniterp.api.item_composer.resolve_for_composer",
@@ -581,12 +595,18 @@ function _render_preview(dialog, name, code, duplicates) {
     if (duplicates && duplicates.length) {
         dup_html = `<div class="text-danger mt-2">
             <i class="fa fa-exclamation-triangle"></i>
-            <strong>${__("Duplicate found:")}</strong>
-            <ul class="mb-0">`;
+            <strong>${__("Existing item found — click to use:")}</strong>
+            <div class="mt-1">`;
         duplicates.forEach(d => {
-            dup_html += `<li><strong>${d.item_code}</strong> — ${d.item_name}</li>`;
+            dup_html += `<button class="btn btn-xs btn-default mr-1 mb-1 kniterp-use-existing"
+                                 data-item="${frappe.utils.escape_html(d.item_code)}"
+                                 style="text-align: left;">
+                <i class="fa fa-check-circle text-success"></i>
+                <strong>${frappe.utils.escape_html(d.item_code)}</strong>
+                — ${frappe.utils.escape_html(d.item_name)}
+            </button>`;
         });
-        dup_html += `</ul></div>`;
+        dup_html += `</div></div>`;
     } else {
         dup_html = `<div class="text-success mt-2">
             <i class="fa fa-check"></i> ${__("No duplicate found")}
@@ -600,6 +620,23 @@ function _render_preview(dialog, name, code, duplicates) {
             ${dup_html}
         </div>
     `);
+
+    // Bind click on existing items
+    wrapper.find(".kniterp-use-existing").on("click", function () {
+        const item_code = $(this).attr("data-item");
+        const on_select = dialog._composer_on_select;
+        dialog.hide();
+        // Delay callback so dialog fully closes first
+        setTimeout(() => {
+            if (on_select) {
+                on_select(item_code);
+            }
+            frappe.show_alert({
+                message: __("Selected existing: {0}", [item_code]),
+                indicator: "blue"
+            });
+        }, 200);
+    });
 }
 
 
@@ -797,3 +834,79 @@ function _refresh_autocomplete(dialog, dimension, new_value) {
         }
     });
 }
+
+
+// ======================================================
+// INTERCEPT "Create a new Item" IN LINK FIELDS
+// Monkey-patch ControlLink.new_doc:
+//   - If doctype is "Item" → open Composer with typed text
+//   - All other doctypes → original Frappe behavior
+// ======================================================
+(function () {
+    const _original_new_doc = frappe.ui.form.ControlLink.prototype.new_doc;
+
+    frappe.ui.form.ControlLink.prototype.new_doc = function () {
+        const doctype = this.get_options();
+
+        if (doctype !== "Item") {
+            return _original_new_doc.call(this);
+        }
+
+        // Capture full context before opening dialog
+        const typed_text = this.get_label_value() || "";
+        const link_control = this;
+        const fieldname = this.df.fieldname;
+        const frm = this.frm;
+        const cdt = this.doctype;
+        const cdn = this.doc?.name;
+
+        kniterp_open_item_composer({
+            quick_fill_text: typed_text,
+            on_select(item_code) {
+                // Wait for Composer dialog to fully close before setting value
+                setTimeout(() => {
+                    // Tier 1: Standard form child table row
+                    if (frm && cdt && cdn && fieldname) {
+                        frappe.model.set_value(cdt, cdn, fieldname, item_code).then(() => {
+                            frm.dirty();
+                            frm.refresh_fields();
+                        });
+                        return;
+                    }
+
+                    // Tier 2: Standard form parent-level field
+                    if (frm && fieldname) {
+                        frm.set_value(fieldname, item_code);
+                        return;
+                    }
+
+                    // Tier 3: Custom pages (BOM designer, dialogs, etc.)
+                    // IMPORTANT: Do NOT use set_value() — it triggers async validation
+                    // that clears the value when the control has no frm/doc.
+                    // Instead, bypass validation by setting internal state directly,
+                    // exactly as Frappe does after awesomplete-select confirmation.
+                    if (link_control) {
+                        // Set internal value state (bypasses validation)
+                        link_control.value = item_code;
+                        link_control.last_value = item_code;
+
+                        // Set the visible input text
+                        if (link_control.$input) {
+                            link_control.$input.val(item_code);
+                        }
+
+                        // Trigger BOM designer's change callback (uses df.change)
+                        if (typeof link_control.df?.change === "function") {
+                            link_control.df.change();
+                        } else if (typeof link_control.df?.onchange === "function") {
+                            link_control.df.onchange();
+                        }
+                    }
+                }, 300);
+            }
+        });
+
+        return false;
+    };
+
+})();

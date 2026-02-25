@@ -65,6 +65,10 @@ window.kniterp_open_item_selector = function (opts = {}) {
     dialog._kniterp_opts = opts;
     dialog._kniterp_mode = mode;
 
+    // Chain on_select through to Composer's "Create New Item" flow
+    state._dialog = dialog;
+    state._on_select = opts.on_select || null;
+
     dialog.show();
     setup_selector_autocomplete(dialog, state);
 };
