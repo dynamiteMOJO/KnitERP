@@ -56,9 +56,16 @@ override_whitelisted_methods = {
     "erpnext.manufacturing.doctype.job_card.job_card.make_subcontracting_po": "kniterp.kniterp.overrides.job_card.make_subcontracting_po"
 }
 
+# All Item link-field searches use our smart fuzzy search
+standard_queries = {
+    "Item": "kniterp.api.item_search.smart_search"
+}
+
 doc_events = {
     "Item": {
-        "before_save": "kniterp.api.item.enforce_batch_tracking_for_fabric_yarn"
+        "before_save": "kniterp.api.item.enforce_batch_tracking_for_fabric_yarn",
+        "after_insert": "kniterp.api.item_search.on_item_save",
+        "on_update": "kniterp.api.item_search.on_item_save"
     },
     "Salary Slip": {
         "before_save": "kniterp.payroll.calculate_variable_pay"
@@ -95,6 +102,7 @@ fixtures = [
     "Textile Attribute",
     "Textile Attribute Value",
     "Transaction Parameter",
+    "Item Token Alias",
     "Item Attribute Applies To Values",
     {
         "doctype": "Designation",

@@ -1,0 +1,81 @@
+{
+    "actions": [],
+    "allow_rename": 1,
+    "autoname": "format:{alias}",
+    "creation": "2026-02-25 02:30:00.000000",
+    "doctype": "DocType",
+    "engine": "InnoDB",
+    "field_order": [
+        "alias",
+        "canonical",
+        "dimension",
+        "is_auto"
+    ],
+    "fields": [
+        {
+            "fieldname": "alias",
+            "fieldtype": "Data",
+            "in_list_view": 1,
+            "label": "Alias",
+            "reqd": 1,
+            "unique": 1,
+            "description": "Lowercase search token e.g. ctn, sj, 30s"
+        },
+        {
+            "fieldname": "canonical",
+            "fieldtype": "Data",
+            "in_list_view": 1,
+            "label": "Canonical",
+            "reqd": 1,
+            "description": "Official form e.g. Cotton, S/Jersey, 30's"
+        },
+        {
+            "fieldname": "dimension",
+            "fieldtype": "Select",
+            "in_list_view": 1,
+            "label": "Dimension",
+            "options": "\ncount\nfiber\nmodifier\nstructure\nlycra\nstate",
+            "reqd": 1
+        },
+        {
+            "default": "0",
+            "fieldname": "is_auto",
+            "fieldtype": "Check",
+            "label": "Auto Generated"
+        }
+    ],
+    "index_web_pages_for_search": 0,
+    "links": [],
+    "modified": "2026-02-25 02:30:00.000000",
+    "modified_by": "Administrator",
+    "module": "Kniterp",
+    "name": "Item Token Alias",
+    "naming_rule": "Expression (old style)",
+    "owner": "Administrator",
+    "permissions": [
+        {
+            "create": 1,
+            "delete": 1,
+            "email": 1,
+            "export": 1,
+            "print": 1,
+            "read": 1,
+            "report": 1,
+            "role": "System Manager",
+            "share": 1,
+            "write": 1
+        },
+        {
+            "create": 1,
+            "delete": 0,
+            "read": 1,
+            "role": "Item Manager",
+            "write": 1
+        }
+    ],
+    "quick_entry": 1,
+    "row_format": "Dynamic",
+    "sort_field": "alias",
+    "sort_order": "ASC",
+    "states": []
+}

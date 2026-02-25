@@ -85,7 +85,7 @@ function kniterp_bind_item_dblclick({
 
 frappe.ui.form.on("Sales Order", {
     refresh(frm) {
-        // Button (safety net)
+        // Button (safety net for attribute-based selection)
         kniterp_attach_item_selector({
             frm,
             condition: frm => !frm.doc.is_subcontracted
@@ -164,7 +164,7 @@ window.kniterp_handle_subcontracted_service_item = async function ({
     if (!row.item_code || row.fg_item) return;
 
     const result =
-        await frm.events.get_subcontracting_boms_for_service_item(row.item_code);    
+        await frm.events.get_subcontracting_boms_for_service_item(row.item_code);
 
     if (!result?.message) return;
 

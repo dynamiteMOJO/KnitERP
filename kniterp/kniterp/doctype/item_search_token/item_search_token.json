@@ -1,0 +1,74 @@
+{
+    "actions": [],
+    "creation": "2026-02-25 02:30:00.000000",
+    "doctype": "DocType",
+    "engine": "InnoDB",
+    "field_order": [
+        "item_code",
+        "item_name",
+        "token",
+        "dimension",
+        "sequence"
+    ],
+    "fields": [
+        {
+            "fieldname": "item_code",
+            "fieldtype": "Link",
+            "in_list_view": 1,
+            "label": "Item Code",
+            "options": "Item",
+            "reqd": 1
+        },
+        {
+            "fieldname": "item_name",
+            "fieldtype": "Data",
+            "in_list_view": 1,
+            "label": "Item Name",
+            "read_only": 1
+        },
+        {
+            "fieldname": "token",
+            "fieldtype": "Data",
+            "in_list_view": 1,
+            "label": "Token",
+            "reqd": 1
+        },
+        {
+            "fieldname": "dimension",
+            "fieldtype": "Select",
+            "in_list_view": 1,
+            "label": "Dimension",
+            "options": "\ncount\nfiber\nmodifier\nstructure\nlycra\nstate"
+        },
+        {
+            "fieldname": "sequence",
+            "fieldtype": "Int",
+            "label": "Sequence"
+        }
+    ],
+    "index_web_pages_for_search": 0,
+    "links": [],
+    "modified": "2026-02-25 02:30:00.000000",
+    "modified_by": "Administrator",
+    "module": "Kniterp",
+    "name": "Item Search Token",
+    "naming_rule": "Autoincrement",
+    "owner": "Administrator",
+    "permissions": [
+        {
+            "create": 1,
+            "delete": 1,
+            "read": 1,
+            "role": "System Manager",
+            "write": 1
+        },
+        {
+            "read": 1,
+            "role": "Item Manager"
+        }
+    ],
+    "row_format": "Dynamic",
+    "sort_field": "item_code",
+    "sort_order": "ASC",
+    "states": []
+}
