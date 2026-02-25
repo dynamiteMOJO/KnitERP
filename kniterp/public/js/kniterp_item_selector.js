@@ -283,21 +283,38 @@ function render_results(dialog, items, state) {
 }
 
 // ======================================================
-// CREATE ITEM (reuse your existing preload logic)
+// CREATE ITEM → Open Composer (Phase 2)
 // ======================================================
 function create_item_from_selector(state) {
-    console.log("Kniterp: Preparing payload for new item", state);
+    // Build prefill from the attribute picker's state
+    const prefill = {};
+    if (state.attributes) {
+        state.attributes.forEach(a => {
+            const attr = (a.kniterp_attribute || "").toLowerCase();
+            const val = a.kniterp_value || "";
+            if (attr.includes("yarn spec") || attr.includes("count")) {
+                prefill.count = val;
+            } else if (attr.includes("composition") || attr.includes("fiber")) {
+                prefill.fiber = val;
+            } else if (attr.includes("structure") || attr.includes("knit")) {
+                prefill.structure = val;
+            } else if (attr.includes("finish") || attr.includes("state")) {
+                prefill.state = val;
+            } else if (attr.includes("yarn type") || attr.includes("modifier")) {
+                prefill.modifier = val;
+            } else if (attr.includes("elastane") || attr.includes("lycra")) {
+                prefill.lycra = val;
+            }
+        });
+    }
 
-    // 🔑 Use your existing preload mechanism
-    sessionStorage.setItem(
-        "kniterp_new_item_payload",
-        JSON.stringify({
-            classification: state.classification,
-            textile_attributes: state.attributes
-        })
-    );
+    // Open the Composer, passing the original on_select callback
+    const parent_dialog = state._dialog;
+    if (parent_dialog) parent_dialog.hide();
 
-    console.log("Kniterp: Opening new item form in new tab");
-    frappe.open_in_new_tab = true;
-    frappe.set_route("Form", "Item", "new-item");
+    kniterp_open_item_composer({
+        classification: state.classification || "Fabric",
+        prefill,
+        on_select: state._on_select || null,
+    });
 }
