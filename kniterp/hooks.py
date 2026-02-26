@@ -97,11 +97,8 @@ doc_events = {
 
 
 fixtures = [
-    "Textile Attribute",
-    "Textile Attribute Value",
     "Transaction Parameter",
     "Item Token Alias",
-    "Item Attribute Applies To Values",
     {
         "doctype": "Designation",
         "filters": [["name", "in", ["Master", "Helper", "Operator"]]]
