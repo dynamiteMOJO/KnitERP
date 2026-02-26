@@ -278,7 +278,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                         if (this.initial_item) {
                             this.fg_item_select.set_value(this.initial_item);
                         }
-                        this.bind_item_selector_dblclick(this.fg_item_select, $fg_target);
+
                     }
                 } catch (e) {
                     frappe.msgprint(__('Error initializing Final Good selector'));
@@ -351,25 +351,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             });
         }
 
-        bind_item_selector_dblclick(control, $target) {
-            $target.off('dblclick', 'input');
-            $target.on('dblclick', 'input', () => {
-                if (typeof kniterp_open_item_selector !== 'undefined') {
-                    kniterp_open_item_selector({
-                        on_select: (item_code) => {
-                            if (control && typeof control.set_value === 'function') {
-                                control.set_value(item_code);
-                                if (control.df.change) control.df.change();
-                            }
-                        }
-                    });
-                }
-            });
 
-            setTimeout(() => {
-                $target.find('input').attr('placeholder', 'Double-click for attribute selector...');
-            }, 100);
-        }
 
         add_operation(type) {
             let existing = this.operations.find(o => o.type === type);
@@ -638,7 +620,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                             if (ctrl) {
                                 ctrl.make();
                                 ctrl.refresh();
-                                this.bind_item_selector_dblclick(ctrl, target);
+
                                 $card.data('sfg_control', ctrl);
                             }
                         } catch (e) {
@@ -721,7 +703,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                         if (ctrl) {
                             ctrl.make();
                             ctrl.refresh();
-                            this.bind_item_selector_dblclick(ctrl, target);
+
                             $row.data('control', ctrl);
                             if (is_dye) this.sync_dyeing();
                         }
