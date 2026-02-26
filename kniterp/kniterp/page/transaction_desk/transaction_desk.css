@@ -1,0 +1,448 @@
+/* ── Transaction Desk ─────────────────────────────────── */
+
+.td-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 20px;
+}
+
+/* ── Type Selector ─────────────────────────────────── */
+
+.td-welcome h3 {
+    font-weight: 600;
+    color: var(--heading-color);
+}
+
+.td-type-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+    gap: 20px;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.td-type-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 28px 20px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    background: var(--card-bg);
+}
+
+.td-type-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
+    border-color: var(--primary);
+}
+
+.td-type-icon {
+    width: 64px;
+    height: 64px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 14px;
+}
+
+.td-type-label {
+    font-weight: 600;
+    font-size: 15px;
+    color: var(--heading-color);
+    margin-bottom: 4px;
+}
+
+.td-type-doctype {
+    font-size: 12px;
+}
+
+/* ── Form ─────────────────────────────────────────── */
+
+.td-form-header {
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.td-form-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.td-fields-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px 20px;
+}
+
+.td-fields-grid .td-section-break {
+    grid-column: 1 / -1;
+}
+
+.td-fields-grid .td-field-wrapper .frappe-control {
+    margin-bottom: 0;
+}
+
+.td-fields-grid .td-field-wrapper .frappe-control .form-group {
+    margin-bottom: 8px;
+}
+
+/* ── Item Table ──────────────────────────────────── */
+
+.td-items-table,
+.td-accounts-tbl {
+    font-size: 13px;
+}
+
+.td-items-table th,
+.td-accounts-tbl th {
+    background: var(--subtle-fg);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+    color: var(--text-muted);
+    padding: 8px 10px;
+    white-space: nowrap;
+}
+
+.td-items-table td,
+.td-accounts-tbl td {
+    padding: 4px 6px;
+    vertical-align: middle;
+}
+
+.td-items-table .frappe-control,
+.td-accounts-tbl .frappe-control {
+    margin-bottom: 0;
+}
+
+.td-items-table .frappe-control .form-group,
+.td-accounts-tbl .frappe-control .form-group {
+    margin-bottom: 0;
+}
+
+.td-items-table .frappe-control label,
+.td-accounts-tbl .frappe-control label {
+    display: none;
+}
+
+.td-items-total-row td,
+.td-account-total-row td {
+    background: var(--subtle-fg);
+    padding: 10px;
+}
+
+/* ── Tax Table ───────────────────────────────────── */
+
+.td-tax-table {
+    font-size: 13px;
+}
+
+.td-tax-table th {
+    background: var(--subtle-fg);
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+/* ── Totals ──────────────────────────────────────── */
+
+.td-totals-card {
+    background: var(--subtle-fg);
+    border-radius: 8px;
+    padding: 16px 20px;
+    max-width: 350px;
+    margin-left: auto;
+}
+
+.td-total-row {
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 14px;
+}
+
+.td-grand-total {
+    border-top: 2px solid var(--border-color);
+    margin-top: 8px;
+    padding-top: 10px;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--heading-color);
+}
+
+/* ── Recent Panel ────────────────────────────────── */
+
+.td-recent-panel {
+    position: sticky;
+    top: 70px;
+    background: var(--card-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    padding: 16px;
+}
+
+.td-recent-entry {
+    display: block;
+    padding: 8px 10px;
+    border-radius: 6px;
+    margin-bottom: 4px;
+    text-decoration: none;
+    color: var(--text-color);
+    transition: background 0.15s;
+}
+
+.td-recent-entry:hover {
+    background: var(--subtle-fg);
+    text-decoration: none;
+    color: var(--text-color);
+}
+
+/* ── Success Card ────────────────────────────────── */
+
+.td-success-card {
+    padding: 60px 20px;
+    max-width: 600px;
+    margin: 0 auto;
+}
+
+.td-success-icon {
+    animation: td-bounce-in 0.5s ease;
+}
+
+@keyframes td-bounce-in {
+    0% {
+        transform: scale(0);
+        opacity: 0;
+    }
+
+    60% {
+        transform: scale(1.2);
+    }
+
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* ── Difference Row (JV) ─────────────────────────── */
+
+#td-difference-row td {
+    background: #fff5f5;
+}
+
+/* ── Enhanced Item Row ───────────────────────────── */
+
+.td-item-name-stack {
+    line-height: 1.3;
+}
+
+.td-item-name-sub {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+    max-width: 280px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.td-param-count-badge {
+    display: inline-block;
+    background: var(--cyan-50, #e6f7f5);
+    color: var(--cyan-700, #0d7377);
+    border: 1px solid var(--cyan-200, #b2e0db);
+    font-size: 10px;
+    font-weight: 600;
+    padding: 1px 6px;
+    border-radius: 10px;
+    margin-left: 6px;
+    cursor: pointer;
+    vertical-align: middle;
+}
+
+[data-theme="dark"] .td-param-count-badge {
+    background: rgba(13, 115, 119, 0.15);
+    color: #5dcfc5;
+    border-color: rgba(93, 207, 197, 0.3);
+}
+
+/* ── Expand/Collapse Button ─────────────────────── */
+
+.td-btn-expand {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 2px 6px;
+    border-radius: 4px;
+    transition: all 0.15s ease;
+    font-size: 12px;
+}
+
+.td-btn-expand:hover {
+    background: var(--subtle-fg);
+    color: var(--text-color);
+}
+
+.td-btn-expand .fa {
+    transition: transform 0.2s ease;
+}
+
+.td-btn-expand.expanded .fa {
+    transform: rotate(180deg);
+}
+
+/* ── Detail Panel ────────────────────────────────── */
+
+.td-detail-row td {
+    padding: 0 !important;
+    border-top: none !important;
+}
+
+.td-detail-panel {
+    background: var(--subtle-fg, #f7f7f7);
+    border-top: 1px dashed var(--border-color);
+    padding: 12px 16px;
+    margin: 0 8px 0 40px;
+    border-radius: 0 0 6px 6px;
+}
+
+[data-theme="dark"] .td-detail-panel {
+    background: var(--subtle-bg, rgba(255, 255, 255, 0.03));
+}
+
+/* ── Description ─────────────────────────────────── */
+
+.td-item-description-wrap {
+    margin-bottom: 10px;
+}
+
+.td-item-description-wrap .frappe-control {
+    margin-bottom: 0;
+}
+
+.td-item-description-wrap .frappe-control .form-group {
+    margin-bottom: 0;
+}
+
+.td-item-description-wrap textarea {
+    font-size: 12px;
+    min-height: 50px;
+    resize: vertical;
+}
+
+/* ── Parameter Badges ────────────────────────────── */
+
+.td-params-section {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.td-params-label {
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-muted);
+    margin-right: 2px;
+}
+
+.td-param-badge {
+    display: inline-flex;
+    align-items: center;
+    background: var(--cyan-50, #e6f7f5);
+    color: var(--cyan-700, #0d7377);
+    border: 1px solid var(--cyan-200, #b2e0db);
+    font-size: 12px;
+    font-weight: 500;
+    padding: 3px 10px;
+    border-radius: 12px;
+    white-space: nowrap;
+}
+
+[data-theme="dark"] .td-param-badge {
+    background: rgba(13, 115, 119, 0.15);
+    color: #5dcfc5;
+    border-color: rgba(93, 207, 197, 0.3);
+}
+
+.td-param-badge .td-param-key {
+    opacity: 0.7;
+    margin-right: 3px;
+}
+
+.td-param-badge .td-param-val {
+    font-weight: 700;
+}
+
+.td-btn-add-param {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: 1px dashed var(--cyan-300, #7ed6cc);
+    color: var(--cyan-700, #0d7377);
+    font-size: 11px;
+    font-weight: 600;
+    padding: 3px 10px;
+    border-radius: 12px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+}
+
+[data-theme="dark"] .td-btn-add-param {
+    border-color: rgba(93, 207, 197, 0.4);
+    color: #5dcfc5;
+}
+
+.td-btn-add-param:hover {
+    background: var(--cyan-50, #e6f7f5);
+    border-style: solid;
+}
+
+[data-theme="dark"] .td-btn-add-param:hover {
+    background: rgba(13, 115, 119, 0.15);
+}
+
+/* ── Responsive ──────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .td-fields-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .td-type-grid {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+    }
+
+    .td-type-card {
+        padding: 20px 12px;
+    }
+
+    .td-totals-card {
+        max-width: 100%;
+    }
+
+    .td-item-name-sub {
+        max-width: 150px;
+    }
+
+    .td-detail-panel {
+        margin: 0 4px 0 20px;
+    }
+}

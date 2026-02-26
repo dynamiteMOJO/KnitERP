@@ -278,6 +278,16 @@ def smart_search(doctype, txt, searchfield=None, start=0, page_length=20,
             as_list=not as_dict
         )
 
+    # ── Exact name match (for link validation) ──
+    # When Frappe validates a selected link value, it passes the full
+    # item code as txt. Check for exact match first to prevent
+    # the value from being cleared by failed token resolution.
+    exact = frappe.db.get_value("Item", txt, ["name", "item_name", "disabled"], as_dict=True)
+    if exact and not exact.get("disabled"):
+        if as_dict:
+            return [{"value": exact.name, "description": exact.item_name}]
+        return [[exact.name, exact.item_name]]
+
     # Resolve tokens
     resolved = resolve_tokens(txt)
 
