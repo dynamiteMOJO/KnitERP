@@ -34,7 +34,6 @@ app_license = "mit"
 
 app_include_js = [
     "/assets/kniterp/js/item_composer.js",
-    "/assets/kniterp/js/item_client_script.js",
     "/assets/kniterp/js/sales_order_subcontracting_fix.js",
     "/assets/kniterp/js/sales_order.js",
     "/assets/kniterp/js/purchase_order.js",
