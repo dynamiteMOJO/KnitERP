@@ -123,7 +123,7 @@ class TransactionDesk {
         let cards_html = '';
         for (const [key, cfg] of Object.entries(registry)) {
             cards_html += `
-                <div class="td-type-card" data-type="${key}">
+                <div class="td-type-card" data-type="${key}" tabindex="0">
                     <div class="td-type-icon" style="background: ${cfg.color}15; color: ${cfg.color};">
                         <i class="fa ${cfg.icon} fa-2x"></i>
                     </div>
@@ -147,6 +147,48 @@ class TransactionDesk {
             const type = $(e.currentTarget).data('type');
             this.init_form(type);
         });
+
+        // Keyboard navigation
+        this.page.main.find('.td-type-grid').on('keydown', '.td-type-card', (e) => {
+            const $cards = this.page.main.find('.td-type-card');
+            const currentIndex = $cards.index(e.currentTarget);
+            let nextIndex = currentIndex;
+
+            // Determine columns per row by checking offsetTop
+            let cols = 1;
+            for (let i = 1; i < $cards.length; i++) {
+                if ($cards.eq(i).offset().top > $cards.eq(0).offset().top + 10) {
+                    break;
+                }
+                cols++;
+            }
+
+            if (e.key === 'ArrowRight') {
+                nextIndex = currentIndex + 1;
+            } else if (e.key === 'ArrowLeft') {
+                nextIndex = currentIndex - 1;
+            } else if (e.key === 'ArrowDown') {
+                nextIndex = currentIndex + cols;
+            } else if (e.key === 'ArrowUp') {
+                nextIndex = currentIndex - cols;
+            } else if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                $(e.currentTarget).click();
+                return;
+            }
+
+            if (nextIndex >= 0 && nextIndex < $cards.length && nextIndex !== currentIndex) {
+                e.preventDefault();
+                $cards.eq(nextIndex).focus();
+            }
+        });
+
+        // Auto focus the first card to enable keyboard navigation immediately
+        setTimeout(() => {
+            if (!this.current_type) {
+                this.page.main.find('.td-type-card').first().focus();
+            }
+        }, 100);
     }
 
     // ─── Form Initialization ────────────────────────────────
@@ -389,6 +431,74 @@ class TransactionDesk {
                             console.error('Party tax template error:', e);
                         }
                     }, 50);
+
+                    // Auto fetch addresses
+                    setTimeout(async () => {
+                        const party = control.get_value();
+                        if (!party || (cfg.doctype !== 'Sales Order' && cfg.doctype !== 'Purchase Order')) return;
+
+                        try {
+                            const res = await frappe.call({
+                                method: 'erpnext.accounts.party.get_party_details',
+                                args: {
+                                    party: party,
+                                    party_type: cfg.party_doctype,
+                                    company: this.get_field_value('company') || this.defaults.company,
+                                    fetch_payment_terms_template: 0
+                                }
+                            });
+                            if (res && res.message) {
+                                const d = res.message;
+
+                                if (cfg.doctype === 'Sales Order') {
+                                    if (this.form_controls['customer_address'] && d['customer_address']) {
+                                        this.form_controls['customer_address'].set_value(d['customer_address']);
+                                        this.form_controls['customer_address']._selected_value = d['customer_address'];
+                                    }
+                                    if (this.form_controls['shipping_address_name'] && d['shipping_address_name']) {
+                                        this.form_controls['shipping_address_name'].set_value(d['shipping_address_name']);
+                                        this.form_controls['shipping_address_name']._selected_value = d['shipping_address_name'];
+                                    }
+                                } else if (cfg.doctype === 'Purchase Order') {
+                                    if (this.form_controls['supplier_address'] && d['supplier_address']) {
+                                        this.form_controls['supplier_address'].set_value(d['supplier_address']);
+                                        this.form_controls['supplier_address']._selected_value = d['supplier_address'];
+                                    }
+
+                                    // Fetch Company address for Shipping and Billing
+                                    const company = this.get_field_value('company') || this.defaults.company;
+                                    if (company) {
+                                        const company_res = await frappe.call({
+                                            method: 'erpnext.accounts.party.get_party_details',
+                                            args: {
+                                                party: company,
+                                                party_type: 'Company',
+                                                company: company,
+                                                fetch_payment_terms_template: 0
+                                            }
+                                        });
+                                        if (company_res && company_res.message) {
+                                            const cd = company_res.message;
+                                            if (this.form_controls['billing_address'] && cd['company_address']) {
+                                                this.form_controls['billing_address'].set_value(cd['company_address']);
+                                                this.form_controls['billing_address']._selected_value = cd['company_address'];
+                                            }
+                                            if (this.form_controls['shipping_address'] && cd['shipping_address']) {
+                                                this.form_controls['shipping_address'].set_value(cd['shipping_address']);
+                                                this.form_controls['shipping_address']._selected_value = cd['shipping_address'];
+                                            } else if (this.form_controls['shipping_address'] && cd['company_address']) {
+                                                // Fallback to company_address if shipping_address is not set
+                                                this.form_controls['shipping_address'].set_value(cd['company_address']);
+                                                this.form_controls['shipping_address']._selected_value = cd['company_address'];
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        } catch (e) {
+                            console.error('Error fetching party details', e);
+                        }
+                    }, 50);
                 });
             }
         });
@@ -426,6 +536,78 @@ class TransactionDesk {
                 label: cfg.party_label,
                 reqd: 1,
             });
+
+            if (cfg.doctype === 'Sales Order') {
+                fields.push({
+                    fieldname: 'customer_address',
+                    fieldtype: 'Link',
+                    options: 'Address',
+                    label: __('Customer Address'),
+                    get_query: () => {
+                        const party = this.get_field_value(cfg.party_field);
+                        return {
+                            query: 'frappe.contacts.doctype.address.address.address_query',
+                            filters: party ? { link_doctype: 'Customer', link_name: party } : {}
+                        };
+                    }
+                });
+
+                fields.push({
+                    fieldname: 'shipping_address_name',
+                    fieldtype: 'Link',
+                    options: 'Address',
+                    label: __('Shipping Address'),
+                    get_query: () => {
+                        const party = this.get_field_value(cfg.party_field);
+                        return {
+                            query: 'frappe.contacts.doctype.address.address.address_query',
+                            filters: party ? { link_doctype: 'Customer', link_name: party, is_shipping_address: 1 } : {}
+                        };
+                    }
+                });
+            } else if (cfg.doctype === 'Purchase Order') {
+                fields.push({
+                    fieldname: 'supplier_address',
+                    fieldtype: 'Link',
+                    options: 'Address',
+                    label: __('Supplier Address'),
+                    get_query: () => {
+                        const party = this.get_field_value(cfg.party_field);
+                        return {
+                            query: 'frappe.contacts.doctype.address.address.address_query',
+                            filters: party ? { link_doctype: 'Supplier', link_name: party } : {}
+                        };
+                    }
+                });
+
+                fields.push({
+                    fieldname: 'shipping_address',
+                    fieldtype: 'Link',
+                    options: 'Address',
+                    label: __('Shipping Address'),
+                    get_query: () => {
+                        const company = this.get_field_value('company') || this.defaults.company;
+                        return {
+                            query: 'frappe.contacts.doctype.address.address.address_query',
+                            filters: company ? { link_doctype: 'Company', link_name: company, is_shipping_address: 1 } : {}
+                        };
+                    }
+                });
+
+                fields.push({
+                    fieldname: 'billing_address',
+                    fieldtype: 'Link',
+                    options: 'Address',
+                    label: __('Billing Address'),
+                    get_query: () => {
+                        const company = this.get_field_value('company') || this.defaults.company;
+                        return {
+                            query: 'frappe.contacts.doctype.address.address.address_query',
+                            filters: company ? { link_doctype: 'Company', link_name: company } : {}
+                        };
+                    }
+                });
+            }
         }
 
         if (cfg.date_field) {

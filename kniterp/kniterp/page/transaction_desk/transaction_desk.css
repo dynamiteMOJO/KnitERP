@@ -33,10 +33,26 @@
     background: var(--card-bg);
 }
 
-.td-type-card:hover {
+.td-type-card:hover,
+.td-type-card:focus {
     transform: translateY(-3px);
     box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1);
     border-color: var(--primary);
+    outline: none;
+}
+
+.td-type-card:focus {
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.1), 0 0 0 2px var(--primary);
+}
+
+[data-theme="dark"] .td-type-card:hover,
+[data-theme="dark"] .td-type-card:focus {
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4);
+    background: var(--subtle-bg, inset 0 0 0 1px var(--primary));
+}
+
+[data-theme="dark"] .td-type-card:focus {
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4), 0 0 0 2px var(--primary);
 }
 
 .td-type-icon {

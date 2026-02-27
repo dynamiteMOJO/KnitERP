@@ -321,6 +321,8 @@ def _create_sales_order(data: dict):
     doc = frappe.get_doc({
         "doctype": "Sales Order",
         "customer": data["customer"],
+        "customer_address": data.get("customer_address"),
+        "shipping_address_name": data.get("shipping_address_name"),
         "transaction_date": data.get("posting_date") or frappe.utils.today(),
         "delivery_date": data.get("delivery_date") or frappe.utils.add_days(frappe.utils.today(), 7),
         "company": data.get("company"),
@@ -332,6 +334,8 @@ def _create_sales_order(data: dict):
     if data.get("tax_template"):
         doc.taxes_and_charges = data["tax_template"]
         doc.set_taxes()
+        doc.run_method("set_missing_values")
+        doc.run_method("calculate_taxes_and_totals")
 
     return doc
 
@@ -361,6 +365,9 @@ def _create_purchase_order(data: dict):
     doc = frappe.get_doc({
         "doctype": "Purchase Order",
         "supplier": data["supplier"],
+        "supplier_address": data.get("supplier_address"),
+        "billing_address": data.get("billing_address"),
+        "shipping_address": data.get("shipping_address"),
         "transaction_date": data.get("posting_date") or frappe.utils.today(),
         "schedule_date": data.get("required_date") or frappe.utils.add_days(frappe.utils.today(), 14),
         "company": data.get("company"),
@@ -372,6 +379,8 @@ def _create_purchase_order(data: dict):
     if data.get("tax_template"):
         doc.taxes_and_charges = data["tax_template"]
         doc.set_taxes()
+        doc.run_method("set_missing_values")
+        doc.run_method("calculate_taxes_and_totals")
 
     return doc
 
