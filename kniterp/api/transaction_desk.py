@@ -384,6 +384,8 @@ def _create_sales_order(data: dict):
         "delivery_date": data.get("delivery_date") or frappe.utils.add_days(frappe.utils.today(), 7),
         "company": data.get("company"),
         "currency": data.get("currency"),
+        "po_no": data.get("po_no") or "",
+        "po_date": data.get("po_date") or "",
         "items": items,
         "taxes_and_charges": data.get("tax_template") or "",
     })
@@ -555,6 +557,8 @@ def _create_sales_invoice(data: dict):
         "due_date": data.get("due_date") or frappe.utils.add_days(frappe.utils.today(), 30),
         "company": data.get("company"),
         "currency": data.get("currency"),
+        "po_no": data.get("po_no") or "",
+        "po_date": data.get("po_date") or "",
         "items": items,
         "taxes_and_charges": data.get("tax_template") or "",
     })
@@ -645,6 +649,8 @@ def _create_delivery_note(data: dict):
         "posting_date": data.get("posting_date") or frappe.utils.today(),
         "company": data.get("company"),
         "currency": data.get("currency"),
+        "po_no": data.get("po_no") or "",
+        "po_date": data.get("po_date") or "",
         "items": items,
         "taxes_and_charges": data.get("tax_template") or "",
     })
@@ -689,6 +695,7 @@ def _create_purchase_receipt(data: dict):
         "posting_date": data.get("posting_date") or frappe.utils.today(),
         "company": data.get("company"),
         "currency": data.get("currency"),
+        "supplier_delivery_note": data.get("supplier_delivery_note") or "",
         "items": items,
         "taxes_and_charges": data.get("tax_template") or "",
     })
@@ -730,6 +737,8 @@ def _create_debit_note(data: dict):
         "company": data.get("company"),
         "currency": data.get("currency"),
         "is_return": 1,
+        "bill_no": data.get("bill_no") or "",
+        "bill_date": data.get("bill_date") or "",
         "items": items,
         "taxes_and_charges": data.get("tax_template") or "",
     }
@@ -795,6 +804,8 @@ def _create_credit_note(data: dict):
         "company": data.get("company"),
         "currency": data.get("currency"),
         "is_return": 1,
+        "po_no": data.get("po_no") or "",
+        "po_date": data.get("po_date") or "",
         "items": items,
         "taxes_and_charges": data.get("tax_template") or "",
     }

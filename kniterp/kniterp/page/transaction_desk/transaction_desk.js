@@ -48,6 +48,7 @@ class TransactionDesk {
                 label: __('Sales Order'),
                 icon: 'fa-file-text',
                 color: '#2490ef',
+                group: 'sales',
                 doctype: 'Sales Order',
                 party_field: 'customer',
                 party_label: __('Customer'),
@@ -63,6 +64,7 @@ class TransactionDesk {
                 label: __('Purchase Order'),
                 icon: 'fa-shopping-cart',
                 color: '#ff5858',
+                group: 'purchase',
                 doctype: 'Purchase Order',
                 party_field: 'supplier',
                 party_label: __('Supplier'),
@@ -78,6 +80,7 @@ class TransactionDesk {
                 label: __('Payment Received'),
                 icon: 'fa-arrow-down',
                 color: '#28a745',
+                group: 'payments',
                 doctype: 'Payment Entry',
                 party_field: 'customer',
                 party_label: __('Customer'),
@@ -91,6 +94,7 @@ class TransactionDesk {
                 label: __('Payment Made'),
                 icon: 'fa-arrow-up',
                 color: '#dc3545',
+                group: 'payments',
                 doctype: 'Payment Entry',
                 party_field: 'supplier',
                 party_label: __('Supplier'),
@@ -104,6 +108,7 @@ class TransactionDesk {
                 label: __('Journal Entry'),
                 icon: 'fa-book',
                 color: '#6c5ce7',
+                group: 'accounting',
                 doctype: 'Journal Entry',
                 has_items: false,
                 has_tax: false,
@@ -113,6 +118,7 @@ class TransactionDesk {
                 label: __('Sales Invoice'),
                 icon: 'fa-file-text-o',
                 color: '#0b84a5',
+                group: 'sales',
                 doctype: 'Sales Invoice',
                 party_field: 'customer',
                 party_label: __('Customer'),
@@ -125,6 +131,7 @@ class TransactionDesk {
                 label: __('Purchase Invoice'),
                 icon: 'fa-file-o',
                 color: '#f6511d',
+                group: 'purchase',
                 doctype: 'Purchase Invoice',
                 party_field: 'supplier',
                 party_label: __('Supplier'),
@@ -137,6 +144,7 @@ class TransactionDesk {
                 label: __('Delivery Note'),
                 icon: 'fa-truck',
                 color: '#00a86b',
+                group: 'sales',
                 doctype: 'Delivery Note',
                 party_field: 'customer',
                 party_label: __('Customer'),
@@ -149,6 +157,7 @@ class TransactionDesk {
                 label: __('Receipt Note'),
                 icon: 'fa-download',
                 color: '#e07c24',
+                group: 'purchase',
                 doctype: 'Purchase Receipt',
                 party_field: 'supplier',
                 party_label: __('Supplier'),
@@ -161,6 +170,7 @@ class TransactionDesk {
                 label: __('Debit Note'),
                 icon: 'fa-minus-circle',
                 color: '#c0392b',
+                group: 'purchase',
                 doctype: 'Purchase Invoice',
                 party_field: 'supplier',
                 party_label: __('Supplier'),
@@ -174,6 +184,7 @@ class TransactionDesk {
                 label: __('Credit Note'),
                 icon: 'fa-plus-circle',
                 color: '#27ae60',
+                group: 'sales',
                 doctype: 'Sales Invoice',
                 party_field: 'customer',
                 party_label: __('Customer'),
@@ -188,6 +199,7 @@ class TransactionDesk {
                 label: __('Stock Entry'),
                 icon: 'fa-exchange',
                 color: '#9b59b6',
+                group: 'stock',
                 doctype: 'Stock Entry',
                 has_items: true,
                 has_tax: false,
@@ -197,6 +209,7 @@ class TransactionDesk {
                 label: __('Job Work In'),
                 icon: 'fa-sign-in',
                 color: '#16a085',
+                group: 'stock',
                 doctype: 'Subcontracting Inward Order',
                 party_field: 'customer',
                 party_label: __('Customer'),
@@ -211,6 +224,7 @@ class TransactionDesk {
                 label: __('Job Work Out'),
                 icon: 'fa-sign-out',
                 color: '#d35400',
+                group: 'stock',
                 doctype: 'Subcontracting Order',
                 party_field: 'supplier',
                 party_label: __('Supplier'),
@@ -226,32 +240,66 @@ class TransactionDesk {
 
     // ─── Type Selector ──────────────────────────────────────
     render_type_selector() {
+        const previous_type = this.current_type;
         this.current_type = null;
         this.page.set_title(__('Transaction Desk'));
         this.page.clear_actions();
         this.page.main.empty();
 
         const registry = this.get_type_registry();
-        let cards_html = '';
+
+        // Define category order and labels
+        const categories = [
+            { key: 'sales', label: __('Sales'), icon: 'fa-line-chart' },
+            { key: 'purchase', label: __('Purchase'), icon: 'fa-shopping-bag' },
+            { key: 'payments', label: __('Payments'), icon: 'fa-money' },
+            { key: 'accounting', label: __('Accounting'), icon: 'fa-calculator' },
+            { key: 'stock', label: __('Stock & Job Work'), icon: 'fa-cubes' },
+        ];
+
+        // Group registry entries by category
+        const grouped = {};
+        for (const cat of categories) grouped[cat.key] = [];
         for (const [key, cfg] of Object.entries(registry)) {
-            cards_html += `
-                <div class="td-type-card" data-type="${key}" tabindex="0">
-                    <div class="td-type-icon" style="background: ${cfg.color}15; color: ${cfg.color};">
-                        <i class="fa ${cfg.icon} fa-2x"></i>
+            if (grouped[cfg.group]) grouped[cfg.group].push({ key, cfg });
+        }
+
+        // Build grouped HTML
+        let groups_html = '';
+        for (const cat of categories) {
+            const items = grouped[cat.key];
+            if (!items.length) continue;
+
+            let cards_html = '';
+            for (const { key, cfg } of items) {
+                cards_html += `
+                    <div class="td-type-card" data-type="${key}" tabindex="0">
+                        <div class="td-type-icon" style="background: ${cfg.color}15; color: ${cfg.color};">
+                            <i class="fa ${cfg.icon} fa-lg"></i>
+                        </div>
+                        <div class="td-type-label">${cfg.label}</div>
                     </div>
-                    <div class="td-type-label">${cfg.label}</div>
-                    <div class="td-type-doctype text-muted">${cfg.doctype}</div>
+                `;
+            }
+
+            groups_html += `
+                <div class="td-category-group">
+                    <div class="td-category-header">
+                        <i class="fa ${cat.icon}"></i>
+                        <span>${cat.label}</span>
+                    </div>
+                    <div class="td-type-grid">${cards_html}</div>
                 </div>
             `;
         }
 
         this.page.main.html(`
             <div class="td-container">
-                <div class="td-welcome text-center mb-5">
+                <div class="td-welcome text-center mb-4">
                     <h3 class="mb-2">${__('Create a Transaction')}</h3>
                     <p class="text-muted">${__('Select a voucher type to begin')}</p>
                 </div>
-                <div class="td-type-grid">${cards_html}</div>
+                <div class="td-categories-wrapper">${groups_html}</div>
             </div>
         `);
 
@@ -260,29 +308,34 @@ class TransactionDesk {
             this.init_form(type);
         });
 
-        // Keyboard navigation
-        this.page.main.find('.td-type-grid').on('keydown', '.td-type-card', (e) => {
+        // Keyboard navigation — works across all cards globally
+        this.page.main.find('.td-categories-wrapper').on('keydown', '.td-type-card', (e) => {
             const $cards = this.page.main.find('.td-type-card');
             const currentIndex = $cards.index(e.currentTarget);
             let nextIndex = currentIndex;
-
-            // Determine columns per row by checking offsetTop
-            let cols = 1;
-            for (let i = 1; i < $cards.length; i++) {
-                if ($cards.eq(i).offset().top > $cards.eq(0).offset().top + 10) {
-                    break;
-                }
-                cols++;
-            }
 
             if (e.key === 'ArrowRight') {
                 nextIndex = currentIndex + 1;
             } else if (e.key === 'ArrowLeft') {
                 nextIndex = currentIndex - 1;
             } else if (e.key === 'ArrowDown') {
-                nextIndex = currentIndex + cols;
+                // Find next card that is on a different row (lower offsetTop)
+                const currentTop = $(e.currentTarget).offset().top;
+                for (let i = currentIndex + 1; i < $cards.length; i++) {
+                    if ($cards.eq(i).offset().top > currentTop + 5) {
+                        nextIndex = i;
+                        break;
+                    }
+                }
             } else if (e.key === 'ArrowUp') {
-                nextIndex = currentIndex - cols;
+                // Find previous card that is on a different row (higher offsetTop)
+                const currentTop = $(e.currentTarget).offset().top;
+                for (let i = currentIndex - 1; i >= 0; i--) {
+                    if ($cards.eq(i).offset().top < currentTop - 5) {
+                        nextIndex = i;
+                        break;
+                    }
+                }
             } else if (e.key === 'Enter' || e.key === ' ') {
                 e.preventDefault();
                 $(e.currentTarget).click();
@@ -295,10 +348,17 @@ class TransactionDesk {
             }
         });
 
-        // Auto focus the first card to enable keyboard navigation immediately
+        // Focus the previously selected card (or the first card if none)
         setTimeout(() => {
             if (!this.current_type) {
-                this.page.main.find('.td-type-card').first().focus();
+                const $target = previous_type
+                    ? this.page.main.find(`.td-type-card[data-type="${previous_type}"]`)
+                    : null;
+                if ($target && $target.length) {
+                    $target.focus();
+                } else {
+                    this.page.main.find('.td-type-card').first().focus();
+                }
             }
         }, 100);
     }
@@ -751,8 +811,25 @@ class TransactionDesk {
             });
         }
 
-        // Purchase Invoice specific — bill no / date
-        if (this.current_type === 'purchase-invoice') {
+        // ── Other Party Reference fields ──────────────────────
+        // Sales-side: Customer's PO No / Date (SO, SI, DN, Credit Note)
+        if (['sales-order', 'sales-invoice', 'delivery-note', 'credit-note'].includes(this.current_type)) {
+            fields.push({ fieldtype: 'Section Break', label: __('Other Party Reference') });
+            fields.push({
+                fieldname: 'po_no',
+                fieldtype: 'Data',
+                label: __("Customer's Purchase Order"),
+            });
+            fields.push({
+                fieldname: 'po_date',
+                fieldtype: 'Date',
+                label: __("Customer's Purchase Order Date"),
+            });
+        }
+
+        // Purchase Invoice / Debit Note: Supplier Invoice No / Date
+        if (this.current_type === 'purchase-invoice' || this.current_type === 'debit-note') {
+            fields.push({ fieldtype: 'Section Break', label: __('Other Party Reference') });
             fields.push({
                 fieldname: 'bill_no',
                 fieldtype: 'Data',
@@ -762,6 +839,16 @@ class TransactionDesk {
                 fieldname: 'bill_date',
                 fieldtype: 'Date',
                 label: __('Supplier Invoice Date'),
+            });
+        }
+
+        // Purchase Receipt: Supplier Delivery Note
+        if (this.current_type === 'purchase-receipt') {
+            fields.push({ fieldtype: 'Section Break', label: __('Other Party Reference') });
+            fields.push({
+                fieldname: 'supplier_delivery_note',
+                fieldtype: 'Data',
+                label: __('Supplier Delivery Note'),
             });
         }
 
