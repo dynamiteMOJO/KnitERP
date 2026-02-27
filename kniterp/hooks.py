@@ -114,6 +114,10 @@ fixtures = [
     {
         "doctype": "Custom Field",
         "filters": [["module", "=", "Kniterp"]]
+    },
+    {
+        "doctype": "Print Format",
+        "filters": [["module", "=", "Kniterp"]]
     }
 ]
 
