@@ -54,7 +54,7 @@
   {
    "child": 1,
    "collapsible": 1,
-   "icon": "list",
+   "icon": "\ud83c\udfda\ufe0f",
    "indent": 0,
    "keep_closed": 0,
    "label": "Home",
@@ -66,11 +66,11 @@
   {
    "child": 1,
    "collapsible": 1,
-   "icon": "list",
+   "icon": "\ud83d\udcdd",
    "indent": 0,
    "keep_closed": 0,
-   "label": "Action Center",
-   "link_to": "action-center",
+   "label": "Transaction Desk",
+   "link_to": "transaction-desk",
    "link_type": "Page",
    "show_arrow": 0,
    "type": "Link"
@@ -78,7 +78,7 @@
   {
    "child": 1,
    "collapsible": 1,
-   "icon": "list",
+   "icon": "\ud83e\uddf5",
    "indent": 0,
    "keep_closed": 0,
    "label": "Production Wizard",
@@ -90,11 +90,23 @@
   {
    "child": 1,
    "collapsible": 1,
-   "icon": "list",
+   "icon": "\ud83c\udfa8",
    "indent": 0,
    "keep_closed": 0,
    "label": "BOM Designer",
    "link_to": "bom_designer",
+   "link_type": "Page",
+   "show_arrow": 0,
+   "type": "Link"
+  },
+  {
+   "child": 1,
+   "collapsible": 1,
+   "icon": "\u2622\ufe0f",
+   "indent": 0,
+   "keep_closed": 0,
+   "label": "Action Center",
+   "link_to": "action-center",
    "link_type": "Page",
    "show_arrow": 0,
    "type": "Link"
@@ -195,7 +207,7 @@
    "type": "Link"
   }
  ],
- "modified": "2026-02-27 09:17:15.118145",
+ "modified": "2026-02-27 18:16:40.212889",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "KnitERP",

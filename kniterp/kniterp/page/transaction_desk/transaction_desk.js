@@ -109,6 +109,118 @@ class TransactionDesk {
                 has_tax: false,
                 is_journal: true,
             },
+            'sales-invoice': {
+                label: __('Sales Invoice'),
+                icon: 'fa-file-text-o',
+                color: '#0b84a5',
+                doctype: 'Sales Invoice',
+                party_field: 'customer',
+                party_label: __('Customer'),
+                party_doctype: 'Customer',
+                has_items: true,
+                has_tax: true,
+                tax_type: 'sales',
+            },
+            'purchase-invoice': {
+                label: __('Purchase Invoice'),
+                icon: 'fa-file-o',
+                color: '#f6511d',
+                doctype: 'Purchase Invoice',
+                party_field: 'supplier',
+                party_label: __('Supplier'),
+                party_doctype: 'Supplier',
+                has_items: true,
+                has_tax: true,
+                tax_type: 'purchase',
+            },
+            'delivery-note': {
+                label: __('Delivery Note'),
+                icon: 'fa-truck',
+                color: '#00a86b',
+                doctype: 'Delivery Note',
+                party_field: 'customer',
+                party_label: __('Customer'),
+                party_doctype: 'Customer',
+                has_items: true,
+                has_tax: true,
+                tax_type: 'sales',
+            },
+            'purchase-receipt': {
+                label: __('Receipt Note'),
+                icon: 'fa-download',
+                color: '#e07c24',
+                doctype: 'Purchase Receipt',
+                party_field: 'supplier',
+                party_label: __('Supplier'),
+                party_doctype: 'Supplier',
+                has_items: true,
+                has_tax: true,
+                tax_type: 'purchase',
+            },
+            'debit-note': {
+                label: __('Debit Note'),
+                icon: 'fa-minus-circle',
+                color: '#c0392b',
+                doctype: 'Purchase Invoice',
+                party_field: 'supplier',
+                party_label: __('Supplier'),
+                party_doctype: 'Supplier',
+                has_items: true,
+                has_tax: true,
+                tax_type: 'purchase',
+                is_return: true,
+            },
+            'credit-note': {
+                label: __('Credit Note'),
+                icon: 'fa-plus-circle',
+                color: '#27ae60',
+                doctype: 'Sales Invoice',
+                party_field: 'customer',
+                party_label: __('Customer'),
+                party_doctype: 'Customer',
+                has_items: true,
+                has_tax: true,
+                tax_type: 'sales',
+                is_return: true,
+                allow_no_items: true,
+            },
+            'stock-entry': {
+                label: __('Stock Entry'),
+                icon: 'fa-exchange',
+                color: '#9b59b6',
+                doctype: 'Stock Entry',
+                has_items: true,
+                has_tax: false,
+                is_stock_entry: true,
+            },
+            'job-work-in': {
+                label: __('Job Work In'),
+                icon: 'fa-sign-in',
+                color: '#16a085',
+                doctype: 'Subcontracting Inward Order',
+                party_field: 'customer',
+                party_label: __('Customer'),
+                party_doctype: 'Customer',
+                has_items: true,
+                has_tax: true,
+                tax_type: 'sales',
+                is_job_work: true,
+                is_job_work_in: true,
+            },
+            'job-work-out': {
+                label: __('Job Work Out'),
+                icon: 'fa-sign-out',
+                color: '#d35400',
+                doctype: 'Subcontracting Order',
+                party_field: 'supplier',
+                party_label: __('Supplier'),
+                party_doctype: 'Supplier',
+                has_items: true,
+                has_tax: true,
+                tax_type: 'purchase',
+                is_job_work: true,
+                is_job_work_out: true,
+            },
         };
     }
 
@@ -276,7 +388,9 @@ class TransactionDesk {
         html += `<div class="row"><div class="col-md-9">`;
         html += `<div class="td-form-body frappe-control" id="td-form-fields"></div>`;
 
-        if (cfg.has_items) {
+        if (cfg.has_items && cfg.is_job_work) {
+            html += this.render_job_work_table_html();
+        } else if (cfg.has_items) {
             html += this.render_item_table_html();
         }
 
@@ -310,7 +424,9 @@ class TransactionDesk {
         // Now render Frappe controls into #td-form-fields
         this.render_form_controls();
 
-        if (cfg.has_items) {
+        if (cfg.has_items && cfg.is_job_work) {
+            this.add_job_work_row();
+        } else if (cfg.has_items) {
             this.add_item_row();
         }
         if (cfg.is_journal) {
@@ -438,7 +554,7 @@ class TransactionDesk {
                     // Auto fetch addresses
                     setTimeout(async () => {
                         const party = control.get_value();
-                        if (!party || (cfg.doctype !== 'Sales Order' && cfg.doctype !== 'Purchase Order')) return;
+                        if (!party || !cfg.tax_type || cfg.is_job_work) return;
 
                         try {
                             const res = await frappe.call({
@@ -453,7 +569,7 @@ class TransactionDesk {
                             if (res && res.message) {
                                 const d = res.message;
 
-                                if (cfg.doctype === 'Sales Order') {
+                                if (cfg.tax_type === 'sales') {
                                     if (this.form_controls['customer_address'] && d['customer_address']) {
                                         this.form_controls['customer_address'].set_value(d['customer_address']);
                                         this.form_controls['customer_address']._selected_value = d['customer_address'];
@@ -462,7 +578,7 @@ class TransactionDesk {
                                         this.form_controls['shipping_address_name'].set_value(d['shipping_address_name']);
                                         this.form_controls['shipping_address_name']._selected_value = d['shipping_address_name'];
                                     }
-                                } else if (cfg.doctype === 'Purchase Order') {
+                                } else if (cfg.tax_type === 'purchase') {
                                     if (this.form_controls['supplier_address'] && d['supplier_address']) {
                                         this.form_controls['supplier_address'].set_value(d['supplier_address']);
                                         this.form_controls['supplier_address']._selected_value = d['supplier_address'];
@@ -490,7 +606,6 @@ class TransactionDesk {
                                                 this.form_controls['shipping_address'].set_value(cd['shipping_address']);
                                                 this.form_controls['shipping_address']._selected_value = cd['shipping_address'];
                                             } else if (this.form_controls['shipping_address'] && cd['company_address']) {
-                                                // Fallback to company_address if shipping_address is not set
                                                 this.form_controls['shipping_address'].set_value(cd['company_address']);
                                                 this.form_controls['shipping_address']._selected_value = cd['company_address'];
                                             }
@@ -540,7 +655,8 @@ class TransactionDesk {
                 reqd: 1,
             });
 
-            if (cfg.doctype === 'Sales Order') {
+            // Sales-side address fields (Customer Address + Shipping)
+            if (cfg.tax_type === 'sales' && !cfg.is_job_work) {
                 fields.push({
                     fieldname: 'customer_address',
                     fieldtype: 'Link',
@@ -568,7 +684,10 @@ class TransactionDesk {
                         };
                     }
                 });
-            } else if (cfg.doctype === 'Purchase Order') {
+            }
+
+            // Purchase-side address fields (Supplier + Shipping + Billing)
+            if (cfg.tax_type === 'purchase' && !cfg.is_job_work) {
                 fields.push({
                     fieldname: 'supplier_address',
                     fieldtype: 'Link',
@@ -622,13 +741,98 @@ class TransactionDesk {
             });
         }
 
-        if (cfg.has_items) {
+        // Due date for invoices
+        if (this.current_type === 'sales-invoice' || this.current_type === 'purchase-invoice') {
+            fields.push({
+                fieldname: 'due_date',
+                fieldtype: 'Date',
+                label: __('Due Date'),
+                default: frappe.datetime.add_days(frappe.datetime.nowdate(), 30),
+            });
+        }
+
+        // Purchase Invoice specific — bill no / date
+        if (this.current_type === 'purchase-invoice') {
+            fields.push({
+                fieldname: 'bill_no',
+                fieldtype: 'Data',
+                label: __('Supplier Invoice No'),
+            });
+            fields.push({
+                fieldname: 'bill_date',
+                fieldtype: 'Date',
+                label: __('Supplier Invoice Date'),
+            });
+        }
+
+        // Return Against for Debit/Credit Notes
+        if (cfg.is_return) {
+            const return_doctype = cfg.tax_type === 'sales' ? 'Sales Invoice' : 'Purchase Invoice';
+            fields.push({
+                fieldname: 'return_against',
+                fieldtype: 'Link',
+                options: return_doctype,
+                label: __('Return Against'),
+                get_query: () => {
+                    const filters = { docstatus: 1, company: this.get_field_value('company') || d.company };
+                    const party = this.get_field_value(cfg.party_field);
+                    if (party) {
+                        filters[cfg.party_field] = party;
+                    }
+                    return { filters };
+                },
+            });
+        }
+
+        // Credit Note without items — amount field
+        if (cfg.allow_no_items) {
+            fields.push({
+                fieldname: 'credit_amount',
+                fieldtype: 'Currency',
+                label: __('Credit Amount (if no items)'),
+                description: __('Leave blank if adding items below'),
+            });
+        }
+
+        // Warehouse for item-based types (but not stock entry — that has its own)
+        if (cfg.has_items && !cfg.is_stock_entry) {
             fields.push({
                 fieldname: 'warehouse',
                 fieldtype: 'Link',
                 options: 'Warehouse',
                 label: __('Default Warehouse'),
                 default: d.warehouse || '',
+            });
+        }
+
+        // Stock Entry specific
+        if (cfg.is_stock_entry) {
+            fields.push({
+                fieldname: 'purpose',
+                fieldtype: 'Select',
+                label: __('Purpose'),
+                options: 'Material Receipt\nMaterial Issue\nMaterial Transfer\nMaterial Transfer for Manufacture\nSend to Subcontractor',
+                default: 'Material Receipt',
+                reqd: 1,
+            });
+            fields.push({
+                fieldname: 'from_warehouse',
+                fieldtype: 'Link',
+                options: 'Warehouse',
+                label: __('Source Warehouse'),
+                get_query: () => ({
+                    filters: { company: this.get_field_value('company') || d.company, is_group: 0 }
+                }),
+            });
+            fields.push({
+                fieldname: 'to_warehouse',
+                fieldtype: 'Link',
+                options: 'Warehouse',
+                label: __('Target Warehouse'),
+                default: d.warehouse || '',
+                get_query: () => ({
+                    filters: { company: this.get_field_value('company') || d.company, is_group: 0 }
+                }),
             });
         }
 
@@ -753,6 +957,174 @@ class TransactionDesk {
         `;
     }
 
+    // ─── Job Work Item Table ─────────────────────────────────
+    render_job_work_table_html() {
+        return `
+            <div class="td-item-table mt-4">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="mb-0"><i class="fa fa-cogs mr-1"></i>${__('Service Items')}</h6>
+                    <button class="btn btn-xs btn-primary btn-add-jw-item">
+                        <i class="fa fa-plus mr-1"></i>${__('Add Row')}
+                    </button>
+                </div>
+                <table class="table table-bordered td-items-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 4%">#</th>
+                            <th style="width: 22%">${__('Service Item')}</th>
+                            <th style="width: 10%">${__('Gross Qty')}</th>
+                            <th style="width: 22%">${__('FG Item')}</th>
+                            <th style="width: 10%">${__('Net Qty')}</th>
+                            <th style="width: 12%">${__('Rate')}</th>
+                            <th style="width: 12%">${__('Amount')}</th>
+                            <th style="width: 8%"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="td-jw-rows"></tbody>
+                    <tfoot>
+                        <tr class="td-items-total-row">
+                            <td colspan="6" class="text-right font-weight-bold">${__('Total')}</td>
+                            <td class="font-weight-bold" id="td-jw-total">0.00</td>
+                            <td></td>
+                        </tr>
+                    </tfoot>
+                </table>
+            </div>
+        `;
+    }
+
+    add_job_work_row(data = {}) {
+        const self = this;
+        const idx = this.item_rows.length;
+        const row_id = `jw-row-${idx}`;
+
+        const row_data = {
+            id: row_id, idx,
+            $row: null,
+            item_ctrl: null, gross_qty_ctrl: null, fg_item_ctrl: null, net_qty_ctrl: null, rate_ctrl: null,
+        };
+
+        const $tbody = this.page.main.find('#td-jw-rows');
+
+        const $row = $(`
+            <tr data-row-id="${row_id}" data-idx="${idx}">
+                <td class="text-center align-middle">${idx + 1}</td>
+                <td class="td-cell-item"><div class="td-item-link-wrap"></div></td>
+                <td class="td-cell-gross-qty"></td>
+                <td class="td-cell-fg-item"><div class="td-fg-item-wrap"></div></td>
+                <td class="td-cell-net-qty"></td>
+                <td class="td-cell-rate"></td>
+                <td class="td-cell-amount text-right align-middle">0.00</td>
+                <td class="text-center align-middle">
+                    <button class="btn btn-xs btn-link text-danger btn-remove-jw" data-idx="${idx}">
+                        <i class="fa fa-times"></i>
+                    </button>
+                </td>
+            </tr>
+        `);
+        $tbody.append($row);
+        row_data.$row = $row;
+
+        // Service Item
+        const item_ctrl = frappe.ui.form.make_control({
+            df: {
+                fieldname: `jw_item_${idx}`, fieldtype: 'Link', options: 'Item',
+                placeholder: __('Service Item...'), ignore_link_validation: 1,
+            },
+            parent: $row.find('.td-item-link-wrap'), only_input: true, render_input: true,
+        });
+        item_ctrl._selected_value = '';
+        const orig_get = item_ctrl.get_value.bind(item_ctrl);
+        item_ctrl.get_value = function () { return this._selected_value || orig_get() || ''; };
+        item_ctrl.$input.on('awesomplete-selectcomplete', function () { item_ctrl._selected_value = item_ctrl.get_input_value(); });
+        item_ctrl.$input.on('blur', function () { const v = item_ctrl.get_input_value(); if (v) item_ctrl._selected_value = v; });
+        row_data.item_ctrl = item_ctrl;
+
+        // Gross Qty
+        const gross_qty_ctrl = frappe.ui.form.make_control({
+            df: { fieldname: `jw_gqty_${idx}`, fieldtype: 'Float', default: data.gross_qty || 1, placeholder: '1' },
+            parent: $row.find('.td-cell-gross-qty'), only_input: true, render_input: true,
+        });
+        gross_qty_ctrl.set_value(data.gross_qty || 1);
+        row_data.gross_qty_ctrl = gross_qty_ctrl;
+        if (gross_qty_ctrl.$input) {
+            gross_qty_ctrl.$input.on('change input', () => setTimeout(() => self._update_jw_row_amount(row_data), 50));
+        }
+
+        // FG Item
+        const fg_item_ctrl = frappe.ui.form.make_control({
+            df: {
+                fieldname: `jw_fg_${idx}`, fieldtype: 'Link', options: 'Item',
+                placeholder: __('Finished Good...'), ignore_link_validation: 1,
+            },
+            parent: $row.find('.td-fg-item-wrap'), only_input: true, render_input: true,
+        });
+        fg_item_ctrl._selected_value = '';
+        const orig_fg_get = fg_item_ctrl.get_value.bind(fg_item_ctrl);
+        fg_item_ctrl.get_value = function () { return this._selected_value || orig_fg_get() || ''; };
+        fg_item_ctrl.$input.on('awesomplete-selectcomplete', function () { fg_item_ctrl._selected_value = fg_item_ctrl.get_input_value(); });
+        fg_item_ctrl.$input.on('blur', function () { const v = fg_item_ctrl.get_input_value(); if (v) fg_item_ctrl._selected_value = v; });
+        row_data.fg_item_ctrl = fg_item_ctrl;
+
+        // Net Qty (FG qty)
+        const net_qty_ctrl = frappe.ui.form.make_control({
+            df: { fieldname: `jw_nqty_${idx}`, fieldtype: 'Float', default: data.net_qty || 1, placeholder: '1' },
+            parent: $row.find('.td-cell-net-qty'), only_input: true, render_input: true,
+        });
+        net_qty_ctrl.set_value(data.net_qty || 1);
+        row_data.net_qty_ctrl = net_qty_ctrl;
+
+        // Rate (service charge)
+        const rate_ctrl = frappe.ui.form.make_control({
+            df: { fieldname: `jw_rate_${idx}`, fieldtype: 'Currency', default: data.rate || 0, placeholder: '0.00' },
+            parent: $row.find('.td-cell-rate'), only_input: true, render_input: true,
+        });
+        rate_ctrl.set_value(data.rate || 0);
+        row_data.rate_ctrl = rate_ctrl;
+        if (rate_ctrl.$input) {
+            rate_ctrl.$input.on('change input', () => setTimeout(() => self._update_jw_row_amount(row_data), 50));
+        }
+
+        this.item_rows.push(row_data);
+
+        // Remove row
+        $row.find('.btn-remove-jw').on('click', () => {
+            if (this.item_rows.length <= 1) {
+                frappe.show_alert({ message: __('At least one row is required'), indicator: 'orange' });
+                return;
+            }
+            this.item_rows[idx] = null;
+            $row.remove();
+            this.reindex_items();
+            this._update_jw_totals();
+        });
+
+        // Bind add button (once)
+        if (idx === 0) {
+            this.page.main.find('.btn-add-jw-item').off('click').on('click', () => this.add_job_work_row());
+        }
+
+        setTimeout(() => item_ctrl.$input && item_ctrl.$input.focus(), 100);
+    }
+
+    _update_jw_row_amount(row_data) {
+        const qty = this._get_raw_value(row_data.gross_qty_ctrl);
+        const rate = this._get_raw_value(row_data.rate_ctrl);
+        const amount = qty * rate;
+        row_data.$row.find('.td-cell-amount').text(format_currency(amount, this.defaults.currency));
+        this._update_jw_totals();
+    }
+
+    _update_jw_totals() {
+        let total = 0;
+        this.item_rows.forEach(r => {
+            if (!r) return;
+            total += this._get_raw_value(r.gross_qty_ctrl) * this._get_raw_value(r.rate_ctrl);
+        });
+        this.page.main.find('#td-jw-total').text(format_currency(total, this.defaults.currency));
+        this.update_totals();
+    }
+
     add_item_row(data = {}) {
         const self = this;
         const idx = this.item_rows.length;
@@ -873,7 +1245,7 @@ class TransactionDesk {
                 try {
                     const details = await frappe.xcall(
                         'kniterp.api.transaction_desk.get_item_details',
-                        { item_code: selected }
+                        { item_code: selected, voucher_type: self.current_type }
                     );
                     if (details) {
                         // Item name subtitle
@@ -1395,7 +1767,9 @@ class TransactionDesk {
             let net_total = 0;
             this.item_rows.forEach(row => {
                 if (!row) return;
-                const qty = this._get_raw_value(row.qty_ctrl);
+                // Job Work uses gross_qty_ctrl; regular items use qty_ctrl
+                const qty_ctrl = row.qty_ctrl || row.gross_qty_ctrl;
+                const qty = this._get_raw_value(qty_ctrl);
                 const rate = this._get_raw_value(row.rate_ctrl);
                 net_total += qty * rate;
             });
@@ -1431,10 +1805,9 @@ class TransactionDesk {
                             ? tax_totals[ref_idx] : net_total;
                         current_tax = prev_total * rate / 100;
                     } else if (charge_type === 'On Item Quantity') {
-                        // rate × total qty across all items
                         let total_qty = 0;
                         this.item_rows.forEach(r => {
-                            if (r) total_qty += this._get_raw_value(r.qty_ctrl);
+                            if (r) total_qty += this._get_raw_value(r.qty_ctrl || r.gross_qty_ctrl);
                         });
                         current_tax = rate * total_qty;
                     } else if (charge_type === 'Actual') {
@@ -1455,7 +1828,8 @@ class TransactionDesk {
             if (net_total > 0 && tax_total > 0) {
                 this.item_rows.forEach(r => {
                     if (!r) return;
-                    const item_amount = this._get_raw_value(r.qty_ctrl) * this._get_raw_value(r.rate_ctrl);
+                    const item_qty = this._get_raw_value(r.qty_ctrl || r.gross_qty_ctrl);
+                    const item_amount = item_qty * this._get_raw_value(r.rate_ctrl);
                     const item_tax = flt(item_amount / net_total * tax_total, 2);
                     r.$row.find('.td-item-tax-info')
                         .html(`<span class="text-muted" style="font-size:11px;">+ ${format_currency(item_tax, this.defaults.currency)} tax</span>`);
@@ -1667,8 +2041,23 @@ class TransactionDesk {
             data[name] = ctrl.get_value();
         }
 
-        // Collect items
-        if (cfg.has_items) {
+        // Collect items — Job Work uses different fields
+        if (cfg.has_items && cfg.is_job_work) {
+            data.items = [];
+            this.item_rows.forEach(row => {
+                if (!row) return;
+                const item_code = row.item_ctrl.get_value();
+                if (!item_code) return;
+                data.items.push({
+                    item_code: item_code,
+                    fg_item: row.fg_item_ctrl ? row.fg_item_ctrl.get_value() : '',
+                    gross_qty: flt(row.gross_qty_ctrl.get_value()) || 1,
+                    net_qty: flt(row.net_qty_ctrl.get_value()) || 1,
+                    rate: flt(row.rate_ctrl.get_value()),
+                    warehouse: data.warehouse || '',
+                });
+            });
+        } else if (cfg.has_items) {
             data.items = [];
             this.item_rows.forEach(row => {
                 if (!row) return;
@@ -1708,8 +2097,17 @@ class TransactionDesk {
         const cfg = this.current_config;
         const status = was_submitted ? __('Submitted') : __('Draft');
         const status_class = was_submitted ? 'success' : 'warning';
-        const amount = result.grand_total || result.paid_amount || result.total_debit || 0;
-        const doc_route = `/app/${frappe.router.slug(cfg.doctype)}/${result.name}`;
+        const amount = result.grand_total || result.paid_amount || result.total_debit || result.total || 0;
+
+        // For Job Work, the result may contain references to multiple documents
+        let doc_route = `/app/${frappe.router.slug(cfg.doctype)}/${result.name}`;
+        let extra_info = '';
+        if (result.sales_order) {
+            extra_info += `<p class="mt-2"><a href="/app/sales-order/${result.sales_order}" target="_blank"><i class="fa fa-external-link mr-1"></i>${__('Sales Order')}: ${result.sales_order}</a></p>`;
+        }
+        if (result.purchase_order) {
+            extra_info += `<p class="mt-2"><a href="/app/purchase-order/${result.purchase_order}" target="_blank"><i class="fa fa-external-link mr-1"></i>${__('Purchase Order')}: ${result.purchase_order}</a></p>`;
+        }
 
         this.page.main.html(`
             <div class="td-container">
@@ -1723,6 +2121,7 @@ class TransactionDesk {
                         <span class="badge badge-${status_class} ml-2">${status}</span>
                     </div>
                     ${amount ? `<div class="mb-3 h4">${format_currency(amount, this.defaults.currency)}</div>` : ''}
+                    ${extra_info}
                     <div class="mt-4">
                         <button class="btn btn-primary btn-lg mr-2 btn-create-another">
                             <i class="fa fa-plus mr-1"></i>${__('Create Another {0}', [cfg.label])}
