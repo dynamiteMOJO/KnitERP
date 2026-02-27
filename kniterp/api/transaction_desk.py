@@ -62,7 +62,8 @@ def get_defaults(voucher_type: str) -> dict:
             order_by="is_default desc",
         )
         defaults["tax_templates"] = templates
-        defaults["default_tax_template"] = next((t["name"] for t in templates if t["is_default"]), "")
+        # Use India Compliance GST logic to find the correct default template
+        defaults["default_tax_template"] = get_default_tax_template(voucher_type, company) or ""
     elif voucher_type in ("purchase-order", "receipt-note", "debit-note"):
         templates = frappe.get_all(
             "Purchase Taxes and Charges Template",
@@ -71,7 +72,8 @@ def get_defaults(voucher_type: str) -> dict:
             order_by="is_default desc",
         )
         defaults["tax_templates"] = templates
-        defaults["default_tax_template"] = next((t["name"] for t in templates if t["is_default"]), "")
+        # Use India Compliance GST logic to find the correct default template
+        defaults["default_tax_template"] = get_default_tax_template(voucher_type, company) or ""
 
     # Payment-specific defaults
     if voucher_type in ("payment-receive", "payment-pay"):
@@ -167,9 +169,81 @@ def get_tax_details(voucher_type: str, template_name: str) -> list:
     return frappe.get_all(
         child_doctype,
         filters={"parent": template_name, "parenttype": parent_doctype},
-        fields=["charge_type", "account_head", "description", "rate", "tax_amount", "total", "idx"],
+        fields=["charge_type", "account_head", "description", "rate", "tax_amount", "total", "idx", "row_id"],
         order_by="idx",
     )
+
+
+@frappe.whitelist()
+def get_default_tax_template(voucher_type, company):
+    """Get the default tax template for a company using India Compliance's GST logic."""
+    if not company:
+        return ""
+
+    is_sales = voucher_type in ("sales-order", "delivery-note", "credit-note")
+    is_purchase = voucher_type in ("purchase-order", "receipt-note", "debit-note")
+
+    if not is_sales and not is_purchase:
+        return ""
+
+    # Get company GSTIN
+    company_gstin = _get_company_gstin(company)
+    if not company_gstin:
+        return ""
+
+    doctype = "Sales Order" if is_sales else "Purchase Order"
+
+    try:
+        from india_compliance.gst_india.overrides.transaction import get_gst_details
+        result = get_gst_details(
+            {"company_gstin": company_gstin},
+            doctype,
+            company,
+            update_place_of_supply=True,
+        )
+        return result.get("taxes_and_charges", "") if result else ""
+    except Exception:
+        # Fallback to ERPNext default if India Compliance fails
+        return ""
+
+
+@frappe.whitelist()
+def get_party_tax_template(voucher_type, party, company=None):
+    """Fetch tax template for a customer/supplier using India Compliance's GST logic."""
+    if not party or not company:
+        return ""
+
+    is_sales = voucher_type in ("sales-order", "delivery-note", "credit-note")
+    is_purchase = voucher_type in ("purchase-order", "receipt-note", "debit-note")
+
+    if not is_sales and not is_purchase:
+        return ""
+
+    # Get company GSTIN
+    company_gstin = _get_company_gstin(company)
+    if not company_gstin:
+        return ""
+
+    party_type = "Customer" if is_sales else "Supplier"
+    doctype = "Sales Order" if is_sales else "Purchase Order"
+
+    # Build party_details dict that get_gst_details expects
+    party_details = {
+        "company_gstin": company_gstin,
+        party_type.lower(): party,
+    }
+
+    try:
+        from india_compliance.gst_india.overrides.transaction import get_gst_details
+        result = get_gst_details(
+            party_details,
+            doctype,
+            company,
+            update_place_of_supply=True,
+        )
+        return result.get("taxes_and_charges", "") if result else ""
+    except Exception:
+        return ""
 
 
 @frappe.whitelist()
@@ -384,6 +458,17 @@ def _create_journal_entry(data: dict):
 # ──────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────
+
+def _get_company_gstin(company: str) -> str:
+    """Get the primary GSTIN for a company from its linked address."""
+    gstin = frappe.db.sql("""
+        SELECT a.gstin FROM `tabAddress` a
+        JOIN `tabDynamic Link` dl ON dl.parent = a.name
+        WHERE dl.link_doctype = 'Company' AND dl.link_name = %s
+        AND a.gstin IS NOT NULL AND a.gstin != ''
+        LIMIT 1
+    """, company, as_dict=True)
+    return gstin[0]["gstin"] if gstin else ""
 
 def _get_default_bank_account(company: str) -> str:
     """Get first bank account for the company."""

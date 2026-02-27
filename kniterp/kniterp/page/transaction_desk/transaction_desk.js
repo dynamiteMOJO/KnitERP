@@ -275,6 +275,11 @@ class TransactionDesk {
             this.add_account_row();
             this.add_account_row();
         }
+
+        // Auto-load tax details if a default template was pre-filled
+        if (cfg.has_tax && this.defaults.default_tax_template) {
+            this.load_tax_details();
+        }
     }
 
     // ─── Form Controls ──────────────────────────────────────
@@ -333,6 +338,57 @@ class TransactionDesk {
             if (f.fieldname === 'tax_template') {
                 control.$input && control.$input.on('awesomplete-selectcomplete', () => {
                     this.load_tax_details();
+                });
+            }
+
+            // Auto-fill Tax Template when Company is selected/changed
+            if (f.fieldname === 'company') {
+                control.$input && control.$input.on('awesomplete-selectcomplete', () => {
+                    setTimeout(async () => {
+                        const company = control.get_value();
+                        if (!company || !cfg.has_tax) return;
+
+                        try {
+                            const tax_template = await frappe.xcall('kniterp.api.transaction_desk.get_default_tax_template', {
+                                voucher_type: this.current_type,
+                                company: company
+                            });
+
+                            if (this.form_controls.tax_template) {
+                                this.form_controls.tax_template.set_value(tax_template || '');
+                                this.form_controls.tax_template._selected_value = tax_template || '';
+                                this.load_tax_details();
+                            }
+                        } catch (e) {
+                            console.error('Company tax template error:', e);
+                        }
+                    }, 50);
+                });
+            }
+
+            // Auto-fill Tax Template when Customer/Supplier is selected
+            if (f.fieldname === cfg.party_field) {
+                control.$input && control.$input.on('awesomplete-selectcomplete', () => {
+                    setTimeout(async () => {
+                        const party = control.get_value();
+                        if (!party || !cfg.has_tax) return;
+
+                        try {
+                            const tax_template = await frappe.xcall('kniterp.api.transaction_desk.get_party_tax_template', {
+                                voucher_type: this.current_type,
+                                party: party,
+                                company: this.get_field_value('company') || this.defaults.company
+                            });
+
+                            if (tax_template && this.form_controls.tax_template) {
+                                this.form_controls.tax_template.set_value(tax_template);
+                                this.form_controls.tax_template._selected_value = tax_template;
+                                this.load_tax_details();
+                            }
+                        } catch (e) {
+                            console.error('Party tax template error:', e);
+                        }
+                    }, 50);
                 });
             }
         });
@@ -513,8 +569,21 @@ class TransactionDesk {
     }
 
     add_item_row(data = {}) {
+        const self = this;
         const idx = this.item_rows.length;
         const row_id = `item-row-${idx}`;
+
+        // Row data object (declared early for closures and to hold all controls)
+        const row_data = {
+            id: row_id, idx,
+            $row: null, $detail_row: null, // Will be assigned after creation
+            item_ctrl: null, qty_ctrl: null, uom_ctrl: null, rate_ctrl: null, desc_ctrl: null, // Will be assigned after creation
+            item_name: '',
+            description: '',
+            uom: data.uom || '',
+            transaction_params: data.transaction_params || [],
+        };
+
         const $tbody = this.page.main.find('#td-item-rows');
 
         // ── Main row ──
@@ -530,7 +599,10 @@ class TransactionDesk {
                 <td class="td-cell-qty"></td>
                 <td class="td-cell-uom"></td>
                 <td class="td-cell-rate"></td>
-                <td class="td-cell-amount text-right align-middle">0.00</td>
+                <td class="td-cell-amount text-right align-middle">
+                    <div class="td-amount-value">0.00</div>
+                    <div class="td-item-tax-info text-muted small"></div>
+                </td>
                 <td class="text-center align-middle" style="white-space:nowrap;">
                     <button class="td-btn-expand" title="${__('Details')}">
                         <i class="fa fa-chevron-down"></i>
@@ -541,6 +613,7 @@ class TransactionDesk {
                 </td>
             </tr>
         `);
+        row_data.$row = $row;
 
         // ── Detail row (expandable, hidden by default) ──
         const $detail_row = $(`
@@ -562,6 +635,8 @@ class TransactionDesk {
 
         $tbody.append($row);
         $tbody.append($detail_row);
+        row_data.$detail_row = $detail_row;
+
         // Start hidden
         $detail_row.hide();
 
@@ -576,8 +651,7 @@ class TransactionDesk {
             parent: $detail_row.find('.td-item-description-wrap'),
             render_input: true,
         });
-
-        const self = this;
+        row_data.desc_ctrl = desc_ctrl;
 
         // ── Item Link control (with smart/convoluted search) ──
         const item_ctrl = frappe.ui.form.make_control({
@@ -592,6 +666,7 @@ class TransactionDesk {
             only_input: true,
             render_input: true,
         });
+        row_data.item_ctrl = item_ctrl;
 
         // Wire up the convoluted/smart item search
         item_ctrl.get_query = () => ({
@@ -637,11 +712,12 @@ class TransactionDesk {
                             rate_ctrl.set_value(details.price_list_rate);
                         }
                     }
+                    // Update the amount AFTER the rate has been fetched and set
+                    self.update_row_amount(row_data);
                 } catch (e) {
-                    console.warn('Failed to fetch item details:', e);
+                    // silently ignore
                 }
             }
-            self.update_row_amount(row_data);
         });
 
         item_ctrl.$input.on('blur', function () {
@@ -662,7 +738,13 @@ class TransactionDesk {
             render_input: true,
         });
         qty_ctrl.set_value(data.qty || 1);
-        qty_ctrl.$input && qty_ctrl.$input.on('change', () => self.update_row_amount(row_data));
+        row_data.qty_ctrl = qty_ctrl;
+
+        if (qty_ctrl.$input) {
+            qty_ctrl.$input.on('change input', () => {
+                setTimeout(() => self.update_row_amount(row_data), 50);
+            });
+        }
 
         // ── UOM control ──
         const uom_ctrl = frappe.ui.form.make_control({
@@ -678,6 +760,8 @@ class TransactionDesk {
             render_input: true,
         });
         uom_ctrl._selected_value = data.uom || '';
+        row_data.uom_ctrl = uom_ctrl;
+
         const orig_uom_get = uom_ctrl.get_value.bind(uom_ctrl);
         uom_ctrl.get_value = function () {
             return this._selected_value || orig_uom_get() || '';
@@ -704,15 +788,15 @@ class TransactionDesk {
             render_input: true,
         });
         rate_ctrl.set_value(data.rate || 0);
-        rate_ctrl.$input && rate_ctrl.$input.on('change', () => self.update_row_amount(row_data));
+        row_data.rate_ctrl = rate_ctrl;
 
-        // ── Row data object ──
-        const row_data = {
-            id: row_id, idx, $row, $detail_row,
-            item_ctrl, qty_ctrl, uom_ctrl, rate_ctrl, desc_ctrl,
-            item_name: '', description: '', uom: data.uom || '',
-            transaction_params: data.transaction_params || [],
-        };
+        if (rate_ctrl.$input) {
+            rate_ctrl.$input.on('change input', () => {
+                setTimeout(() => self.update_row_amount(row_data), 50);
+            });
+        }
+
+        // Initial registration
         this.item_rows.push(row_data);
 
         // ── Expand/collapse toggle ──
@@ -775,11 +859,33 @@ class TransactionDesk {
         });
     }
 
+    _get_raw_value(ctrl) {
+        if (!ctrl || !ctrl.$input) return 0;
+
+        try {
+            const raw = ctrl.$input.val();
+            if (raw === '' || raw === undefined || raw === null) return 0;
+
+            // Clean up common intermediate typing artifacts
+            const clean = raw.replace(/[^\d.-]/g, '');
+            const parsed = parseFloat(clean);
+            return isNaN(parsed) ? 0 : parsed;
+        } catch (e) {
+            return 0;
+        }
+    }
+
     update_row_amount(row_data) {
-        const qty = frappe.utils.flt(row_data.qty_ctrl.get_value());
-        const rate = frappe.utils.flt(row_data.rate_ctrl.get_value());
+        if (!row_data || !row_data.qty_ctrl || !row_data.rate_ctrl) return;
+
+        const qty = this._get_raw_value(row_data.qty_ctrl);
+        const rate = this._get_raw_value(row_data.rate_ctrl);
         const amount = qty * rate;
-        row_data.$row.find('.td-cell-amount').text(format_currency(amount, this.defaults.currency));
+
+        // Direct DOM update via the row ID to be absolutely sure
+        this.page.main.find(`tr[data-row-id="${row_data.id}"] .td-amount-value`)
+            .text(format_currency(amount, this.defaults.currency));
+
         this.update_totals();
     }
 
@@ -1018,8 +1124,15 @@ class TransactionDesk {
 
     // ─── Tax Details ────────────────────────────────────────
     async load_tax_details() {
-        const template = this.get_field_value('tax_template');
+        let template = this.get_field_value('tax_template');
         const $section = this.page.main.find('#td-tax-section');
+
+        // Fallback: read directly from the input if get_value returned empty
+        if (!template && this.form_controls.tax_template) {
+            template = this.form_controls.tax_template._selected_value
+                || (this.form_controls.tax_template.$input && this.form_controls.tax_template.$input.val())
+                || '';
+        }
 
         if (!template) {
             $section.html('');
@@ -1039,7 +1152,8 @@ class TransactionDesk {
             this.render_tax_details(rows);
             this.update_totals();
         } catch (e) {
-            $section.html(`<div class="text-danger small p-2">${__('Failed to load tax details')}</div>`);
+            console.error('load_tax_details error:', e, 'template:', template);
+            $section.html(`<div class="text-danger small p-2">${__('Failed to load tax details')}: ${e.message || e}</div>`);
         }
     }
 
@@ -1064,13 +1178,19 @@ class TransactionDesk {
                 <tbody>
         `;
 
-        rows.forEach(row => {
+        rows.forEach((row, i) => {
             html += `
                 <tr>
                     <td>${frappe.utils.escape_html(row.charge_type || '')}</td>
                     <td>${frappe.utils.escape_html(row.account_head || '')}</td>
                     <td class="text-right">${row.rate ? row.rate + '%' : '-'}</td>
-                    <td class="text-right td-tax-amount" data-rate="${row.rate || 0}" data-charge-type="${row.charge_type || ''}">0.00</td>
+                    <td class="text-right td-tax-amount"
+                        data-rate="${row.rate || 0}"
+                        data-charge-type="${row.charge_type || ''}"
+                        data-row-id="${row.row_id || 0}"
+                        data-tax-amount="${row.tax_amount || 0}"
+                        data-tax-idx="${i}"
+                    >0.00</td>
                 </tr>
             `;
         });
@@ -1090,30 +1210,75 @@ class TransactionDesk {
             let net_total = 0;
             this.item_rows.forEach(row => {
                 if (!row) return;
-                const qty = frappe.utils.flt(row.qty_ctrl.get_value());
-                const rate = frappe.utils.flt(row.rate_ctrl.get_value());
+                const qty = this._get_raw_value(row.qty_ctrl);
+                const rate = this._get_raw_value(row.rate_ctrl);
                 net_total += qty * rate;
             });
 
             this.page.main.find('#td-net-total').text(format_currency(net_total, this.defaults.currency));
 
-            // Calculate tax
+            // Calculate tax — ERPNext-accurate per charge_type logic
             let tax_total = 0;
+            const tax_amounts = [];    // tax_amount per row
+            const tax_totals = [];     // cumulative total per row (net_total + sum of taxes up to this row)
+
             if (this.tax_rows && this.tax_rows.length) {
-                this.page.main.find('.td-tax-amount').each((i, el) => {
+                const $tax_cells = this.page.main.find('.td-tax-amount');
+                $tax_cells.each((i, el) => {
                     const $el = $(el);
-                    const rate = frappe.utils.flt($el.data('rate'));
-                    const charge_type = $el.data('charge-type');
-                    let tax_amount = 0;
+                    const rate = flt($el.data('rate'));
+                    const charge_type = String($el.data('charge-type'));
+                    const row_id = parseInt($el.data('row-id')) || 0;
+                    const actual_amount = flt($el.data('tax-amount'));
+                    let current_tax = 0;
+
                     if (charge_type === 'On Net Total') {
-                        tax_amount = net_total * rate / 100;
-                    } else if (charge_type === 'On Previous Row Total' || charge_type === 'On Previous Row Amount') {
-                        tax_amount = (net_total + tax_total) * rate / 100;
-                    } else {
-                        tax_amount = rate;  // Fixed amount
+                        current_tax = net_total * rate / 100;
+                    } else if (charge_type === 'On Previous Row Amount') {
+                        // row_id is 1-based idx; tax_amounts is 0-based
+                        const ref_idx = row_id - 1;
+                        const prev_amount = (ref_idx >= 0 && ref_idx < tax_amounts.length)
+                            ? tax_amounts[ref_idx] : 0;
+                        current_tax = prev_amount * rate / 100;
+                    } else if (charge_type === 'On Previous Row Total') {
+                        const ref_idx = row_id - 1;
+                        const prev_total = (ref_idx >= 0 && ref_idx < tax_totals.length)
+                            ? tax_totals[ref_idx] : net_total;
+                        current_tax = prev_total * rate / 100;
+                    } else if (charge_type === 'On Item Quantity') {
+                        // rate × total qty across all items
+                        let total_qty = 0;
+                        this.item_rows.forEach(r => {
+                            if (r) total_qty += this._get_raw_value(r.qty_ctrl);
+                        });
+                        current_tax = rate * total_qty;
+                    } else if (charge_type === 'Actual') {
+                        current_tax = actual_amount;
                     }
-                    $el.text(format_currency(tax_amount, this.defaults.currency));
-                    tax_total += tax_amount;
+
+                    current_tax = flt(current_tax, 2);
+                    tax_amounts.push(current_tax);
+                    // cumulative total = net_total + all taxes up to and including this row
+                    tax_totals.push(net_total + tax_total + current_tax);
+                    tax_total += current_tax;
+
+                    $el.text(format_currency(current_tax, this.defaults.currency));
+                });
+            }
+
+            // ── Item-wise tax distribution ──
+            if (net_total > 0 && tax_total > 0) {
+                this.item_rows.forEach(r => {
+                    if (!r) return;
+                    const item_amount = this._get_raw_value(r.qty_ctrl) * this._get_raw_value(r.rate_ctrl);
+                    const item_tax = flt(item_amount / net_total * tax_total, 2);
+                    r.$row.find('.td-item-tax-info')
+                        .html(`<span class="text-muted" style="font-size:11px;">+ ${format_currency(item_tax, this.defaults.currency)} tax</span>`);
+                });
+            } else {
+                this.item_rows.forEach(r => {
+                    if (!r) return;
+                    r.$row.find('.td-item-tax-info').html('');
                 });
             }
 
@@ -1140,8 +1305,8 @@ class TransactionDesk {
             let total_debit = 0, total_credit = 0;
             this.account_rows.forEach(row => {
                 if (!row) return;
-                total_debit += frappe.utils.flt(row.debit_ctrl.get_value());
-                total_credit += frappe.utils.flt(row.credit_ctrl.get_value());
+                total_debit += flt(row.debit_ctrl.get_value());
+                total_credit += flt(row.credit_ctrl.get_value());
             });
 
             this.page.main.find('#td-total-debit').text(format_currency(total_debit, this.defaults.currency));
@@ -1235,8 +1400,8 @@ class TransactionDesk {
             let total_debit = 0, total_credit = 0;
             this.account_rows.forEach(row => {
                 if (!row) return;
-                total_debit += frappe.utils.flt(row.debit_ctrl.get_value());
-                total_credit += frappe.utils.flt(row.credit_ctrl.get_value());
+                total_debit += flt(row.debit_ctrl.get_value());
+                total_credit += flt(row.credit_ctrl.get_value());
             });
             if (Math.abs(total_debit - total_credit) > 0.01) {
                 errors.push(__('Total Debit must equal Total Credit (difference: {0})', [
@@ -1326,8 +1491,8 @@ class TransactionDesk {
                 if (!item_code) return;
                 data.items.push({
                     item_code: item_code,
-                    qty: frappe.utils.flt(row.qty_ctrl.get_value()) || 1,
-                    rate: frappe.utils.flt(row.rate_ctrl.get_value()),
+                    qty: flt(row.qty_ctrl.get_value()) || 1,
+                    rate: flt(row.rate_ctrl.get_value()),
                     uom: row.uom_ctrl ? row.uom_ctrl.get_value() : '',
                     description: row.desc_ctrl ? row.desc_ctrl.get_value() : '',
                     warehouse: data.warehouse || '',
@@ -1345,8 +1510,8 @@ class TransactionDesk {
                 if (!account) return;
                 data.accounts.push({
                     account: account,
-                    debit: frappe.utils.flt(row.debit_ctrl.get_value()),
-                    credit: frappe.utils.flt(row.credit_ctrl.get_value()),
+                    debit: flt(row.debit_ctrl.get_value()),
+                    credit: flt(row.credit_ctrl.get_value()),
                 });
             });
         }
