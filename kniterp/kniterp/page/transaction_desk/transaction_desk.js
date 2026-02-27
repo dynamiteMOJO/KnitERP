@@ -318,10 +318,13 @@ class TransactionDesk {
             this.add_account_row();
         }
 
-        // Auto-load tax details if a default template was pre-filled
-        if (cfg.has_tax && this.defaults.default_tax_template) {
-            this.load_tax_details();
-        }
+        // Focus the first input field (e.g. Company) so cursor starts there
+        setTimeout(() => {
+            const first_field = Object.values(this.form_controls)[0];
+            if (first_field && first_field.$input) {
+                first_field.$input.focus();
+            }
+        }, 150);
     }
 
     // ─── Form Controls ──────────────────────────────────────
@@ -639,7 +642,7 @@ class TransactionDesk {
                 fieldtype: 'Link',
                 options: template_doctype,
                 label: __('Tax Template'),
-                default: d.default_tax_template || '',
+                // No default — tax template is populated when company is selected/changed
                 get_query: () => ({
                     filters: { company: this.get_field_value('company') || d.company }
                 }),
