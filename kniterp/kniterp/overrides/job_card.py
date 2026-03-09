@@ -323,6 +323,27 @@ class CustomJobCard(JobCard):
 
         super().validate_job_card()
 
+    def validate_semi_finished_goods(self):
+        if not self.track_semi_finished_goods:
+            return
+
+        if self.items and not self.transferred_qty and not self.skip_material_transfer:
+            frappe.throw(
+                _(
+                    "Materials needs to be transferred to the work in progress warehouse for the job card {0}"
+                ).format(self.name)
+            )
+
+        if self.docstatus == 1 and not self.total_completed_qty:
+            if self.manufactured_qty:
+                self.total_completed_qty = self.manufactured_qty
+                return
+            frappe.throw(
+                _(
+                    "Total Completed Qty is required for Job Card {0}, please start and complete the job card before submission"
+                ).format(self.name)
+            )
+
     @frappe.whitelist()
     def make_stock_entry_for_semi_fg_item(self, auto_submit=False):
         """
@@ -430,9 +451,32 @@ class CustomJobCard(JobCard):
 
         return ste.stock_entry.as_dict()
 
+    def update_work_order(self):
+        """
+        Override ERPNext's update_work_order to fix completed_qty = 0 for in-house ops.
+
+        Standard ERPNext's get_current_operation_data() queries SUM(total_completed_qty)
+        WHERE docstatus=1 — draft JCs are excluded, returning 0. This overwrites the
+        correct value already set by update_semi_finished_good_details(). For draft JCs,
+        we use the in-memory values directly to avoid that overwrite.
+        """
+        if not self.work_order:
+            return
+
+        if self.docstatus == 0 and self.operation_id:
+            # JC is draft: update_semi_finished_good_details() already set completed_qty
+            # correctly via db.set_value. Calling the standard logic would query
+            # SUM(total_completed_qty) WHERE docstatus=1, get 0 (draft JC excluded),
+            # and overwrite the correct value. Use in-memory values instead.
+            qty = max(flt(self.manufactured_qty), flt(self.total_completed_qty))
+            frappe.db.set_value("Work Order Operation", self.operation_id, "completed_qty", qty)
+            return
+
+        super().update_work_order()
+
     def on_submit(self):
         super().on_submit()
-        
+
         # Cascade over-production to subsequent operations
         if self.total_completed_qty > self.for_quantity and self.work_order:
             self.update_subsequent_operations()

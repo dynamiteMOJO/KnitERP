@@ -148,6 +148,29 @@ class CustomWorkOrder(WorkOrder):
                         )
                     )
 
+    def get_status(self, status=None):
+        """
+        Override ERPNext's get_status to prevent auto-completion based on produced_qty.
+
+        KnitERP requires all Job Cards to be manually completed via Production Wizard
+        before the Work Order can be marked "Completed".
+        """
+        status = super().get_status(status)
+
+        if status == "Completed":
+            pending_jc_count = frappe.db.count(
+                "Job Card",
+                filters={
+                    "work_order": self.name,
+                    "docstatus": ["!=", 2],       # exclude cancelled
+                    "status": ["!=", "Completed"],
+                },
+            )
+            if pending_jc_count:
+                status = "In Process"
+
+        return status
+
 
 def set_planned_qty_on_work_order(doc, method=None):
     """

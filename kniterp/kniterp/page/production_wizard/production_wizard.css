@@ -115,18 +115,33 @@
 }
 
 .status-pending {
-	background: #e3f2fd;
-	color: #1976d2;
+	background: var(--blue-50);
+	color: var(--blue-700);
 }
 
 .status-in-progress {
-	background: #fff3e0;
-	color: #f57c00;
+	background: var(--orange-50);
+	color: var(--orange-700);
 }
 
 .status-completed {
-	background: #e8f5e9;
-	color: #388e3c;
+	background: var(--green-50);
+	color: var(--green-700);
+}
+
+[data-theme="dark"] .status-pending {
+	background: rgba(0, 123, 224, 0.12);
+	color: var(--blue-300);
+}
+
+[data-theme="dark"] .status-in-progress {
+	background: rgba(212, 90, 8, 0.12);
+	color: var(--orange-300);
+}
+
+[data-theme="dark"] .status-completed {
+	background: rgba(48, 166, 109, 0.12);
+	color: var(--green-300);
 }
 
 /* Production Details */
@@ -597,4 +612,12 @@ html[data-theme="dark"] .activity-log-node {
 
 html[data-theme="dark"] .activity-log-item {
 	border-bottom-color: rgba(255,255,255,0.05);
+}
+
+html[data-theme="dark"] .activity-log-link {
+	color: var(--blue-400, #60a5fa);
+}
+
+html[data-theme="dark"] .activity-log-link:hover {
+	color: var(--blue-300, #93c5fd);
 }

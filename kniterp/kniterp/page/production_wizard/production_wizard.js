@@ -620,9 +620,12 @@ class ProductionWizard {
 				<!-- Raw Materials Section -->
 				<div class="section-header">
 					<h5><i class="fa fa-cube"></i> ${__('Raw Materials')}</h5>
-					<button class="btn btn-sm ${this.has_shortages(details.raw_materials) ? 'btn-warning' : 'btn-default'} create-shortage-po">
-						<i class="fa fa-shopping-cart"></i> ${this.has_shortages(details.raw_materials) ? __('Create PO for Shortages') : __('Create PO')}
-					</button>
+					<div>
+						${this.has_rm_orders(details.raw_materials) ? `<button class="btn btn-sm btn-default btn-view-rm-orders mr-1"><i class="fa fa-list"></i> ${__('View Orders')}</button>` : ''}
+						<button class="btn btn-sm ${this.has_shortages(details.raw_materials) ? 'btn-warning' : 'btn-default'} create-shortage-po">
+							<i class="fa fa-shopping-cart"></i> ${this.has_shortages(details.raw_materials) ? __('Create PO for Shortages') : __('Create PO')}
+						</button>
+					</div>
 				</div>
 				<div class="materials-list">
 					${this.render_raw_materials(details.raw_materials, details)}
@@ -858,9 +861,11 @@ class ProductionWizard {
 					<i class="fa fa-play"></i> ${__('Start Production')}
 				</button>
 			`);
-        } else if (details.work_order.status === 'In Process') {
+        } else if (details.work_order.status === 'In Process' || details.work_order.status === 'Not Started') {
             // Allow delivery if we have formatted goods ready (produced > delivered)
             // Skip for SCIO — delivery is via Send Delivery (subcontracting delivery)
+            // Note: WO can stay "Not Started" in subcontracting flows since
+            // material_transferred_for_manufacturing is never updated by SCR path
             if (!details.is_subcontracted) {
                 const produced = details.work_order.produced_qty || 0;
                 const delivered = details.delivered_qty || 0;
@@ -872,29 +877,54 @@ class ProductionWizard {
 					</button>
 				`);
                 }
+
+                // Show SI button if there's delivered-but-unbilled qty
+                const delivered_value = flt(delivered * flt(details.rate || 0));
+                if (delivered > 0 && flt(details.billed_amt || 0) < delivered_value) {
+                    if (details.draft_sales_invoice) {
+                        buttons.push(`
+                        <button class="btn btn-warning btn-create-invoice">
+                            <i class="fa fa-file-text-o"></i> ${__('View Draft Invoice')}
+                        </button>
+                        `);
+                    } else {
+                        buttons.push(`
+                        <button class="btn btn-primary btn-create-invoice">
+                            <i class="fa fa-file-text"></i> ${__('Create Sales Invoice')}
+                        </button>
+                        `);
+                    }
+                }
             }
         } else if (details.work_order.status === 'Completed') {
             if (details.is_subcontracted) {
                 // SCIO: No delivery note needed, invoice button is in the SCIO block above
-            } else if (details.pending_qty > 0) {
-                buttons.push(`
+            } else {
+                // Show Delivery Note button if there's still qty to deliver
+                if ((details.pending_qty > 0) || (details.work_order && (details.work_order.produced_qty || 0) > (details.delivered_qty || 0)) || (details.projected_qty > details.delivered_qty)) {
+                    buttons.push(`
 				<button class="btn btn-success btn-create-delivery">
 					<i class="fa fa-truck"></i> ${__('Create Delivery Note')}
 				</button>
 			`);
-            } else {
-                if (details.draft_sales_invoice) {
-                    buttons.push(`
-                    <button class="btn btn-warning btn-create-invoice">
-                        <i class="fa fa-file-text-o"></i> ${__('View Draft Invoice')}
-                    </button>
-                `);
-                } else {
-                    buttons.push(`
-                    <button class="btn btn-success btn-create-invoice">
-                        <i class="fa fa-file-text"></i> ${__('Create Sales Invoice')}
-                    </button>
-                `);
+                }
+
+                // Show SI button if there's delivered-but-unbilled qty
+                const delivered_value = flt((details.delivered_qty || 0) * flt(details.rate || 0));
+                if ((details.delivered_qty || 0) > 0 && flt(details.billed_amt || 0) < delivered_value) {
+                    if (details.draft_sales_invoice) {
+                        buttons.push(`
+                        <button class="btn btn-warning btn-create-invoice">
+                            <i class="fa fa-file-text-o"></i> ${__('View Draft Invoice')}
+                        </button>
+                        `);
+                    } else {
+                        buttons.push(`
+                        <button class="btn btn-primary btn-create-invoice">
+                            <i class="fa fa-file-text"></i> ${__('Create Sales Invoice')}
+                        </button>
+                        `);
+                    }
                 }
             }
         }
@@ -1119,36 +1149,21 @@ class ProductionWizard {
         }
 
         if (op.is_subcontracted) {
-            // Calculate remaining to subcontract
-            // qty_ready_from_prev is already the "Net Available to Subcontract" from backend
-            const remaining_to_subcontract = op.qty_ready_from_prev || 0;
+            // Wrap everything in a full-width column container so items stack vertically
+            let subcontractedHtml = '<div style="width: 100%; display: flex; flex-direction: column; gap: 8px;">';
 
-            if (remaining_to_subcontract > 0) {
-                const btnLabel = op.purchase_order
-                    ? __('Create Additional SCO')
-                    : __('Create Subcontracting Order');
-                actions.push(`
-					<button class="btn btn-sm btn-primary btn-create-sco"
-							data-operation="${op.operation}"
-							data-remaining="${remaining_to_subcontract}">
-						<i class="fa fa-file-text-o"></i> ${btnLabel}
-					</button>
-                    `);
-            }
-
-            // Show existing SCO info if any
+            // Show existing SCO info first
             if (op.subcontracting_orders && op.subcontracting_orders.length > 0) {
-                let scoInfo = `<div class="mt-2 small">`;
+                subcontractedHtml += `<div class="small">`;
                 for (const sco of op.subcontracting_orders) {
                     const statusIcon = sco.received_qty >= sco.qty ? 'check-circle text-success' : 'clock-o text-warning';
 
                     const required_rm = sco.required_rm_qty || 0;
                     const sent_rm = sco.sent_qty || 0;
-                    // Show send button only if RM is needed and not fully sent
                     const showSend = (sco.received_qty < sco.qty) && (sent_rm < (required_rm - 0.001));
                     const showReceive = (sco.sent_qty || 0) > 0 && sco.received_qty < sco.qty;
 
-                    scoInfo += `
+                    subcontractedHtml += `
                         <div class="mb-2 p-2 rounded" style="background-color: var(--control-bg); border: 1px solid var(--border-color);">
                             <div class="d-flex justify-content-between align-items-center">
                                 <div>
@@ -1164,7 +1179,9 @@ class ProductionWizard {
                                 <div class="text-right">
                                     ${showSend ? `
                                     <button class="btn btn-xs btn-default btn-send-sco-material mb-1 ml-1" 
-                                        data-sco="${sco.sco_name}" data-po="${sco.po_name}">
+                                        data-sco="${sco.sco_name}" data-po="${sco.po_name}"
+                                        data-pending-fg="${flt(sco.qty - (sco.received_qty || 0), 3)}"
+                                        data-sent-rm="${sent_rm}" data-required-rm="${required_rm}">
                                         <i class="fa fa-truck text-warning"></i> ${__('Send Material')}
                                     </button>` : ''}
                                     
@@ -1173,26 +1190,62 @@ class ProductionWizard {
                                         data-sco="${sco.sco_name}" data-po="${sco.po_name}">
                                         <i class="fa fa-download text-success"></i> ${__('Receive Goods')}
                                     </button>` : ''}
+
+                                    ${(sco.received_qty >= sco.qty && flt(sco.billed_amt || 0) < flt(sco.po_amount || 0)) ? (
+                            sco.submitted_pi
+                                ? `<a href="/app/purchase-invoice/${sco.submitted_pi}" class="btn btn-xs btn-success mb-1 ml-1">
+                                            <i class="fa fa-check"></i> ${__('View Invoice')}
+                                           </a>`
+                                : sco.draft_pi
+                                    ? `<button class="btn btn-xs btn-warning btn-create-sco-pi mb-1 ml-1"
+                                            data-po="${sco.po_name}" data-draft-pi="${sco.draft_pi}">
+                                            <i class="fa fa-file-text-o"></i> ${__('View Draft PI')}
+                                          </button>`
+                                    : `<button class="btn btn-xs btn-primary btn-create-sco-pi mb-1 ml-1"
+                                            data-po="${sco.po_name}" data-supplier="${sco.supplier}"
+                                            data-amount="${sco.po_amount || 0}">
+                                            <i class="fa fa-file-text"></i> ${__('Create PI')}
+                                          </button>`
+                        ) : ''}
                                 </div>
                             </div>
                         </div>`;
                 }
-                scoInfo += `</div>`;
-                actions.push(scoInfo);
+                subcontractedHtml += `</div>`;
             }
 
-            // Add "Complete Job Card" button if there's received qty and job card is not yet completed
-            // This allows user to manually close the job card when no more SCOs will be created
+            // Action buttons below SCO list
+            const remaining_to_subcontract = op.qty_ready_from_prev || 0;
+            let bottomButtons = '';
+
+            if (remaining_to_subcontract > 0) {
+                const btnLabel = op.purchase_order
+                    ? __('Create Additional SCO')
+                    : __('Create Subcontracting Order');
+                bottomButtons += `
+					<button class="btn btn-sm btn-primary btn-create-sco"
+							data-operation="${op.operation}"
+							data-remaining="${remaining_to_subcontract}">
+						<i class="fa fa-file-text-o"></i> ${btnLabel}
+					</button>`;
+            }
+
             if (op.job_card && op.received_qty > 0 && op.status !== 'Completed') {
-                actions.push(`
-                    <button class="btn btn-sm btn-success btn-complete-jc mt-2"
+                bottomButtons += `
+                    <button class="btn btn-sm btn-success btn-complete-jc"
                             data-job-card="${op.job_card}"
                             data-operation="${op.operation}"
                             data-received="${op.received_qty}">
                         <i class="fa fa-check"></i> ${__('Complete Job Card')}
-                    </button>
-                `);
+                    </button>`;
             }
+
+            if (bottomButtons) {
+                subcontractedHtml += `<div style="display: flex; gap: 8px; flex-wrap: wrap;">${bottomButtons}</div>`;
+            }
+
+            subcontractedHtml += '</div>';
+            actions.push(subcontractedHtml);
         } else {
             // In-house operation
             const remaining_qty = (op.for_quantity || details.pending_qty) - (op.completed_qty || 0);
@@ -1371,6 +1424,10 @@ class ProductionWizard {
         return materials && materials.some(m => !m.is_customer_provided && m.shortage > 0);
     }
 
+    has_rm_orders(materials) {
+        return materials && materials.some(m => m.linked_pos && m.linked_pos.length > 0);
+    }
+
     bind_action_events(details) {
         const self = this;
 
@@ -1413,14 +1470,46 @@ class ProductionWizard {
         // Send Raw Material to Supplier (New per-SCO button)
         this.$details_content.find('.btn-send-sco-material').on('click', function () {
             const sco = $(this).data('sco');
-            self.send_raw_material_to_supplier(null, sco);
+            const pending_fg = flt($(this).data('pending-fg'));
+            const sent_rm = flt($(this).data('sent-rm'));
+            const required_rm = flt($(this).data('required-rm'));
+            self.send_raw_material_to_supplier(null, sco, { pending_fg, sent_rm, required_rm });
         });
 
         // Receive Goods (New per-SCO button)
         this.$details_content.find('.btn-receive-sco-goods').on('click', function () {
-            const sco = $(this).data('sco');
-            const po = $(this).data('po');
-            self.receive_subcontracted_goods(po, sco);
+            const sco_name = $(this).data('sco');
+            const po_name = $(this).data('po');
+            // Find the matching SCO object so we can pass rich context to the dialog
+            let sco_ctx = null;
+            for (const op of (details.operations || [])) {
+                if (op.subcontracting_orders) {
+                    sco_ctx = op.subcontracting_orders.find(s => s.sco_name === sco_name) || null;
+                    if (sco_ctx) {
+                        sco_ctx = Object.assign({}, sco_ctx, {
+                            operation: op.operation,
+                            item_name: details.item_name || details.item_code || '',
+                            sales_order: details.sales_order || '',
+                            uom: details.uom || 'Units'
+                        });
+                        break;
+                    }
+                }
+            }
+            self.receive_subcontracted_goods(po_name, sco_name, sco_ctx);
+        });
+
+        // Create Purchase Invoice for SCO PO
+        this.$details_content.find('.btn-create-sco-pi').on('click', function () {
+            const po_name = $(this).data('po');
+            const draft_pi = $(this).data('draft-pi');
+            if (draft_pi) {
+                frappe.set_route('Form', 'Purchase Invoice', draft_pi);
+            } else {
+                const supplier = $(this).data('supplier');
+                const amount = $(this).data('amount');
+                self.create_sco_purchase_invoice(po_name, supplier, amount);
+            }
         });
 
         // Update Manufactured Qty
@@ -1496,6 +1585,11 @@ class ProductionWizard {
         // Create PO for Shortages
         this.$details_content.find('.create-shortage-po').on('click', () => {
             this.create_shortage_po(details);
+        });
+
+        // View RM Orders dialog
+        this.$details_content.find('.btn-view-rm-orders').on('click', () => {
+            this.show_rm_orders_dialog(details);
         });
 
         // Create Purchase Receipt from PO
@@ -1588,21 +1682,351 @@ class ProductionWizard {
         });
     }
 
+    show_rm_orders_dialog(details) {
+        const self = this;
+        const materials = details.raw_materials || [];
+
+        // Collect all items that have linked POs
+        const items_with_pos = materials.filter(m => m.linked_pos && m.linked_pos.length > 0);
+
+        if (!items_with_pos.length) {
+            frappe.msgprint(__('No purchase orders found for raw materials.'));
+            return;
+        }
+
+        let html = '';
+        for (const m of items_with_pos) {
+            html += `
+                <div style="margin-bottom:16px;">
+                    <div style="font-weight:600; font-size:13px; margin-bottom:6px;">
+                        <a href="/app/item/${m.item_code}" target="_blank">${m.item_code}</a>
+                        <span class="text-muted" style="font-weight:400;"> — ${m.item_name}</span>
+                    </div>`;
+
+            for (const po of m.linked_pos) {
+                let status_color = 'var(--text-muted)';
+                if (po.status === 'Completed') status_color = 'var(--green-600, #16a34a)';
+                else if (po.status === 'To Receive and Bill' || po.status === 'To Receive') status_color = 'var(--orange-600, #ea580c)';
+                else if (po.status === 'To Bill') status_color = 'var(--blue-600, #2563eb)';
+
+                html += `
+                    <div style="background:var(--control-bg); border:1px solid var(--border-color); border-radius:6px; padding:10px 12px; margin-bottom:6px;">
+                        <div class="d-flex justify-content-between align-items-center mb-1">
+                            <div>
+                                <a href="/app/purchase-order/${po.po_name}" target="_blank" style="font-weight:500;">${po.po_name}</a>
+                                <span class="badge ml-1" style="background:${status_color}; color:#fff; font-size:10px;">${po.status}</span>
+                            </div>
+                            <span style="font-size:12px; color:var(--text-muted);">
+                                ${flt(po.received_qty, 3)} / ${flt(po.ordered_qty, 3)} ${m.uom}
+                            </span>
+                        </div>`;
+
+                // PRs
+                if (po.purchase_receipts && po.purchase_receipts.length > 0) {
+                    for (const pr of po.purchase_receipts) {
+                        html += `
+                            <div style="font-size:12px; margin-left:8px; padding:2px 0;">
+                                <i class="fa fa-download" style="color:var(--green-600); width:14px;"></i>
+                                <a href="/app/purchase-receipt/${pr.name}" target="_blank">${pr.name}</a>
+                                <span class="text-muted">(${flt(pr.qty, 3)} ${m.uom})</span>
+                            </div>`;
+                    }
+                } else if (po.pending_qty > 0) {
+                    html += `<div style="font-size:12px; margin-left:8px; padding:2px 0; color:var(--text-muted);"><i class="fa fa-exclamation-circle" style="width:14px; color:var(--orange-600);"></i> ${__('No Purchase Receipt yet')}</div>`;
+                }
+
+                // PIs
+                if (po.purchase_invoices && po.purchase_invoices.length > 0) {
+                    for (const pi of po.purchase_invoices) {
+                        const pi_color = pi.status === 'Paid' ? 'var(--green-600, #16a34a)' : 'var(--blue-600, #2563eb)';
+                        html += `
+                            <div style="font-size:12px; margin-left:8px; padding:2px 0;">
+                                <i class="fa fa-file-text-o" style="color:${pi_color}; width:14px;"></i>
+                                <a href="/app/purchase-invoice/${pi.name}" target="_blank">${pi.name}</a>
+                                <span style="color:${pi_color}; font-size:11px;">${pi.status}</span>
+                            </div>`;
+                    }
+                } else if (po.received_qty > 0) {
+                    html += `<div style="font-size:12px; margin-left:8px; padding:2px 0; color:var(--text-muted);"><i class="fa fa-exclamation-circle" style="width:14px; color:var(--blue-600);"></i> ${__('No Purchase Invoice yet')}</div>`;
+                }
+
+                // Action buttons
+                const action_btns = [];
+                if (po.pending_qty > 0 && (po.status === 'To Receive and Bill' || po.status === 'To Receive')) {
+                    action_btns.push(`<button class="btn btn-xs btn-success rm-orders-create-pr" data-po="${po.po_name}">
+                        <i class="fa fa-download"></i> ${__('Create PR')}
+                    </button>`);
+                }
+                if ((!po.purchase_invoices || !po.purchase_invoices.length) && po.received_qty > 0) {
+                    action_btns.push(`<button class="btn btn-xs btn-primary rm-orders-create-pi" data-po="${po.po_name}">
+                        <i class="fa fa-file-text-o"></i> ${__('Create PI')}
+                    </button>`);
+                }
+                if (action_btns.length) {
+                    html += `<div style="margin-top:6px; display:flex; gap:6px;">${action_btns.join('')}</div>`;
+                }
+
+                html += `</div>`;
+            }
+
+            html += `</div>`;
+        }
+
+        const d = new frappe.ui.Dialog({
+            title: __('Raw Material Orders'),
+            size: 'large',
+            fields: [{
+                fieldname: 'orders_html',
+                fieldtype: 'HTML',
+                options: html
+            }]
+        });
+
+        d.show();
+
+        // Bind Create PR buttons inside the dialog
+        d.$wrapper.find('.rm-orders-create-pr').on('click', function () {
+            const po_name = $(this).data('po');
+            d.hide();
+            self.create_purchase_receipt(po_name);
+        });
+
+        // Bind Create PI buttons inside the dialog
+        d.$wrapper.find('.rm-orders-create-pi').on('click', function () {
+            const po_name = $(this).data('po');
+            d.hide();
+            frappe.call({
+                method: 'erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_invoice',
+                args: { source_name: po_name },
+                freeze: true,
+                freeze_message: __('Creating Purchase Invoice...'),
+                callback: (r) => {
+                    if (r.message) {
+                        const doc = frappe.model.sync(r.message)[0];
+                        frappe.set_route('Form', doc.doctype, doc.name);
+                    }
+                }
+            });
+        });
+    }
+
     create_purchase_receipt(po_name) {
         const self = this;
+
         frappe.call({
-            method: 'erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt',
-            args: {
-                source_name: po_name
-            },
+            method: 'kniterp.api.production_wizard.get_po_items_for_receipt',
+            args: { purchase_order: po_name },
             freeze: true,
-            freeze_message: __('Creating Purchase Receipt...'),
+            freeze_message: __('Fetching PO details...'),
             callback: (r) => {
-                if (r.message) {
-                    // The method returns a doc object, sync it and open in form
-                    const doc = frappe.model.sync(r.message)[0];
-                    frappe.set_route('Form', doc.doctype, doc.name);
+                if (!r.message || !r.message.items || !r.message.items.length) {
+                    frappe.msgprint(__('No pending items to receive on this Purchase Order.'));
+                    return;
                 }
+
+                const po_data = r.message;
+                const po_items = po_data.items;
+
+                // Build context panel
+                let context_html = `
+                    <div class="mb-3" style="background:var(--control-bg); border:1px solid var(--border-color); border-radius:6px; padding:10px 14px; color:var(--text-color);">
+                        <div style="font-size:13px; line-height:1.8;">
+                            <div><strong>${__('Purchase Order')}:</strong>
+                                <a href="/app/purchase-order/${po_name}" target="_blank">${po_name}</a>
+                            </div>
+                            <div><strong>${__('Supplier')}:</strong> ${po_data.supplier_name || po_data.supplier}</div>
+                        </div>
+                    </div>
+                `;
+
+                // Build per-item sections with batch tables
+                let items_html = '';
+                po_items.forEach((item, idx) => {
+                    const badge_color = item.has_batch_no ? 'orange' : 'blue';
+                    const badge_text = item.has_batch_no ? __('Batch Tracked') : __('No Batch');
+                    items_html += `
+                        <div class="pr-item-section mb-3" data-item-code="${item.item_code}" data-idx="${idx}"
+                             style="border:1px solid var(--border-color); border-radius:6px; padding:12px;">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <div>
+                                    <strong>${item.item_code}</strong>
+                                    <div class="text-muted small">${item.item_name}</div>
+                                </div>
+                                <span class="badge" style="background:var(--${badge_color}-100, #fff7ed); color:var(--${badge_color}-600, #ea580c); font-size:10px;">${badge_text}</span>
+                            </div>
+                            <div class="d-flex justify-content-between flex-wrap mb-2" style="font-size:12px; color:var(--text-muted);">
+                                <span><strong>${__('Ordered')}:</strong> ${item.ordered_qty} ${item.uom}</span>
+                                <span><strong>${__('Received')}:</strong> ${item.received_qty} ${item.uom}</span>
+                                <span><strong>${__('Pending')}:</strong>
+                                    <span style="color:var(--orange-600, #ea580c); font-weight:600;">${item.pending_qty} ${item.uom}</span>
+                                </span>
+                            </div>`;
+
+                    if (item.has_batch_no) {
+                        items_html += `
+                            <div class="d-flex align-items-center mb-2">
+                                <label class="mb-0 mr-2" style="font-size:12px; white-space:nowrap;">${__('No. of Lots')}:</label>
+                                <input type="number" class="form-control form-control-sm pr-num-batches" data-idx="${idx}"
+                                       min="1" value="1" style="width:70px;">
+                            </div>
+                            <div class="pr-batch-table-wrapper" data-idx="${idx}"></div>
+                            <div class="pr-item-total text-right text-muted small" data-idx="${idx}">
+                                ${__('Total')}: <strong class="pr-item-total-qty">0</strong> ${item.uom}
+                            </div>`;
+                    } else {
+                        items_html += `
+                            <div class="d-flex align-items-center">
+                                <label class="mb-0 mr-2" style="font-size:12px; white-space:nowrap;">${__('Qty to Receive')}:</label>
+                                <input type="number" class="form-control form-control-sm pr-item-qty" data-idx="${idx}"
+                                       min="0" step="any" value="${item.pending_qty}" style="width:120px;">
+                            </div>`;
+                    }
+
+                    items_html += `</div>`;
+                });
+
+                const d = new frappe.ui.Dialog({
+                    title: __('Receive Raw Materials — {0}', [po_data.supplier_name || po_data.supplier]),
+                    fields: [
+                        {
+                            fieldname: 'context_html',
+                            fieldtype: 'HTML',
+                            options: context_html
+                        },
+                        {
+                            fieldname: 'items_html',
+                            fieldtype: 'HTML',
+                            options: items_html
+                        }
+                    ],
+                    size: 'large',
+                    primary_action_label: __('Create & Submit Receipt'),
+                    primary_action: () => {
+                        const result_items = [];
+                        let has_error = false;
+
+                        po_items.forEach((item, idx) => {
+                            const $section = d.$wrapper.find(`.pr-item-section[data-idx="${idx}"]`);
+                            const entry = { item_code: item.item_code, batches: [] };
+
+                            if (item.has_batch_no) {
+                                let item_total = 0;
+                                $section.find('.pr-batch-row').each(function () {
+                                    const row_qty = flt($(this).find('.pr-batch-qty').val());
+                                    const row_lot = $(this).find('.pr-batch-lot').val().trim();
+
+                                    if (!row_qty || row_qty <= 0) {
+                                        frappe.msgprint(__('Enter a valid quantity for all lots of {0}.', [item.item_code]));
+                                        has_error = true;
+                                        return false;
+                                    }
+                                    if (!row_lot) {
+                                        frappe.msgprint(__('Enter a Lot No for all lots of {0}.', [item.item_code]));
+                                        has_error = true;
+                                        return false;
+                                    }
+
+                                    entry.batches.push({ batch_no: row_lot, qty: row_qty });
+                                    item_total += row_qty;
+                                });
+
+                                if (has_error) return;
+
+                                if (item_total > item.pending_qty + 0.001) {
+                                    frappe.msgprint(__('Total lot qty ({0}) for {1} exceeds pending qty ({2}).', [item_total, item.item_code, item.pending_qty]));
+                                    has_error = true;
+                                    return;
+                                }
+                            } else {
+                                const qty = flt($section.find('.pr-item-qty').val());
+                                if (qty <= 0) {
+                                    frappe.msgprint(__('Enter a valid quantity for {0}.', [item.item_code]));
+                                    has_error = true;
+                                    return;
+                                }
+                                if (qty > item.pending_qty + 0.001) {
+                                    frappe.msgprint(__('Qty ({0}) for {1} exceeds pending qty ({2}).', [qty, item.item_code, item.pending_qty]));
+                                    has_error = true;
+                                    return;
+                                }
+                                entry.qty = qty;
+                            }
+
+                            result_items.push(entry);
+                        });
+
+                        if (has_error) return;
+
+                        frappe.call({
+                            method: 'kniterp.api.production_wizard.create_rm_purchase_receipt',
+                            args: {
+                                purchase_order: po_name,
+                                items: JSON.stringify(result_items)
+                            },
+                            freeze: true,
+                            freeze_message: __('Creating Purchase Receipt...'),
+                            callback: (r) => {
+                                if (r.message) {
+                                    d.hide();
+                                    frappe.show_alert({
+                                        message: __('Purchase Receipt {0} created and submitted',
+                                            [`<a href="/app/purchase-receipt/${r.message.name}">${r.message.name}</a>`]),
+                                        indicator: 'green'
+                                    }, 7);
+                                    self.load_production_details(self.selected_item);
+                                }
+                            }
+                        });
+                    }
+                });
+
+                d.show();
+
+                // Render batch tables and bind events
+                const render_batch_table = ($wrapper, idx, num_batches, prefill_qty) => {
+                    const item = po_items[idx];
+                    let html = '<table class="table table-bordered table-condensed mb-0"><thead><tr>'
+                        + '<th>' + __('Quantity') + '</th><th>' + __('Lot No / Batch No') + '</th>'
+                        + '</tr></thead><tbody>';
+                    for (let i = 0; i < num_batches; i++) {
+                        const qty_val = (num_batches === 1 && prefill_qty) ? prefill_qty : '';
+                        html += `
+                            <tr class="pr-batch-row">
+                                <td><input type="number" class="form-control form-control-sm pr-batch-qty" min="0" step="any" placeholder="${__('Qty')}" value="${qty_val}"></td>
+                                <td><input type="text" class="form-control form-control-sm pr-batch-lot" placeholder="${__('Lot No')}"></td>
+                            </tr>`;
+                    }
+                    html += '</tbody></table>';
+                    $wrapper.html(html);
+
+                    // Auto-update total when batch qty changes
+                    $wrapper.find('.pr-batch-qty').on('input', function () {
+                        let total = 0;
+                        $wrapper.find('.pr-batch-qty').each(function () {
+                            total += flt($(this).val());
+                        });
+                        d.$wrapper.find(`.pr-item-total[data-idx="${idx}"] .pr-item-total-qty`).text(flt(total, 3));
+                    });
+                };
+
+                // Initialize batch tables for all batch-tracked items
+                po_items.forEach((item, idx) => {
+                    if (!item.has_batch_no) return;
+                    const $wrapper = d.$wrapper.find(`.pr-batch-table-wrapper[data-idx="${idx}"]`);
+                    render_batch_table($wrapper, idx, 1, item.pending_qty);
+                    // Show initial total
+                    d.$wrapper.find(`.pr-item-total[data-idx="${idx}"] .pr-item-total-qty`).text(flt(item.pending_qty, 3));
+                });
+
+                // Bind "Number of Lots" change
+                d.$wrapper.find('.pr-num-batches').on('change', function () {
+                    const idx = cint($(this).data('idx'));
+                    const num = cint($(this).val()) || 1;
+                    const $wrapper = d.$wrapper.find(`.pr-batch-table-wrapper[data-idx="${idx}"]`);
+                    render_batch_table($wrapper, idx, num, null);
+                    // Reset total display
+                    d.$wrapper.find(`.pr-item-total[data-idx="${idx}"] .pr-item-total-qty`).text('0');
+                });
             }
         });
     }
@@ -1776,13 +2200,17 @@ class ProductionWizard {
         if (op.qty_ready_from_prev !== undefined) {
             const can_proceed = default_qty > 0;
             const alert_class = can_proceed ? 'alert-success' : 'alert-warning';
-            const icon = can_proceed ? 'check-circle' : 'exclamation-circle';
+            const is_first_op = details.operations[0].operation === operation;
+            const default_icon = can_proceed ? 'check-circle' : 'exclamation-circle';
+            const icon = is_first_op && default_icon !== 'exclamation-circle' ? 'cubes' : default_icon;
+            const title = is_first_op ? __('Max Available RM Limit') : __('Ready to Process');
+            const note = is_first_op ? __('Maximum you can process based on raw material stock') : __('Based on output from previous operation');
 
             info_html += `
                 <div class="alert ${alert_class}">
                     <i class="fa fa-${icon}"></i>
-                    <strong>${__('Ready to Process')}:</strong> ${flt(available_from_prev, 3)} ${details.uom || 'Units'}
-                    <br><small class="text-muted">${__('Based on output from previous operation')}</small>
+                    <strong>${title}:</strong> ${flt(available_from_prev, 3)} ${details.uom || 'Units'}
+                    <br><small class="text-muted">${note}</small>
                 </div>
              `;
         }
@@ -1847,9 +2275,14 @@ class ProductionWizard {
 
                 // Strict validation: Block if quantity exceeds available (with epsilon tolerance)
                 if (values.qty > rounded_available + 0.001) {
+                    const is_first_op = details.operations[0].operation === operation;
+                    const err_msg = is_first_op
+                        ? __('You are ordering <b>{0}</b>, but you only have Raw Materials to process <b>{1}</b>.', [values.qty, rounded_available])
+                        : __('You are ordering <b>{0}</b>, but only <b>{1}</b> is available to process from the previous operation.', [values.qty, rounded_available]);
+
                     frappe.msgprint({
                         title: __('Limit Exceeded'),
-                        message: __('You are ordering <b>{0}</b>, but only <b>{1}</b> is available to process from the previous operation.', [values.qty, rounded_available]),
+                        message: err_msg,
                         indicator: 'red'
                     });
                     return;
@@ -1898,11 +2331,14 @@ class ProductionWizard {
         });
     }
 
-    send_raw_material_to_supplier(purchase_order, sco_name) {
-        const create_ste = (sco) => {
+    send_raw_material_to_supplier(purchase_order, sco_name, ctx) {
+        const create_ste = (sco, fg_qty) => {
+            const args = { sco_name: sco };
+            if (fg_qty) args.fg_qty = fg_qty;
+
             frappe.call({
                 method: 'kniterp.api.production_wizard.auto_split_subcontract_stock_entry',
-                args: { sco_name: sco },
+                args: args,
                 freeze: true,
                 freeze_message: __('Drafting Stock Entry and allocating batches...'),
                 callback: (r) => {
@@ -1914,7 +2350,72 @@ class ProductionWizard {
         };
 
         if (sco_name) {
-            create_ste(sco_name);
+            // Show qty prompt for partial sends
+            const pending_fg = ctx ? flt(ctx.pending_fg) : 0;
+            const pending_rm = ctx ? flt(ctx.required_rm - ctx.sent_rm, 3) : 0;
+
+            if (pending_fg > 0) {
+                const rm_per_fg = pending_fg > 0 ? pending_rm / pending_fg : 0;
+                let _updating = false;
+
+                const d = new frappe.ui.Dialog({
+                    title: __('Send Raw Material'),
+                    fields: [
+                        {
+                            fieldname: 'info_html',
+                            fieldtype: 'HTML',
+                            options: `<div class="mb-3" style="background:var(--control-bg); border:1px solid var(--border-color); border-radius:6px; padding:10px 14px; font-size:13px;">
+                                <div><strong>${__('SCO')}:</strong> ${sco_name}</div>
+                                <div><strong>${__('Pending FG Qty')}:</strong> ${pending_fg}</div>
+                                <div><strong>${__('Pending RM Qty')}:</strong> ${pending_rm}</div>
+                            </div>`
+                        },
+                        {
+                            fieldname: 'fg_qty',
+                            fieldtype: 'Float',
+                            label: __('FG Qty'),
+                            default: pending_fg,
+                            reqd: 1,
+                            change: () => {
+                                if (_updating) return;
+                                _updating = true;
+                                const v = flt(d.get_value('fg_qty'), 3);
+                                d.set_value('rm_qty', flt(v * rm_per_fg, 3)).then(() => _updating = false);
+                            }
+                        },
+                        {
+                            fieldname: 'rm_qty',
+                            fieldtype: 'Float',
+                            label: __('RM Qty'),
+                            default: pending_rm,
+                            reqd: 1,
+                            change: () => {
+                                if (_updating) return;
+                                _updating = true;
+                                const v = flt(d.get_value('rm_qty'), 3);
+                                d.set_value('fg_qty', rm_per_fg > 0 ? flt(v / rm_per_fg, 3) : 0).then(() => _updating = false);
+                            }
+                        }
+                    ],
+                    primary_action_label: __('Create Stock Entry'),
+                    primary_action: (values) => {
+                        const qty = flt(values.fg_qty);
+                        if (qty <= 0) {
+                            frappe.msgprint(__('Quantity must be greater than 0'));
+                            return;
+                        }
+                        if (qty > pending_fg) {
+                            frappe.msgprint(__('Quantity cannot exceed pending FG qty ({0})', [pending_fg]));
+                            return;
+                        }
+                        d.hide();
+                        create_ste(sco_name, qty < pending_fg ? qty : null);
+                    }
+                });
+                d.show();
+            } else {
+                create_ste(sco_name);
+            }
             return;
         }
 
@@ -1935,12 +2436,49 @@ class ProductionWizard {
         });
     }
 
-    receive_subcontracted_goods(po_name, sco_name) {
+    receive_subcontracted_goods(po_name, sco_name, ctx) {
         const self = this;
+
+        // Build order context panel from ctx (passed by the click handler)
+        let context_html = '';
+        if (ctx) {
+            const pending = flt(ctx.qty - (ctx.received_qty || 0), 3);
+            const sent = flt(ctx.sent_qty || 0, 3);
+            const received = flt(ctx.received_qty || 0, 3);
+            const total = flt(ctx.qty || 0, 3);
+            const uom = ctx.uom || 'Units';
+            context_html = `
+                <div class="mb-3" style="background:var(--control-bg); border:1px solid var(--border-color); border-radius:6px; padding:10px 14px; color:var(--text-color);">
+                    <div style="font-size:13px; line-height:1.8;">
+                        <div><strong>${__('Supplier')}:</strong> ${ctx.supplier || '—'}</div>
+                        <div><strong>${__('Item')}:</strong> ${ctx.item_name || '—'}</div>
+                        <div><strong>${__('Operation')}:</strong> ${ctx.operation || '—'}</div>
+                        <div><strong>${__('Order')}:</strong>
+                            <a href="/app/purchase-order/${ctx.po_name}" target="_blank">${ctx.po_name}</a>
+                            &nbsp;/&nbsp;
+                            <a href="/app/subcontracting-order/${ctx.sco_name}" target="_blank">${ctx.sco_name}</a>
+                        </div>
+                    </div>
+                    <hr style="margin:8px 0; border-color:var(--border-color);">
+                    <div class="d-flex justify-content-between flex-wrap" style="font-size:12px; color:var(--text-muted);">
+                        <span><strong>${__('Ordered')}:</strong> ${total} ${uom}</span>
+                        <span><strong>${__('Sent')}:</strong> ${sent} ${uom}</span>
+                        <span><strong>${__('Already Received')}:</strong> ${received} ${uom}</span>
+                        <span><strong>${__('Pending')}:</strong> <span style="color:#fff; background:${pending > 0 ? 'var(--yellow-500, #d97706)' : 'var(--green-500, #16a34a)'}; border-radius:4px; padding:1px 6px;">${pending} ${uom}</span></span>
+                    </div>
+                </div>
+            `;
+        }
+
         // Prompt for details
         const d = new frappe.ui.Dialog({
-            title: __('Receive Subcontracted Goods'),
+            title: ctx ? __('Receive Goods — {0}', [ctx.supplier || po_name]) : __('Receive Subcontracted Goods'),
             fields: [
+                {
+                    fieldname: 'order_context',
+                    fieldtype: 'HTML',
+                    options: context_html
+                },
                 {
                     fieldname: 'supplier_delivery_note',
                     fieldtype: 'Data',
@@ -1972,27 +2510,7 @@ class ProductionWizard {
                     description: __('How many different dyeing batches did you receive for this quantity?'),
                     default: 1,
                     onchange: function () {
-                        const num_batches = cint(this.value) || 1;
-                        let html = '<table class="table table-bordered table-condensed"><thead><tr><th>' + __('Quantity') + '</th><th>' + __('Output Dyeing Lot No') + '</th></tr></thead><tbody>';
-                        for (let i = 0; i < num_batches; i++) {
-                            html += `
-                                <tr class="scr-batch-row">
-                                    <td><input type="number" class="form-control batch-qty" min="0" step="any" placeholder="${__('Qty')}"></td>
-                                    <td><input type="text" class="form-control batch-lot" placeholder="${__('Lot No / Batch No')}"></td>
-                                </tr>
-                            `;
-                        }
-                        html += '</tbody></table>';
-                        d.fields_dict.batch_table_html.$wrapper.html(html);
-
-                        // Auto-calculate total qty when batch-qty changes
-                        d.$wrapper.find('.batch-qty').on('input', function () {
-                            let total = 0;
-                            d.$wrapper.find('.batch-qty').each(function () {
-                                total += flt($(this).val());
-                            });
-                            d.set_value('qty', total);
-                        });
+                        render_batch_table(cint(this.value) || 1);
                     }
                 },
                 {
@@ -2065,36 +2583,73 @@ class ProductionWizard {
             }
         });
 
-        // Fetch PO details to set defaults
-        frappe.db.get_value('Purchase Order', po_name, ['supplier', 'company', 'set_warehouse'], (r) => {
-            // We could also fetch items to get pending qty, but for now user enters it manually.
-            // Or prompt user based on PO ID if possible.
-            // Ideally fetching 'pending_qty' from PO item would be nice.
-            // We can use a simple call to get pending qty
-            frappe.call({
-                method: 'frappe.client.get',
-                args: { doctype: 'Purchase Order', name: po_name },
-                callback: (po_res) => {
-                    if (po_res.message) {
-                        const po = po_res.message;
-                        // Sum up pending qty (ordered - received)
-                        let pending = 0;
-                        let rate = 0;
-                        if (po.items) {
-                            po.items.forEach(item => {
-                                const item_pending = (item.fg_item_qty || item.qty) - (item.received_qty || 0);
-                                pending += Math.max(0, item_pending);
-                                rate = item.rate; // Use last item rate
-                            });
-                        }
-                        d.max_receivable_qty = pending;
-                        d.set_value('qty', pending);
-                        d.set_df_property('qty', 'description', __('Maximum receivable quantity: {0}', [pending]));
-                        d.set_value('rate', rate);
-                    }
-                    d.show();
-                }
+        // Helper: build and inject batch table HTML for the given number of batches
+        const render_batch_table = (num_batches, prefill_qty) => {
+            let html = '<table class="table table-bordered table-condensed"><thead><tr><th>' + __('Quantity') + '</th><th>' + __('Output Dyeing Lot No') + '</th></tr></thead><tbody>';
+            for (let i = 0; i < num_batches; i++) {
+                const qty_val = (num_batches === 1 && prefill_qty) ? prefill_qty : '';
+                html += `
+                    <tr class="scr-batch-row">
+                        <td><input type="number" class="form-control batch-qty" min="0" step="any" placeholder="${__('Qty')}" value="${qty_val}"></td>
+                        <td><input type="text" class="form-control batch-lot" placeholder="${__('Lot No / Batch No')}"></td>
+                    </tr>
+                `;
+            }
+            html += '</tbody></table>';
+            d.fields_dict.batch_table_html.$wrapper.html(html);
+
+            // Auto-calculate total qty when batch-qty changes
+            d.$wrapper.find('.batch-qty').on('input', function () {
+                let total = 0;
+                d.$wrapper.find('.batch-qty').each(function () {
+                    total += flt($(this).val());
+                });
+                d.set_value('qty', total);
             });
+        };
+
+        // Fetch PO details to set defaults
+        frappe.call({
+            method: 'frappe.client.get',
+            args: { doctype: 'Purchase Order', name: po_name },
+            callback: (po_res) => {
+                if (po_res.message) {
+                    const po = po_res.message;
+                    let pending = 0;
+                    let rate = 0;
+                    if (po.items) {
+                        po.items.forEach(item => {
+                            let fg_received = item.received_qty || 0;
+                            // If the item has a specific fg_item_qty compared to the PO service qty, convert the ratio.
+                            if (item.fg_item_qty && item.qty) {
+                                fg_received = (item.received_qty || 0) * (item.fg_item_qty / item.qty);
+                            }
+                            const item_pending = (item.fg_item_qty || item.qty) - fg_received;
+                            pending += Math.max(0, item_pending);
+                            rate = item.rate;
+                        });
+                    }
+
+                    // Cap receivable to FG equivalent of RM actually sent
+                    if (ctx && ctx.required_rm_qty && ctx.sent_qty && ctx.qty) {
+                        const fg_for_sent_rm = flt((ctx.sent_qty / ctx.required_rm_qty) * ctx.qty, 3);
+                        const already_received = flt(ctx.received_qty || 0, 3);
+                        const receivable_from_sent = flt(fg_for_sent_rm - already_received, 3);
+                        pending = Math.min(pending, Math.max(0, receivable_from_sent));
+                    }
+
+                    d.max_receivable_qty = pending;
+                    d.set_value('qty', pending);
+                    d.set_df_property('qty', 'description', __('Maximum receivable quantity: {0}', [pending]));
+                    d.set_value('rate', rate);
+                    d.show();
+                    // Render the default 1-batch table with qty pre-filled
+                    render_batch_table(1, pending);
+                } else {
+                    d.show();
+                    render_batch_table(1);
+                }
+            }
         });
     }
 
@@ -2169,9 +2724,11 @@ class ProductionWizard {
 
                 // Show availability from previous op
                 if (op.qty_ready_from_prev !== undefined) {
-                    let notes = __('Based on output from previous operation');
+                    const is_first_op = details.operations[0].operation === operation;
+                    let title = is_first_op ? __('Max Available RM Limit') : __('Ready to Process');
+                    let notes = is_first_op ? __('Based on Raw Material stock in warehouse') : __('Based on output from previous operation');
                     let alert_class = 'alert-info';
-                    let icon = 'arrow-right';
+                    let icon = is_first_op ? 'cubes' : 'arrow-right';
 
                     // Check if limited by Raw Material (values are close)
                     // If available_from_prev is approx equal to max_producible, it means RM is the constraint
@@ -2189,7 +2746,7 @@ class ProductionWizard {
                     info_html += `
                         <div class="alert ${alert_class}">
                             <i class="fa fa-${icon}"></i>
-                            <strong>${__('Ready to Process')}:</strong> ${flt(available_from_prev, 3)} ${details.uom || 'Units'}
+                            <strong>${title}:</strong> ${flt(available_from_prev, 3)} ${details.uom || 'Units'}
                             <br><small class="text-muted">${notes}</small>
                         </div>
                      `;
@@ -2231,105 +2788,259 @@ class ProductionWizard {
                 // Updated whenever the user changes the 'qty' field.
                 const rm_items_for_lots = (jc.items && jc.items.length > 0) ? jc.items : [];
                 const _need_qtys = {};
-                const _lot_fieldnames = []; // tracks lot field names for badge refresh
-                let _check_submit_eligibility = null; // assigned inside _show_dialog once d exists
+                // _lot_allocations[item_code] = [{batch_no, available, use_qty, ...provenance}]
+                const _lot_allocations = {};
+                let _check_submit_eligibility = null;
+                let d = null; // dialog reference, assigned in _show_dialog
 
-                const _refresh_lot_badge = (fieldname, avail_fname) => {
-                    if (!d || !d.fields_dict[fieldname]) return;
-                    const raw = d.get_value(fieldname);
-                    const $badge = d.fields_dict[avail_fname].$wrapper;
-                    if (!raw || raw === __('-- No Lot / Skip --')) { $badge.html(''); return; }
-                    const batch_no = raw.split('  (')[0].trim();
-                    const item_code = d.fields_dict[fieldname]._item_code;
+                // FIFO allocation: distribute needed_qty across sorted batches (oldest first).
+                // ALL batches with available stock are included in the table so the user can
+                // freely swap to a different lot. FIFO pre-fills the optimal selection; the
+                // rest appear with use_qty = 0 and are fully editable.
+                const _fifo_allocate = (item_code) => {
                     const batches = _batch_map[item_code] || [];
-                    const b = batches.find(x => x.batch_no === batch_no);
-                    if (!b) { $badge.html(''); return; }
-                    const avail = parseFloat(b.qty);
                     const needed = _need_qtys[item_code] || 0;
-                    let badge_html;
-                    if (needed > 0 && avail < needed) {
-                        badge_html = `<div class="alert alert-danger py-1 px-2 mb-1" style="font-size:12px;">
-                            <i class="fa fa-exclamation-triangle"></i>
-                            ${__('Only {0} available, need {1}', [avail.toFixed(3), needed.toFixed(3)])}
-                            <br><small>${__('The system will consume what is available.')}</small>
-                        </div>`;
-                    } else {
-                        badge_html = `<div class="alert alert-success py-1 px-2 mb-1" style="font-size:12px;">
-                            <i class="fa fa-check-circle"></i>
-                            ${__('Available: {0}', [avail.toFixed(3)])}
-                            ${needed > 0 ? ` — ${__('Need: {0}', [needed.toFixed(3)])}` : ''}
-                        </div>`;
-                    }
-                    $badge.html(badge_html);
+                    let remaining = needed;
+                    const FIFO_MIN_QTY = 0.005; // matches backend fractional tolerance
+                    const allocs = [];
+                    batches.forEach(b => {
+                        const avail = flt(b.qty, 3);
+                        if (avail <= 0) return; // skip zero-stock lots entirely
+
+                        // FIFO: fill as much as needed, then 0 for the rest.
+                        // Always include in the table so the user can pick any lot.
+                        const use_qty = (remaining >= FIFO_MIN_QTY)
+                            ? flt(Math.min(remaining, avail), 3)
+                            : 0;
+
+                        allocs.push({
+                            batch_no: b.batch_no,
+                            available: avail,
+                            use_qty: use_qty,
+                            warehouse: b.warehouse || '',
+                            source_doc_type: b.source_doc_type || '',
+                            source_doc_name: b.source_doc_name || '',
+                            entry_date: b.entry_date || '',
+                            supplier_name: b.supplier_name || '',
+                            purchase_order: b.purchase_order || '',
+                        });
+                        remaining = flt(Math.max(0, remaining - use_qty), 3);
+                    });
+                    _lot_allocations[item_code] = allocs;
                 };
 
-                const _build_lot_fields = () => {
-                    let lot_fields = [];
+                // Build provenance display string for a batch
+                const _provenance_html = (alloc) => {
+                    let parts = [];
+                    if (alloc.source_doc_type === 'Purchase Receipt') {
+                        if (alloc.purchase_order) parts.push(`📦 ${alloc.purchase_order}`);
+                        if (alloc.supplier_name) parts.push(alloc.supplier_name);
+                        if (alloc.entry_date) parts.push(__('Rcvd {0}', [frappe.datetime.str_to_user(alloc.entry_date)]));
+                    } else if (alloc.source_doc_type) {
+                        parts.push(alloc.source_doc_type);
+                        if (alloc.source_doc_name) parts.push(alloc.source_doc_name);
+                        if (alloc.entry_date) parts.push(frappe.datetime.str_to_user(alloc.entry_date));
+                    }
+                    return parts.length > 0
+                        ? `<span class="text-muted" style="font-size:11px;">${parts.join(' • ')}</span>`
+                        : '';
+                };
 
-                    const _add_lot_select = (fieldname, label, item_code, item_name, base_required_qty) => {
-                        const batches = _batch_map[item_code] || [];
-                        const avail_fname = fieldname + '_avail_html';
+                // Render the multi-lot allocation table for a single RM item
+                const _render_lot_table = (item_code, item_name) => {
+                    const allocs = _lot_allocations[item_code] || [];
+                    const needed = _need_qtys[item_code] || 0;
+                    let total_allocated = 0;
+                    allocs.forEach(a => { total_allocated += flt(a.use_qty, 3); });
 
-                        // Initialise need_qty based on current default_qty
-                        const ratio = flt(default_qty, 3) / flt(jc.for_quantity || 1);
-                        _need_qtys[item_code] = flt(base_required_qty * ratio, 3);
+                    const safe_ic = item_code.replace(/[^a-zA-Z0-9]/g, '_');
 
-                        // Build options: all batches shown, zero-stock ones marked
-                        let options_list = [__('-- No Lot / Skip --')];
-                        batches.forEach(b => {
-                            const avail = parseFloat(b.qty);
-                            if (avail > 0) {
-                                options_list.push(`${b.batch_no}  (${__('Avail')}: ${avail.toFixed(3)})`);
-                            } else {
-                                options_list.push(`${b.batch_no}  (${__('No stock')})`);
-                            }
-                        });
-
-                        const need_now = _need_qtys[item_code];
-                        const desc_text = item_name
-                            ? `${item_name}${need_now > 0 ? ' — ' + __('Need: {0}', [need_now]) : ''}`
-                            : '';
-
-                        const field_def = {
-                            fieldname: fieldname,
-                            fieldtype: 'Select',
-                            label: label,
-                            options: options_list.join('\n'),
-                            description: (batches.length === 0)
-                                ? `⚠ ${__('No batches found for this item')}${item_name ? ' — ' + item_name : ''}`
-                                : desc_text,
-                            _item_code: item_code,
-                            onchange: function () {
-                                _refresh_lot_badge(fieldname, avail_fname);
-                                _check_submit_eligibility();
-                            }
-                        };
-                        lot_fields.push(field_def);
-                        lot_fields.push({ fieldname: avail_fname, fieldtype: 'HTML', options: '' });
-                        _lot_fieldnames.push({ fieldname, avail_fname, item_code });
-                    };
-
-                    if (rm_items_for_lots.length > 0) {
-                        rm_items_for_lots.forEach(item => {
-                            const fname = 'consumed_lot_' + item.item_code.replace(/[^a-zA-Z0-9]/g, '_');
-                            _add_lot_select(fname, __('Consumed Lot: {0}', [item.item_code]), item.item_code, item.item_name || '', item.required_qty || 0);
-                        });
-                    } else {
-                        // Fallback: no JC items, show a generic lot field
-                        lot_fields.push({
-                            fieldname: 'consumed_yarn_lot',
-                            fieldtype: 'Select',
-                            label: __('Consumed Lot No (Input)'),
-                            options: [__('-- No Lot / Skip --')].join('\n'),
-                            description: __('Select the Yarn/Fabric lot consumed in this operation.')
-                        });
+                    if (allocs.length === 0) {
+                        return `<div class="lot-table-wrapper" data-item="${safe_ic}">
+                            <div class="alert alert-warning py-2 px-3 mb-2" style="font-size:12px;">
+                                <i class="fa fa-exclamation-triangle"></i>
+                                ${__('No batches with available stock for {0}', [item_name || item_code])}
+                            </div>
+                        </div>`;
                     }
 
-                    return lot_fields;
+                    // Progress bar
+                    let pct = needed > 0 ? Math.min(100, (total_allocated / needed) * 100) : 100;
+                    let bar_class = 'bg-success';
+                    let status_icon = '✅';
+                    if (needed > 0 && total_allocated < needed - 0.001) {
+                        bar_class = pct > 50 ? 'bg-warning' : 'bg-danger';
+                        status_icon = pct > 50 ? '⚠' : '❌';
+                    } else if (total_allocated > needed + 0.001) {
+                        bar_class = 'bg-danger';
+                        status_icon = '❌';
+                    }
+
+                    let html = `<div class="lot-table-wrapper" data-item="${safe_ic}">
+                        <div style="font-weight:600; margin-bottom:4px; font-size:13px;">
+                            ${item_name || item_code}
+                            <span class="text-muted" style="font-weight:normal; font-size:12px;"> — ${__('Need')}: ${needed.toFixed(3)}</span>
+                        </div>
+                        <table class="table table-bordered table-sm lot-alloc-table" style="margin-bottom:4px; font-size:12px;">
+                            <thead style="background:#f8f9fa; color:#212529;">
+                                <tr>
+                                    <th style="width:28%;">${__('Lot')}</th>
+                                    <th style="width:22%;">${__('Warehouse')}</th>
+                                    <th style="width:12%; text-align:right;">${__('Avail')}</th>
+                                    <th style="width:14%; text-align:right;">${__('Use')}</th>
+                                    <th>${__('Source')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>`;
+
+                    allocs.forEach((a, idx) => {
+                        html += `
+                            <tr>
+                                <td><strong>${a.batch_no}</strong></td>
+                                <td style="font-size:11px; color:#6c757d;">${a.warehouse}</td>
+                                <td style="text-align:right;">${a.available.toFixed(3)}</td>
+                                <td style="text-align:right;">
+                                    <input type="number" class="form-control form-control-sm lot-use-qty"
+                                           data-item="${safe_ic}" data-idx="${idx}"
+                                           value="${a.use_qty.toFixed(3)}"
+                                           min="0" max="${a.available.toFixed(3)}" step="any"
+                                           style="text-align:right; padding:2px 6px; height:28px; font-size:12px;">
+                                </td>
+                                <td>${_provenance_html(a)}</td>
+                            </tr>`;
+                    });
+
+                    html += `</tbody></table>
+                        <div style="display:flex; align-items:center; gap:8px; margin-bottom:8px;">
+                            <div style="flex:1; background:#e9ecef; border-radius:4px; height:8px; overflow:hidden;">
+                                <div class="lot-progress-bar ${bar_class}" style="width:${pct}%; height:100%; transition:width 0.3s;"></div>
+                            </div>
+                            <span class="lot-status-text" style="font-size:11px; white-space:nowrap;">
+                                ${status_icon} ${total_allocated.toFixed(3)} / ${needed.toFixed(3)}
+                            </span>
+                        </div>
+                    </div>`;
+                    return html;
+                };
+
+                // Refresh lot tables in the dialog
+                const _refresh_all_lot_tables = () => {
+                    if (!d) return;
+                    const $wrapper = d.fields_dict.lot_tables_html?.$wrapper;
+                    if (!$wrapper) return;
+
+                    let combined_html = '';
+                    rm_items_for_lots.forEach(item => {
+                        combined_html += _render_lot_table(item.item_code, item.item_name || '');
+                    });
+
+                    if (rm_items_for_lots.length === 0) {
+                        combined_html = `<div class="text-muted small">${__('No raw material items found on Job Card.')}</div>`;
+                    }
+
+                    $wrapper.html(combined_html);
+
+                    // Bind input events for use_qty editing
+                    $wrapper.find('.lot-use-qty').off('input').on('input', function () {
+                        const $input = $(this);
+                        const safe_ic = $input.data('item');
+                        const idx = parseInt($input.data('idx'));
+                        const new_val = flt($input.val(), 3);
+
+                        // Find the matching item_code from safe_ic
+                        const item = rm_items_for_lots.find(i => i.item_code.replace(/[^a-zA-Z0-9]/g, '_') === safe_ic);
+                        if (!item) return;
+
+                        const allocs = _lot_allocations[item.item_code] || [];
+                        if (allocs[idx] !== undefined) {
+                            allocs[idx].use_qty = Math.min(flt(new_val, 3), allocs[idx].available);
+                        }
+
+                        // Refresh just the progress bar for this item (not full re-render to avoid blur)
+                        const needed = _need_qtys[item.item_code] || 0;
+                        let total_alloc = 0;
+                        allocs.forEach(a => { total_alloc += flt(a.use_qty, 3); });
+
+                        let pct = needed > 0 ? Math.min(100, (total_alloc / needed) * 100) : 100;
+                        let bar_class = 'bg-success';
+                        let status_icon = '✅';
+                        if (needed > 0 && total_alloc < needed - 0.001) {
+                            bar_class = pct > 50 ? 'bg-warning' : 'bg-danger';
+                            status_icon = pct > 50 ? '⚠' : '❌';
+                        } else if (total_alloc > needed + 0.001) {
+                            bar_class = 'bg-danger';
+                            status_icon = '❌';
+                        }
+
+                        const $table_wrapper = $input.closest('.lot-table-wrapper');
+                        $table_wrapper.find('.lot-progress-bar').removeClass('bg-success bg-warning bg-danger').addClass(bar_class).css('width', pct + '%');
+                        $table_wrapper.find('.lot-status-text').html(`${status_icon} ${total_alloc.toFixed(3)} / ${needed.toFixed(3)}`);
+
+                        if (_check_submit_eligibility) _check_submit_eligibility();
+                        _update_output_batch_field();
+                    });
+
+                    if (_check_submit_eligibility) _check_submit_eligibility();
+                };
+
+                // Run FIFO allocation for all RM items and refresh tables
+                const _run_fifo_and_refresh = () => {
+                    rm_items_for_lots.forEach(item => {
+                        _fifo_allocate(item.item_code);
+                    });
+                    _refresh_all_lot_tables();
+                };
+
+                // Derive a deterministic output batch name from the sorted set of
+                // input RM lot numbers chosen by FIFO allocation.
+                // Same input lots → same batch name; different lots → different name.
+                // Prefixed with "FAB-" so the output fabric lot is clearly distinct from
+                // the input RM (yarn/greige) lot numbers.
+                // Returns empty string if no lots are allocated yet.
+                const _derive_output_batch = () => {
+                    const all_batch_nos = new Set();
+                    rm_items_for_lots.forEach(item => {
+                        const allocs = _lot_allocations[item.item_code] || [];
+                        allocs.forEach(a => {
+                            if (flt(a.use_qty, 3) > 0) {
+                                all_batch_nos.add(a.batch_no);
+                            }
+                        });
+                    });
+                    if (all_batch_nos.size === 0) return '';
+                    return 'FAB-' + Array.from(all_batch_nos).sort().join('+');
+                };
+
+                // Track the last auto-derived value so we can detect manual overrides
+                let _last_auto_batch = '';
+
+                // Update the output_batch_no field only when it hasn't been manually overridden
+                const _update_output_batch_field = () => {
+                    if (!d) return;
+                    const derived = _derive_output_batch();
+                    const current_val = (d.get_value('output_batch_no') || '').trim();
+                    // Only update if the field still shows the previous auto value (or is empty)
+                    if (current_val === '' || current_val === _last_auto_batch) {
+                        if (derived !== _last_auto_batch) {
+                            _last_auto_batch = derived;
+                            d.set_value('output_batch_no', derived);
+                        }
+                    }
                 };
 
                 const _show_dialog = () => {
-                    const d = new frappe.ui.Dialog({
+                    // Compute initial need_qtys
+                    const ratio = flt(default_qty, 3) / flt(jc.for_quantity || 1);
+                    rm_items_for_lots.forEach(item => {
+                        _need_qtys[item.item_code] = flt((item.required_qty || 0) * ratio, 3);
+                    });
+
+                    // Run initial FIFO allocation
+                    rm_items_for_lots.forEach(item => {
+                        _fifo_allocate(item.item_code);
+                    });
+
+                    d = new frappe.ui.Dialog({
                         title: __('Update Manufactured Quantity: {0}', [operation]),
                         fields: [
                             {
@@ -2387,28 +3098,14 @@ class ProductionWizard {
                                 reqd: 1,
                                 description: __('Enter the quantity you produced in this batch. You can produce more batches later.'),
                                 onchange: function () {
-                                    // Recalculate required qty per RM item and refresh all lot badges
+                                    // Recalculate required qty per RM item and re-run FIFO
                                     const new_qty = flt(this.value) || 0;
                                     const jc_qty = flt(jc.for_quantity) || 1;
                                     rm_items_for_lots.forEach(item => {
                                         _need_qtys[item.item_code] = flt((item.required_qty || 0) * new_qty / jc_qty, 3);
-                                        const fname = 'consumed_lot_' + item.item_code.replace(/[^a-zA-Z0-9]/g, '_');
-                                        const f = d.fields_dict[fname];
-                                        if (f) {
-                                            const need_now = _need_qtys[item.item_code];
-                                            const iname = item.item_name || '';
-                                            const batches = _batch_map[item.item_code] || [];
-                                            const desc_text = iname ? `${iname}${need_now > 0 ? ' — ' + __('Need: {0}', [need_now]) : ''}` : '';
-                                            const full_desc = (batches.length === 0)
-                                                ? `⚠ ${__('No batches found for this item')}${iname ? ' — ' + iname : ''}`
-                                                : desc_text;
-                                            f.set_description(full_desc);
-                                        }
                                     });
-                                    _lot_fieldnames.forEach(({ fieldname, avail_fname }) => {
-                                        _refresh_lot_badge(fieldname, avail_fname);
-                                    });
-                                    if (_check_submit_eligibility) _check_submit_eligibility();
+                                    _run_fifo_and_refresh();
+                                    _update_output_batch_field();
                                 }
                             },
                             {
@@ -2416,37 +3113,39 @@ class ProductionWizard {
                                 fieldtype: 'Section Break',
                                 label: __('Lot Traceability')
                             },
-                            ..._build_lot_fields(),
+                            {
+                                fieldname: 'lot_tables_html',
+                                fieldtype: 'HTML',
+                                options: ''
+                            },
                             {
                                 fieldname: 'output_batch_no',
                                 fieldtype: 'Data',
-                                label: __('Output Batch No (Auto Generated)'),
-                                description: __('An auto-generated lot number for the new production batch.'),
-                                default: jc.name + '-' + frappe.datetime.now_datetime().replace(/[-: ]/g, '').substring(2, 12),
-                                read_only: 1
+                                label: __('Output Batch No'),
+                                description: __('Auto-derived from input RM lots (edit to override). Same input lots always produce the same batch name.')
                             }
                         ],
                         primary_action_label: __('Update'),
                         primary_action(values) {
-                            // Build item_code → batch_no map to preserve mapping on the backend.
-                            // Select field values look like "BATCH-001  (Avail: 250.000)" — strip annotation.
-                            const _extract_batch = (raw) => {
-                                if (!raw || raw === __('-- No Lot / Skip --')) return null;
-                                return raw.split('  (')[0].trim();
-                            };
-
+                            // Build consumed_lots map in multi-batch format:
+                            // {item_code: [{batch_no, qty}]}
                             let consumed_lots_map = {};
-                            if (values.consumed_yarn_lot) {
-                                const b = _extract_batch(values.consumed_yarn_lot);
-                                if (b) consumed_lots_map['__fallback__'] = b;
-                            }
-                            if (jc.items && jc.items.length > 0) {
-                                jc.items.forEach(item => {
-                                    let fname = 'consumed_lot_' + item.item_code.replace(/[^a-zA-Z0-9]/g, '_');
-                                    let b = _extract_batch(values[fname]);
-                                    if (b) consumed_lots_map[item.item_code] = b;
+
+                            rm_items_for_lots.forEach(item => {
+                                const allocs = _lot_allocations[item.item_code] || [];
+                                const entries = [];
+                                allocs.forEach(a => {
+                                    if (flt(a.use_qty, 3) > 0) {
+                                        entries.push({
+                                            batch_no: a.batch_no,
+                                            qty: flt(a.use_qty, 3)
+                                        });
+                                    }
                                 });
-                            }
+                                if (entries.length > 0) {
+                                    consumed_lots_map[item.item_code] = entries;
+                                }
+                            });
 
                             frappe.call({
                                 method: 'kniterp.api.production_wizard.complete_operation',
@@ -2484,25 +3183,32 @@ class ProductionWizard {
 
                     d.show();
 
-                    // Wire up submit eligibility checking now that d is available.
-                    // This is defined here (after d is assigned) and also hoisted
-                    // via the outer _check_submit_eligibility variable.
+                    // Render the lot tables into the HTML field
+                    _refresh_all_lot_tables();
+
+                    // Set the initial derived output batch (after FIFO has run)
+                    _last_auto_batch = _derive_output_batch();
+                    d.set_value('output_batch_no', _last_auto_batch);
+
+                    // Wire up submit eligibility checking
                     _check_submit_eligibility = () => {
-                        let blocked = false;
-                        _lot_fieldnames.forEach(({ fieldname, item_code }) => {
-                            const raw = d.get_value(fieldname);
-                            if (!raw || raw === __('-- No Lot / Skip --')) return;
-                            const batch_no = raw.split('  (')[0].trim();
-                            const batches = _batch_map[item_code] || [];
-                            const b = batches.find(x => x.batch_no === batch_no);
-                            if (!b) return;
-                            const avail = parseFloat(b.qty);
-                            const needed = _need_qtys[item_code] || 0;
-                            if (needed > 0 && avail < needed) blocked = true;
+                        let any_under = false;
+                        rm_items_for_lots.forEach(item => {
+                            const allocs = _lot_allocations[item.item_code] || [];
+                            const needed = _need_qtys[item.item_code] || 0;
+                            let total_alloc = 0;
+                            allocs.forEach(a => { total_alloc += flt(a.use_qty, 3); });
+                            // Block if total stock across all lots is less than needed
+                            // and user hasn't allocated enough
+                            let total_avail = 0;
+                            allocs.forEach(a => { total_avail += a.available; });
+                            if (needed > 0 && total_alloc < needed - 0.001 && total_avail >= needed) {
+                                any_under = true;
+                            }
                         });
                         const $btn = d.get_primary_btn();
-                        if (blocked) {
-                            $btn.prop('disabled', true).attr('title', __('Selected lot does not have sufficient stock'));
+                        if (any_under) {
+                            $btn.prop('disabled', true).attr('title', __('Please allocate sufficient lot quantity for all raw materials'));
                         } else {
                             $btn.prop('disabled', false).removeAttr('title');
                         }
@@ -2510,15 +3216,13 @@ class ProductionWizard {
                     _check_submit_eligibility(); // initial state
                 }; // end _show_dialog
 
-                // Fetch batch availability WITHOUT warehouse filter so all lots with
-                // positive stock are shown regardless of which warehouse they're in.
-                // (The SE backend will consume from the correct source warehouse.)
+                // Fetch batch availability with provenance context (FIFO sorted)
                 if (rm_items_for_lots.length > 0) {
                     let pending_calls = rm_items_for_lots.length;
                     rm_items_for_lots.forEach(item => {
                         frappe.call({
-                            method: 'kniterp.api.production_wizard.get_available_batches',
-                            args: { item_code: item.item_code },  // no warehouse filter
+                            method: 'kniterp.api.production_wizard.get_available_batches_with_context',
+                            args: { item_code: item.item_code },
                             callback: (br) => {
                                 _batch_map[item.item_code] = br.message || [];
                                 pending_calls--;
@@ -2867,14 +3571,10 @@ class ProductionWizard {
         let initial_plan_qty = base_parent_qty;
         let min_producible = -1;
 
-        shortage_items.forEach(item => {
-            // For initial plan calculation (shortage based), we must use the TRUE BOM ratio
-            // Reconstruct total required (Net + Consumed) to get the original ratio relative to base_parent_qty
-            const net_req = item.required_qty || 0;
-            const consumed = item.consumed_qty || 0;
-            const total_req_for_batch = net_req + consumed;
 
-            const ratio = total_req_for_batch / base_parent_qty;
+        shortage_items.forEach(item => {
+            // Use the true BOM ratio pre-calculated by the backend
+            const ratio = item.qty_per_unit || 0;
 
             if (ratio > 0 && item.shortage > 0) {
                 const producible = item.shortage / ratio;
@@ -2972,13 +3672,8 @@ class ProductionWizard {
 
                         // Update item quantities based on BOM ratios
                         shortage_items.forEach((item, i) => {
-                            // Calculate TRUE Ratio: (Net Required + Consumed) / Base Parent Qty
-                            // This reconstructs the original BOM requirement per unit of FG
-                            const net_req = item.required_qty || 0;
-                            const consumed = item.consumed_qty || 0;
-                            const total_req_for_batch = net_req + consumed;
-
-                            const ratio = total_req_for_batch / base_parent_qty;
+                            // Use true BOM ratio pre-calculated by backend
+                            const ratio = item.qty_per_unit || 0;
 
                             // Calc Required based on Plan Qty
                             let new_qty = new_parent_qty * ratio;
@@ -3172,12 +3867,8 @@ class ProductionWizard {
             const order_qty = parseFloat($input.val()) || 0;
             manual_quantities.push(order_qty);
 
-            const net_req = item.required_qty || 0;
-            const consumed = item.consumed_qty || 0;
-            const total_req_for_batch = net_req + consumed;
-            if (total_req_for_batch <= 0) return;
-
-            const ratio = total_req_for_batch / base_parent_qty;
+            const ratio = item.qty_per_unit || 0;
+            if (ratio <= 0) return;
 
             let total_available_for_production = order_qty;
             if (include_stock) {
@@ -3205,9 +3896,7 @@ class ProductionWizard {
         shortage_items.forEach((item, i) => {
             if (item.item_code === limiting_item.item_code) return;
 
-            const net_req = item.required_qty || 0;
-            const consumed = item.consumed_qty || 0;
-            const ratio = (net_req + consumed) / base_parent_qty;
+            const ratio = item.qty_per_unit || 0;
 
             let actual_available = manual_quantities[i];
             if (include_stock) {
@@ -3232,7 +3921,7 @@ class ProductionWizard {
 
         if (excess_html) {
             // Calculate how much limiting item is needed to balance the highest excess
-            const limit_ratio = ((limiting_item.required_qty || 0) + (limiting_item.consumed_qty || 0)) / base_parent_qty;
+            const limit_ratio = limiting_item.qty_per_unit || 0;
             const limiting_item_qty_needed = max_producible_fg_without_limit * limit_ratio;
 
             let current_limit_qty = parseFloat(d.$wrapper.find(`.item-qty[data-idx="${shortage_items.findIndex(m => m.item_code === limiting_item.item_code)}"]`).val()) || 0;
@@ -3295,6 +3984,93 @@ class ProductionWizard {
             }
         });
     }
+
+    create_sco_purchase_invoice(po_name, supplier, amount) {
+        const self = this;
+        const d = new frappe.ui.Dialog({
+            title: __('Create Purchase Invoice'),
+            fields: [
+                {
+                    fieldtype: 'HTML',
+                    fieldname: 'context_info',
+                    options: `<div class="mb-3 p-2 rounded" style="background: var(--control-bg); border: 1px solid var(--border-color);">
+                        <div class="small">
+                            <strong>${__('Purchase Order')}:</strong> <a href="/app/purchase-order/${po_name}">${po_name}</a><br>
+                            <strong>${__('Supplier')}:</strong> ${supplier}<br>
+                            <strong>${__('Amount')}:</strong> ${frappe.format(amount, { fieldtype: 'Currency' })}
+                        </div>
+                    </div>`
+                },
+                {
+                    label: __('Bill No (Supplier Invoice)'),
+                    fieldname: 'bill_no',
+                    fieldtype: 'Data',
+                    description: __('Supplier invoice number')
+                },
+                {
+                    label: __('Bill Date'),
+                    fieldname: 'bill_date',
+                    fieldtype: 'Date',
+                    default: frappe.datetime.nowdate()
+                },
+                {
+                    fieldtype: 'Column Break'
+                },
+                {
+                    label: __('Posting Date'),
+                    fieldname: 'posting_date',
+                    fieldtype: 'Date',
+                    default: frappe.datetime.nowdate()
+                }
+            ],
+            primary_action_label: __('Submit'),
+            primary_action: (values) => {
+                self._call_create_pi(d, po_name, values, true);
+            },
+            secondary_action_label: __('Save as Draft'),
+            secondary_action: () => {
+                const values = d.get_values();
+                self._call_create_pi(d, po_name, values, false);
+            }
+        });
+        d.show();
+    }
+
+    _call_create_pi(dialog, po_name, values, submit) {
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_purchase_invoice_from_po',
+            args: {
+                purchase_order: po_name,
+                bill_no: values.bill_no || '',
+                bill_date: values.bill_date || '',
+                posting_date: values.posting_date || '',
+                submit: submit
+            },
+            freeze: true,
+            freeze_message: submit ? __('Creating and Submitting Purchase Invoice...') : __('Creating Purchase Invoice...'),
+            callback: (r) => {
+                if (r.message && r.message.success) {
+                    dialog.hide();
+                    if (r.message.existing) {
+                        frappe.show_alert({
+                            message: __('Draft Purchase Invoice {0} already exists', [r.message.purchase_invoice]),
+                            indicator: 'orange'
+                        });
+                        frappe.set_route('Form', 'Purchase Invoice', r.message.purchase_invoice);
+                    } else {
+                        frappe.show_alert({
+                            message: r.message.submitted
+                                ? __('Purchase Invoice {0} created and submitted', [r.message.purchase_invoice])
+                                : __('Purchase Invoice {0} created as draft', [r.message.purchase_invoice]),
+                            indicator: 'green'
+                        });
+                        this.load_production_details(this.selected_item);
+                    }
+                }
+            }
+        });
+    }
+
 
     create_scio_sales_invoice(details) {
         frappe.call({

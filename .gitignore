@@ -5,3 +5,9 @@
 tags
 node_modules
 __pycache__
+
+# AI assistant config
+.claude/
+CLAUDE.md
+GEMINI.md
+docs/
