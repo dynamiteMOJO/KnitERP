@@ -176,7 +176,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             const html = `
                 <div class="bom-designer-container">
                     <div class="mb-5 d-flex justify-content-between align-items-center">
-                        <h3 class="font-weight-bold" style="color: #fff; letter-spacing: -0.5px;">BOM Designer</h3>
+                        <h3 class="font-weight-bold" style="color: var(--text-color); letter-spacing: -0.5px;">BOM Designer</h3>
                         <div class="text-muted small">Streamlining Multi-level Textile BOMs</div>
                     </div>
 
@@ -200,7 +200,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                         </div>
                     </div>
 
-                    <div class="mb-3 d-flex justify-content-between align-items-center" style="border-bottom: 1px solid #333; padding-bottom: 10px;">
+                    <div class="mb-3 d-flex justify-content-between align-items-center" style="border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
                         <label class="section-label m-0">Production Workflow</label>
                         <span class="text-muted small">Add stages to define the process</span>
                     </div>
@@ -494,7 +494,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                         <div class="card-body p-0">
                             <div class="row no-gutters">
                                 <!-- Inputs section -->
-                                <div class="col-md-4 p-4" style="background: rgba(0,0,0,0.1);">
+                                <div class="col-md-4 p-4" style="background: var(--control-bg);">
                                     <div class="col-label">${is_knit ? 'Yarns Mix' : 'Raw Material'}</div>
                                     <div class="inputs-list"></div>
                                     ${is_knit ? `
@@ -503,7 +503,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                 </div>
 
                                 <!-- Settings section -->
-                                <div class="col-md-4 p-4 border-left border-right" style="border-color: #333 !important;">
+                                <div class="col-md-4 p-4 border-left border-right" style="border-color: var(--border-color) !important;">
                                     <div class="mb-4 d-flex gap-2">
                                         <div class="frappe-control" style="margin-right: 15px;">
                                             <div class="checkbox">
@@ -540,7 +540,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
 
                                     <div class="mb-4">
                                         <label class="small text-muted mb-2">Workstation Type</label>
-                                        <div class="workstation-type-display" style="background: #262626; border: 1px solid #404040; border-radius: 6px; padding: 8px 12px; color: #aaa; font-size: 13px;">
+                                        <div class="workstation-type-display" style="background: var(--control-bg); border: 1px solid var(--border-color); border-radius: 6px; padding: 8px 12px; color: var(--text-muted); font-size: 13px;">
                                             ${ws_type}
                                         </div>
                                     </div>
@@ -559,8 +559,8 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                     <div class="col-label output-label">Total Output</div>
                                     <div class="output-box p-3 shadow-inner">
                                         <div class="font-weight-bold output-item-name" style="font-size: 15px; margin-bottom: 4px;">Select...</div>
-                                        <div class="small text-muted mt-2 pt-2 border-top d-none output-qty-display" style="border-color: rgba(255,255,255,0.1) !important;">
-                                            <span class="font-weight-bold" style="color: #fff; font-size: 16px;"><span class="val">0</span> <span style="font-size: 12px; font-weight: normal; color: #888;">kg</span></span>
+                                        <div class="small text-muted mt-2 pt-2 border-top d-none output-qty-display" style="border-color: var(--border-color) !important;">
+                                            <span class="font-weight-bold" style="color: var(--text-color); font-size: 16px;"><span class="val">0</span> <span style="font-size: 12px; font-weight: normal; color: var(--text-muted);">kg</span></span>
                                         </div>
                                     </div>
                                 </div>
@@ -679,7 +679,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                         </div>
                     </div>
                     <div class="mt-2 text-right d-none row-qty-display">
-                        <span class="small" style="color: #48bb78; font-weight: 600;"><span class="val">0</span> kg</span>
+                        <span class="small" style="color: var(--green-500); font-weight: 600;"><span class="val">0</span> kg</span>
                     </div>
                 </div>
             `);

@@ -280,7 +280,11 @@
 /* ── Difference Row (JV) ─────────────────────────── */
 
 #td-difference-row td {
-    background: #fff5f5;
+    background: var(--red-50);
+}
+
+[data-theme="dark"] #td-difference-row td {
+    background: rgba(204, 41, 41, 0.08);
 }
 
 /* ── Enhanced Item Row ───────────────────────────── */

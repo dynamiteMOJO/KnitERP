@@ -1,35 +1,56 @@
-:root {
-    --bg-dark: #121212;
-    --card-dark: #1e1e1e;
-    --border-dark: #333333;
-    --text-main: #e0e0e0;
-    --text-muted: #9e9e9e;
+/* ── BOM Designer scoped variables ─────────────────────── */
+/* Scoped to component — prevents overriding Frappe's global --text-muted etc. */
+
+/* Light mode defaults — inherit Frappe's auto-switching variables */
+.bom-designer-container {
+    --bom-bg: var(--bg-color);
+    --bom-card: var(--card-bg);
+    --bom-border: var(--border-color);
     --primary-glow: rgba(78, 115, 223, 0.2);
 
-    --yarn-bg: #2d2a1e;
-    --yarn-header: #3d3a2a;
+    /* Accent colours — intentional design, consistent in both modes */
+    --yarn-bg: rgba(246, 173, 85, 0.08);
+    --yarn-header: rgba(246, 173, 85, 0.12);
     --yarn-accent: #f6ad55;
 
-    --knit-bg: #1a2a3a;
-    --knit-header: #2a3a4a;
+    --knit-bg: rgba(99, 179, 237, 0.08);
+    --knit-header: rgba(99, 179, 237, 0.12);
     --knit-accent: #63b3ed;
 
-    --dye-bg: #2d1a3a;
-    --dye-header: #3d2a4a;
+    --dye-bg: rgba(183, 148, 244, 0.08);
+    --dye-header: rgba(183, 148, 244, 0.12);
     --dye-accent: #b794f4;
-}
 
-.bom-designer-container {
-    background-color: var(--bg-dark);
-    color: var(--text-main);
+    background-color: var(--bom-bg);
+    color: var(--text-color);
     padding: 24px;
     min-height: 100vh;
 }
 
+/* Dark mode overrides */
+[data-theme="dark"] .bom-designer-container {
+    --bom-bg: #121212;
+    --bom-card: #1e1e1e;
+    --bom-border: #333333;
+
+    --yarn-bg: #2d2a1e;
+    --yarn-header: #3d3a2a;
+
+    --knit-bg: #1a2a3a;
+    --knit-header: #2a3a4a;
+
+    --dye-bg: #2d1a3a;
+    --dye-header: #3d2a4a;
+}
+
 .header-card {
-    background: var(--card-dark);
-    border: 1px solid var(--border-dark);
+    background: var(--bom-card);
+    border: 1px solid var(--bom-border);
     border-radius: 12px;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}
+
+[data-theme="dark"] .header-card {
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
 }
 
@@ -45,11 +66,15 @@
 }
 
 .sequence-bar {
-    background: rgba(42, 42, 42, 0.5);
-    border: 1px dashed var(--border-dark);
+    background: var(--control-bg);
+    border: 1px dashed var(--bom-border);
     border-radius: 12px;
     padding: 16px;
     backdrop-filter: blur(8px);
+}
+
+[data-theme="dark"] .sequence-bar {
+    background: rgba(42, 42, 42, 0.5);
 }
 
 .op-pill {
@@ -62,8 +87,12 @@
     align-items: center;
     gap: 10px;
     transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    background: var(--control-bg);
+    color: var(--text-color);
+}
+
+[data-theme="dark"] .op-pill {
     background: #2a2a2a;
-    color: var(--text-main);
 }
 
 .pill-yarn:hover {
@@ -83,16 +112,24 @@
 
 .op-card {
     border-radius: 14px;
-    border: 1px solid var(--border-dark);
+    border: 1px solid var(--bom-border);
     /* overflow: hidden removed to prevent dropdown clipping */
-    background: var(--card-dark);
+    background: var(--bom-card);
+    box-shadow: var(--shadow-md, 0 4px 12px rgba(0, 0, 0, 0.1));
+}
+
+[data-theme="dark"] .op-card {
     box-shadow: 0 10px 20px rgba(0, 0, 0, 0.3);
 }
 
 .op-card-header {
     padding: 12px 20px;
+    background: var(--control-bg);
+    border-bottom: 1px solid var(--bom-border);
+}
+
+[data-theme="dark"] .op-card-header {
     background: rgba(255, 255, 255, 0.03);
-    border-bottom: 1px solid var(--border-dark);
 }
 
 .step-label {
@@ -101,6 +138,11 @@
     padding: 3px 10px;
     border-radius: 4px;
     margin-right: 12px;
+    background: var(--border-color);
+    color: var(--text-color);
+}
+
+[data-theme="dark"] .step-label {
     background: #333;
     color: #fff;
 }
@@ -140,7 +182,11 @@
 }
 
 .input-box {
-    border: 1px solid var(--border-dark);
+    border: 1px solid var(--bom-border);
+    background: var(--control-bg);
+}
+
+[data-theme="dark"] .input-box {
     background: rgba(0, 0, 0, 0.2);
 }
 
@@ -174,9 +220,9 @@
 .bom-designer-container .form-control,
 .bom-designer-container .frappe-control input:not([type="checkbox"]),
 .bom-designer-container .link-field input {
-    background-color: #262626 !important;
-    border: 1px solid #404040 !important;
-    color: #fff !important;
+    background-color: var(--control-bg) !important;
+    border: 1px solid var(--bom-border) !important;
+    color: var(--text-color) !important;
     border-radius: 6px !important;
     height: 38px !important;
 }
@@ -267,8 +313,8 @@
 }
 
 .bom-designer-container input.form-control {
-    background-color: #262626 !important;
-    color: #fff !important;
+    background-color: var(--control-bg) !important;
+    color: var(--text-color) !important;
     opacity: 1 !important;
     visibility: visible !important;
     z-index: 10;
@@ -278,39 +324,64 @@
 
 .bom-designer-container .form-control:focus,
 .bom-designer-container .frappe-control input:focus {
+    border-color: var(--border-color) !important;
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.08) !important;
+}
+
+[data-theme="dark"] .bom-designer-container .form-control:focus,
+[data-theme="dark"] .bom-designer-container .frappe-control input:focus {
     border-color: #666 !important;
     box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.1) !important;
 }
 
 .bom-designer-container .arrow-icon {
-    color: #444;
+    color: var(--text-muted);
     font-size: 28px;
     margin: -8px 0 12px 0;
-    filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.05));
     animation: none;
     /* Removed bounce to keep it clean */
 }
 
+[data-theme="dark"] .bom-designer-container .arrow-icon {
+    color: #444;
+    filter: drop-shadow(0 0 5px rgba(255, 255, 255, 0.05));
+}
+
 .btn-add-mini {
     background: transparent;
-    border: 1px dashed #444;
+    border: 1px dashed var(--border-color);
     color: var(--text-muted);
     transition: all 0.2s;
 }
 
 .btn-add-mini:hover {
+    border-color: var(--text-muted);
+    color: var(--text-color);
+    background: var(--subtle-fg);
+}
+
+[data-theme="dark"] .btn-add-mini {
+    border-color: #444;
+}
+
+[data-theme="dark"] .btn-add-mini:hover {
     border-color: #666;
     color: #fff;
     background: rgba(255, 255, 255, 0.05);
 }
 
 .input-row-mini {
-    background: rgba(0, 0, 0, 0.15);
-    border: 1px solid #2d2d2d;
+    background: var(--control-bg);
+    border: 1px solid var(--border-color);
     border-radius: 8px;
     padding: 12px;
     position: relative;
     z-index: 1;
+}
+
+[data-theme="dark"] .input-row-mini {
+    background: rgba(0, 0, 0, 0.15);
+    border-color: #2d2d2d;
 }
 
 .btn-remove-input {
@@ -335,8 +406,8 @@
 /* Ensure Awesomplete dropdown stays on top */
 .bom-designer-container .awesomplete>ul {
     z-index: 1000 !important;
-    background: #1e1e1e !important;
-    border: 1px solid #444 !important;
+    background: var(--bom-card) !important;
+    border: 1px solid var(--bom-border) !important;
 }
 
 /* Fix for Link fields in custom containers in BOM Designer */

@@ -5,15 +5,15 @@
     color: var(--text-color);
 }
 
-/* Force high-contrast pill text */
+/* Attribute pills — theme-aware */
 .kniterp-attr-pill {
     display: inline-flex;
     align-items: center;
 
-    background: #2b2b2b;              /* explicit dark bg */
-    color: #ffffff !important;        /* FORCE visible text */
+    background: var(--control-bg);
+    color: var(--text-color);
 
-    border: 1px solid #444;
+    border: 1px solid var(--border-color);
     border-radius: 14px;
 
     padding: 4px 10px;
@@ -23,21 +23,21 @@
     font-weight: 600;
 }
 
-/* Ensure inner text never inherits muted styles */
+/* Attribute value text — red accent in both modes */
 .kniterp-attr-pill *,
 .kniterp-attr-pill span {
-    color: #ff4040 !important;
+    color: var(--red-500) !important;
 }
 
 /* Remove (×) icon */
 .kniterp-remove-attr {
     cursor: pointer;
     margin-left: 6px;
-    color: #ff6b6b !important; /* visible red */
+    color: var(--red-400) !important;
     font-weight: bold;
 }
 
 /* Hover feedback */
 .kniterp-attr-pill:hover {
-    background: #3a3a3a;
+    background: var(--subtle-fg);
 }
