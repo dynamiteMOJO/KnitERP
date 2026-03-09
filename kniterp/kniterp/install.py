@@ -1,7 +1,64 @@
 import frappe
 
 def after_migrate():
+    setup_custom_fields()
+    setup_property_setters()
     hide_unwanted_workspaces()
+
+
+def setup_custom_fields():
+    custom_fields = [
+        {
+            "dt": "Salary Slip",
+            "fieldname": "custom_per_day_salary",
+            "label": "Per Day Salary",
+            "fieldtype": "Currency",
+            "insert_after": "earnings_and_deductions_tab",
+            "read_only": 1,
+            "bold": 1,
+        },
+    ]
+
+    for cf in custom_fields:
+        if not frappe.db.exists("Custom Field", {"dt": cf["dt"], "fieldname": cf["fieldname"]}):
+            doc = frappe.new_doc("Custom Field")
+            doc.update(cf)
+            doc.insert(ignore_permissions=True)
+
+    frappe.db.commit()
+
+
+def setup_property_setters():
+    """Create Property Setters for doctype layout customizations."""
+    property_setters = [
+        {
+            "doctype": "Salary Slip",
+            "fieldname": "column_break_k1jz",
+            "property": "fieldtype",
+            "value": "Section Break",
+            "property_type": "Select",
+        },
+    ]
+
+    for ps in property_setters:
+        if not frappe.db.exists("Property Setter", {
+            "doc_type": ps["doctype"],
+            "field_name": ps["fieldname"],
+            "property": ps["property"],
+            "module": "Kniterp",
+        }):
+            doc = frappe.new_doc("Property Setter")
+            doc.doctype_or_field = "DocField"
+            doc.doc_type = ps["doctype"]
+            doc.field_name = ps["fieldname"]
+            doc.property = ps["property"]
+            doc.value = ps["value"]
+            doc.property_type = ps["property_type"]
+            doc.module = "Kniterp"
+            doc.is_system_generated = 0
+            doc.insert(ignore_permissions=True)
+
+    frappe.db.commit()
 
 def hide_unwanted_workspaces():
     modules_to_hide = [

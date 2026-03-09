@@ -11,8 +11,9 @@ def calculate_variable_pay(slip, method):
     start = slip.start_date
     end = slip.end_date
 
-    per_day_salary = get_per_day_salary(slip)
     tea = get_variable_pay(employee, start)
+    per_day_salary = get_per_day_salary(slip)
+    slip.custom_per_day_salary = per_day_salary
 
     # reset components
     # set_component(slip, "Dual Shift Pay", 0)
@@ -23,24 +24,35 @@ def calculate_variable_pay(slip, method):
     sunday_pays = get_sunday_pay(employee, start, end)
     dual_shift_days = get_dual_shift_days(employee, start, end)
     machine_extra_pay = get_machine_extra_pay(employee, start, end)
-    conveyance = get_conveyance(employee, start, end)
+    conveyance, conveyance_km = get_conveyance(employee, start, end)
     rejected_days = get_rejected_holiday_days(employee, start, end)
-    tea_pay = (slip.payment_days - rejected_days) * (tea / slip.total_working_days)
-    set_component(slip, "Sunday Pay", sunday_pays * per_day_salary)
-    set_component(slip, "Dual Shift Pay", dual_shift_days * per_day_salary)
-    set_component(slip, "Machine Extra Pay", machine_extra_pay)
-    set_component(slip, "Conveyance Allowance", conveyance)
+    tea_pay = min((slip.payment_days - rejected_days) * (tea / slip.total_working_days), tea)
+    extra_machine_count = machine_extra_pay // MACHINE_EXTRA_RATE
+    set_component(slip, "Sunday Pay", sunday_pays * per_day_salary,
+        f"{sunday_pays} Sunday{'s' if sunday_pays != 1 else ''}")
+    set_component(slip, "Dual Shift Pay", dual_shift_days * per_day_salary,
+        f"{dual_shift_days} day{'s' if dual_shift_days != 1 else ''}")
+    set_component(slip, "Machine Extra Pay", machine_extra_pay,
+        f"{extra_machine_count} extra machine{'s' if extra_machine_count != 1 else ''}")
+    set_component(slip, "Conveyance Allowance", conveyance,
+        f"{int(conveyance_km)} km")
     set_component(
         slip,
         "Rejected Holiday Deduction",
-        rejected_days * per_day_salary
+        rejected_days * per_day_salary,
+        f"{rejected_days} day{'s' if rejected_days != 1 else ''}"
     )
-    print("tea_pay:", tea_pay)
-    print("per_day_salary:", per_day_salary)
-    set_component(slip, "Tea Allowance", tea_pay)
+    my_logger.debug(f"tea_pay: {tea_pay}, per_day_salary: {per_day_salary}")
+    set_component(slip, "Tea Allowance", tea_pay,
+        f"{slip.payment_days - rejected_days} paid days")
 
     slip.calculate_net_pay()
-    
+
+    for row in slip.earnings:
+        if not row.custom_description and row.depends_on_payment_days:
+            row.custom_description = f"{slip.payment_days} paid days"
+
+
 
 
 def get_component_amount(slip, component_name):
@@ -62,14 +74,12 @@ def get_per_day_salary(slip):
     )
 
     base = ssa if ssa else 0
-    tea = get_variable_pay(slip.employee, slip.start_date)
-      
 
     # HRMS already calculates total_working_days correctly
     if not slip.total_working_days:
         return 0
 
-    return int((base + tea) / slip.total_working_days)
+    return int(base / slip.total_working_days)
 
 
 def get_variable_pay(employee, start):
@@ -86,17 +96,17 @@ def get_variable_pay(employee, start):
 
 def get_sunday_pay(employee, start, end):
     rows = frappe.db.sql("""
-        SELECT distinct attendance_date
+        SELECT attendance_date, status
         FROM `tabAttendance`
         WHERE employee=%s
         AND attendance_date BETWEEN %s AND %s
-        AND status='Present'
+        AND status IN ('Present', 'Half Day')
     """, (employee, start, end), as_dict=True)
 
     sunday_count = 0
     for r in rows:
         if getdate(r.attendance_date).weekday() == 6:
-            sunday_count += 1
+            sunday_count += 0.5 if r.status == "Half Day" else 1
 
     return sunday_count
 
@@ -134,21 +144,27 @@ def get_machine_extra_pay(employee, start, end):
 
 
 def get_conveyance(employee, month_start, month_end):
-    amount  = frappe.db.sql("""
-        SELECT SUM(amount) as amount
+    result = frappe.db.sql("""
+        SELECT SUM(amount) as amount, SUM(total_km) as total_km
         FROM `tabMonthly Conveyance`
         WHERE employee=%s
         AND month BETWEEN %s AND %s
     """, (employee, month_start, month_end), as_dict=True)
 
-    return amount[0]['amount'] if amount[0]['amount'] is not None else 0
+    amount = result[0]['amount'] if result[0]['amount'] is not None else 0
+    total_km = result[0]['total_km'] if result[0]['total_km'] is not None else 0
+    return amount, total_km
 
 def get_rejected_holiday_days(employee, start, end):
     rejected = 0
 
+    holiday_list = frappe.get_value("Employee", employee, "holiday_list")
+    if not holiday_list:
+        return 0
+
     holidays = frappe.get_all(
         "Holiday",
-        filters={"holiday_date": ["between", [start, end]]},
+        filters={"parent": holiday_list, "holiday_date": ["between", [start, end]]},
         pluck="holiday_date"
     )
 
@@ -191,8 +207,8 @@ def is_deduction(component):
         "Salary Component", component, "type"
     ) == "Deduction"
 
-def set_component(slip, component, amount):
-    if amount==0:
+def set_component(slip, component, amount, description=""):
+    if amount == 0:
         return
 
     comp_type = frappe.get_value("Salary Component", component, "type")
@@ -201,12 +217,14 @@ def set_component(slip, component, amount):
     for row in slip.earnings + slip.deductions:
         if row.salary_component == component:
             row.amount = amount
+            row.custom_description = description
             return
-        
+
     slip.append(
         "deductions" if is_deduction else "earnings",
         {
             "salary_component": component,
             "amount": amount,
+            "custom_description": description,
         },
     )
