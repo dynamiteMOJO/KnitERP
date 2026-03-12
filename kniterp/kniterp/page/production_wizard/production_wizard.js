@@ -23,8 +23,8 @@ class ProductionWizard {
 
         this.setup_page();
         this.make_filters();
-        this.apply_filters();
         this.make_layout();
+        this.apply_filters();
         this.refresh();
     }
 
@@ -69,7 +69,7 @@ class ProductionWizard {
         this.page.sidebar.empty();
 
         // ── SCOPE ───────────────────────────────────────────────────────
-        this.page.page_form.append('<div class="filter-section-header">Scope</div>');
+        this.page.page_form.append(`<div class="filter-section-header">${__('Scope')}</div>`);
 
         this.customer_filter = this.page.add_field({
             fieldname: 'customer',
@@ -100,7 +100,7 @@ class ProductionWizard {
         });
 
         // ── ORDER DATE ──────────────────────────────────────────────────
-        this.page.page_form.append('<div class="filter-section-header">Order Date</div>');
+        this.page.page_form.append(`<div class="filter-section-header">${__('Order Date')}</div>`);
 
         this.from_date_filter = this.page.add_field({
             fieldname: 'from_date',
@@ -127,7 +127,7 @@ class ProductionWizard {
         });
 
         // ── STATUS ──────────────────────────────────────────────────────
-        this.page.page_form.append('<div class="filter-section-header">Status</div>');
+        this.page.page_form.append(`<div class="filter-section-header">${__('Status')}</div>`);
 
         this.materials_filter = this.page.add_field({
             fieldname: 'materials_status',
