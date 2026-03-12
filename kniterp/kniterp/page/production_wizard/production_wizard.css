@@ -621,3 +621,54 @@ html[data-theme="dark"] .activity-log-link {
 html[data-theme="dark"] .activity-log-link:hover {
 	color: var(--blue-300, #93c5fd);
 }
+
+/* Stage Tab Strip */
+.stage-tabs {
+    display: flex;
+    gap: 6px;
+    padding: 0 0 12px 0;
+    flex-wrap: wrap;
+}
+
+.stage-tab {
+    padding: 5px 14px;
+    border-radius: 20px;
+    border: 1px solid var(--border-color);
+    background: var(--fg-color);
+    color: var(--text-color);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    white-space: nowrap;
+}
+
+.stage-tab:hover {
+    border-color: var(--primary);
+    color: var(--primary);
+}
+
+.stage-tab.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: white;
+    font-weight: 600;
+}
+
+/* Filter Section Headers */
+.filter-section-header {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    padding: 10px 0 4px 0;
+    margin-top: 4px;
+    border-top: 1px solid var(--border-color);
+}
+
+.filter-section-header:first-child {
+    border-top: none;
+    padding-top: 0;
+    margin-top: 0;
+}
