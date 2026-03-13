@@ -112,10 +112,13 @@ def process_cp_item_swap(op_data):
     if not op_data.get('is_job_work') or op_data.get('job_work_direction') != 'inward':
         return
 
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+    cp_suffix = KnitERPSettings.get_settings().cp_item_suffix or " - CP"
+
     for inp in op_data.get('inputs', []):
         if inp.get('customer_provided'):
             base_item = inp['item']
-            cp_item = base_item + " - CP" if not base_item.endswith(" - CP") else base_item
+            cp_item = base_item + cp_suffix if not base_item.endswith(cp_suffix) else base_item
 
             # Verify the CP item exists
             if frappe.db.exists("Item", cp_item):
@@ -526,10 +529,12 @@ def get_multilevel_bom(bom_no):
                 }
 
                 # Check if this is a CP item (for inward job work)
-                if item.item_code.endswith(" - CP"):
+                from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+                bom_cp_suffix = KnitERPSettings.get_settings().cp_item_suffix or " - CP"
+                if item.item_code.endswith(bom_cp_suffix):
                     inp_data["customer_provided"] = True
                     # Store original base item code for display
-                    inp_data["base_item"] = item.item_code.rsplit(" - CP", 1)[0]
+                    inp_data["base_item"] = item.item_code.rsplit(bom_cp_suffix, 1)[0]
 
                 op_data["inputs"].append(inp_data)
 

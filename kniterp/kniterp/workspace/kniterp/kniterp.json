@@ -1,7 +1,7 @@
 {
  "app": "kniterp",
  "charts": [],
- "content": "[{\"id\":\"dummy123\",\"type\":\"header\",\"data\":{\"text\":\"<span class='h4'><b>Welcome to KnitERP</b></span>\",\"col\":12}}]",
+ "content": "[{\"id\": \"fe00d0700f8a\", \"type\": \"header\", \"data\": {\"text\": \"<span class='h4'><b>Quick Access</b></span>\", \"col\": 12}}, {\"id\": \"8a2d29e544a6\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Production Wizard\", \"col\": 4}}, {\"id\": \"4e3af477e6db\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Transaction Desk\", \"col\": 4}}, {\"id\": \"1c5fcafe74bf\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Action Center\", \"col\": 4}}, {\"id\": \"d8f6dde6fa1f\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"BOM Designer\", \"col\": 4}}, {\"id\": \"e30765820250\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Home Dashboard\", \"col\": 4}}, {\"id\": \"619508ac1765\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"837fbab5db30\", \"type\": \"header\", \"data\": {\"text\": \"<span class='h4'><b>Documents</b></span>\", \"col\": 12}}, {\"id\": \"0002928244e6\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Sales Order\", \"col\": 3}}, {\"id\": \"1b08a23f0c26\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Purchase Order\", \"col\": 3}}, {\"id\": \"c3d20bd18cd5\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Work Order\", \"col\": 3}}, {\"id\": \"139769ecbd95\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Job Card\", \"col\": 3}}, {\"id\": \"6419c749c3b0\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Stock Entry\", \"col\": 3}}, {\"id\": \"7a4bb87bae77\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"Item\", \"col\": 3}}, {\"id\": \"2d93611bddeb\", \"type\": \"shortcut\", \"data\": {\"shortcut_name\": \"BOM\", \"col\": 3}}, {\"id\": \"745ce08e2e14\", \"type\": \"spacer\", \"data\": {\"col\": 12}}, {\"id\": \"87247a11f2ed\", \"type\": \"header\", \"data\": {\"text\": \"<span class='h4'><b>Reports & Tools</b></span>\", \"col\": 12}}, {\"id\": \"d3903ccc5ee8\", \"type\": \"card\", \"data\": {\"card_name\": \"Reports\", \"col\": 4}}, {\"id\": \"7931fd01a52a\", \"type\": \"card\", \"data\": {\"card_name\": \"Payroll & HR\", \"col\": 4}}, {\"id\": \"8dfc494ff303\", \"type\": \"card\", \"data\": {\"card_name\": \"Setup\", \"col\": 4}}]",
  "creation": "2026-02-21 22:42:50.293307",
  "custom_blocks": [],
  "docstatus": 0,
@@ -13,8 +13,179 @@
  "is_hidden": 0,
  "label": "KnitERP",
  "link_type": "DocType",
- "links": [],
- "modified": "2026-02-23 08:53:31.733631",
+ "links": [
+  {
+   "hidden": 0,
+   "icon": "chart",
+   "is_query_report": 0,
+   "label": "Reports",
+   "link_count": 5,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Subcontracted Batch Traceability",
+   "link_count": 0,
+   "link_to": "Subcontracted Batch Traceability",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Monthly Salary Register",
+   "link_count": 0,
+   "link_to": "Monthly Salary Register",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Stock Balance",
+   "link_count": 0,
+   "link_to": "Stock Balance",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "BOM Stock Report",
+   "link_count": 0,
+   "link_to": "BOM Stock Report",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 1,
+   "label": "Production Planning Report",
+   "link_count": 0,
+   "link_to": "Production Planning Report",
+   "link_type": "Report",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "icon": "users",
+   "is_query_report": 0,
+   "label": "Payroll & HR",
+   "link_count": 5,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Employee",
+   "link_count": 0,
+   "link_to": "Employee",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Attendance",
+   "link_count": 0,
+   "link_to": "Attendance",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Salary Slip",
+   "link_count": 0,
+   "link_to": "Salary Slip",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Monthly Conveyance",
+   "link_count": 0,
+   "link_to": "Monthly Conveyance",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Machine Attendance Tool",
+   "link_count": 0,
+   "link_to": "Machine Attendance Tool",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "icon": "setting-gear",
+   "is_query_report": 0,
+   "label": "Setup",
+   "link_count": 4,
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Card Break"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "KnitERP Settings",
+   "link_count": 0,
+   "link_to": "KnitERP Settings",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Transaction Parameter",
+   "link_count": 0,
+   "link_to": "Transaction Parameter",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Item Token",
+   "link_count": 0,
+   "link_to": "Item Token",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  },
+  {
+   "hidden": 0,
+   "is_query_report": 0,
+   "label": "Item Token Alias",
+   "link_count": 0,
+   "link_to": "Item Token Alias",
+   "link_type": "DocType",
+   "onboard": 0,
+   "type": "Link"
+  }
+ ],
+ "modified": "2026-03-13 07:52:33.311191",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "KnitERP",
@@ -24,7 +195,109 @@
  "quick_lists": [],
  "roles": [],
  "sequence_id": 0.0,
- "shortcuts": [],
+ "shortcuts": [
+  {
+   "color": "#F97316",
+   "doc_view": "",
+   "icon": "tool",
+   "label": "Production Wizard",
+   "link_to": "production-wizard",
+   "type": "Page"
+  },
+  {
+   "color": "#3B82F6",
+   "doc_view": "",
+   "icon": "file",
+   "label": "Transaction Desk",
+   "link_to": "transaction-desk",
+   "type": "Page"
+  },
+  {
+   "color": "#EF4444",
+   "doc_view": "",
+   "icon": "alert",
+   "label": "Action Center",
+   "link_to": "action-center",
+   "type": "Page"
+  },
+  {
+   "color": "#8B5CF6",
+   "doc_view": "",
+   "icon": "branch",
+   "label": "BOM Designer",
+   "link_to": "bom_designer",
+   "type": "Page"
+  },
+  {
+   "color": "#10B981",
+   "doc_view": "",
+   "icon": "dashboard",
+   "label": "Home Dashboard",
+   "link_to": "kniterp-home",
+   "type": "Page"
+  },
+  {
+   "color": "#316CE6",
+   "doc_view": "List",
+   "icon": "",
+   "label": "Sales Order",
+   "link_to": "Sales Order",
+   "stats_filter": "{\"docstatus\": 1, \"status\": [\"not in\", [\"Closed\", \"Completed\", \"Cancelled\"]]}",
+   "type": "DocType"
+  },
+  {
+   "color": "#8E54E9",
+   "doc_view": "List",
+   "icon": "",
+   "label": "Purchase Order",
+   "link_to": "Purchase Order",
+   "stats_filter": "{\"docstatus\": 1, \"status\": [\"not in\", [\"Closed\", \"Completed\", \"Cancelled\"]]}",
+   "type": "DocType"
+  },
+  {
+   "color": "#F97316",
+   "doc_view": "List",
+   "icon": "",
+   "label": "Work Order",
+   "link_to": "Work Order",
+   "stats_filter": "{\"docstatus\": 1, \"status\": [\"not in\", [\"Closed\", \"Completed\", \"Cancelled\", \"Stopped\"]]}",
+   "type": "DocType"
+  },
+  {
+   "color": "#EF4444",
+   "doc_view": "List",
+   "icon": "",
+   "label": "Job Card",
+   "link_to": "Job Card",
+   "stats_filter": "{\"docstatus\": 0, \"status\": [\"in\", [\"Open\", \"Work In Progress\"]]}",
+   "type": "DocType"
+  },
+  {
+   "color": "#10B981",
+   "doc_view": "List",
+   "icon": "",
+   "label": "Stock Entry",
+   "link_to": "Stock Entry",
+   "type": "DocType"
+  },
+  {
+   "color": "#4CAF50",
+   "doc_view": "List",
+   "icon": "",
+   "label": "Item",
+   "link_to": "Item",
+   "type": "DocType"
+  },
+  {
+   "color": "#3F51B5",
+   "doc_view": "List",
+   "icon": "",
+   "label": "BOM",
+   "link_to": "BOM",
+   "stats_filter": "{\"is_active\": 1, \"docstatus\": 1}",
+   "type": "DocType"
+  }
+ ],
  "title": "KnitERP",
  "type": "Workspace"
 }

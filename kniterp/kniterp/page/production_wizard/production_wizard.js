@@ -23,8 +23,8 @@ class ProductionWizard {
 
         this.setup_page();
         this.make_filters();
-        this.apply_filters();
         this.make_layout();
+        this.apply_filters();
         this.refresh();
     }
 
@@ -42,7 +42,7 @@ class ProductionWizard {
             this.urgent_filter.set_value(this.filters.urgent);
         }
         if (this.filters.invoice_status !== undefined) {
-            this.status_filter.set_value(this.filters.invoice_status);
+            this.set_active_tab(this.filters.invoice_status);
         }
         if (this.filters.materials_status !== undefined) {
             this.materials_filter.set_value(this.filters.materials_status);
@@ -68,10 +68,12 @@ class ProductionWizard {
         // Clear anything in sidebar just in case
         this.page.sidebar.empty();
 
-        // Party Name filter (Select)
+        // ── SCOPE ───────────────────────────────────────────────────────
+        this.page.page_form.append(`<div class="filter-section-header">${__('Scope')}</div>`);
+
         this.customer_filter = this.page.add_field({
             fieldname: 'customer',
-            label: __('Party Name'),
+            label: __('Customer'),
             fieldtype: 'Select',
             options: [{ 'label': __('All Parties'), 'value': '' }],
             change: () => {
@@ -80,86 +82,9 @@ class ProductionWizard {
             }
         });
 
-        // Load parties initial - moved to end
-
-
-        // From Date filter
-        this.from_date_filter = this.page.add_field({
-            fieldname: 'from_date',
-            label: __('From Date'),
-            fieldtype: 'Date',
-            default: frappe.datetime.add_months(frappe.datetime.nowdate(), -1),
-            change: () => {
-                this.filters.from_date = this.from_date_filter.get_value();
-                this.load_party_options();
-                this.refresh_pending_items();
-            }
-        });
-
-        // To Date filter
-        this.to_date_filter = this.page.add_field({
-            fieldname: 'to_date',
-            label: __('To Date'),
-            fieldtype: 'Date',
-            default: frappe.datetime.add_months(frappe.datetime.nowdate(), 1),
-            change: () => {
-                this.filters.to_date = this.to_date_filter.get_value();
-                this.load_party_options();
-                this.refresh_pending_items();
-            }
-        });
-
-        // Urgent filter
-        this.urgent_filter = this.page.add_field({
-            fieldname: 'urgent',
-            label: __('Urgent Only'),
-            fieldtype: 'Check',
-            change: () => {
-                this.filters.urgent = this.urgent_filter.get_value();
-                this.load_party_options();
-                this.refresh_pending_items();
-            }
-        });
-
-        // Invoice Status filter
-        this.status_filter = this.page.add_field({
-            fieldname: 'status_filter',
-            label: __('View Items'),
-            fieldtype: 'Select',
-            options: [
-                { 'label': __('Pending Production'), 'value': 'Pending Production' },
-                { 'label': __('Ready to Deliver'), 'value': 'Ready to Deliver' },
-                { 'label': __('Ready to Invoice'), 'value': 'Ready to Invoice' },
-                { 'label': __('All Active'), 'value': 'All' }
-            ],
-            default: 'Pending Production',
-            change: () => {
-                this.filters.invoice_status = this.status_filter.get_value();
-                this.load_party_options();
-                this.refresh_pending_items();
-            }
-        });
-
-        // Materials Status filter (Action Center support)
-        this.materials_filter = this.page.add_field({
-            fieldname: 'materials_status',
-            label: __('Materials'),
-            fieldtype: 'Select',
-            options: [
-                { 'label': __('All'), 'value': '' },
-                { 'label': __('Ready for Production'), 'value': 'Ready' },
-                { 'label': __('Material Shortage'), 'value': 'Shortage' }
-            ],
-            change: () => {
-                this.filters.materials_status = this.materials_filter.get_value();
-                this.refresh_pending_items();
-            }
-        });
-
-        // Type filter (Inward/Outward/Standard)
         this.type_filter = this.page.add_field({
             fieldname: 'job_work',
-            label: __('Type'),
+            label: __('Work Type'),
             fieldtype: 'Select',
             options: [
                 { 'label': __('All Types'), 'value': '' },
@@ -174,12 +99,68 @@ class ProductionWizard {
             }
         });
 
-        // Set default filter if not present
+        // ── ORDER DATE ──────────────────────────────────────────────────
+        this.page.page_form.append(`<div class="filter-section-header">${__('Order Date')}</div>`);
+
+        this.from_date_filter = this.page.add_field({
+            fieldname: 'from_date',
+            label: __('From Date'),
+            fieldtype: 'Date',
+            default: frappe.datetime.add_months(frappe.datetime.nowdate(), -1),
+            change: () => {
+                this.filters.from_date = this.from_date_filter.get_value();
+                this.load_party_options();
+                this.refresh_pending_items();
+            }
+        });
+
+        this.to_date_filter = this.page.add_field({
+            fieldname: 'to_date',
+            label: __('To Date'),
+            fieldtype: 'Date',
+            default: frappe.datetime.add_months(frappe.datetime.nowdate(), 1),
+            change: () => {
+                this.filters.to_date = this.to_date_filter.get_value();
+                this.load_party_options();
+                this.refresh_pending_items();
+            }
+        });
+
+        // ── STATUS ──────────────────────────────────────────────────────
+        this.page.page_form.append(`<div class="filter-section-header">${__('Status')}</div>`);
+
+        this.materials_filter = this.page.add_field({
+            fieldname: 'materials_status',
+            label: __('Material Status'),
+            fieldtype: 'Select',
+            options: [
+                { 'label': __('All'), 'value': '' },
+                { 'label': __('Ready for Production'), 'value': 'Ready' },
+                { 'label': __('Material Shortage'), 'value': 'Shortage' }
+            ],
+            change: () => {
+                this.filters.materials_status = this.materials_filter.get_value();
+                this.refresh_pending_items();
+            }
+        });
+
+        this.urgent_filter = this.page.add_field({
+            fieldname: 'urgent',
+            label: __('Urgent'),
+            fieldtype: 'Check',
+            change: () => {
+                this.filters.urgent = this.urgent_filter.get_value();
+                this.load_party_options();
+                this.refresh_pending_items();
+            }
+        });
+
+        // Set default invoice_status if not passed via route_options
         if (!this.filters.invoice_status) {
             this.filters.invoice_status = 'Pending Production';
         }
 
-        // Ensure the fields are styled correctly for the top bar
+        // Style the filter bar
         this.page.page_form.css({
             'padding': '10px 15px',
             'background': 'var(--subtle-fg)',
@@ -187,7 +168,7 @@ class ProductionWizard {
             'margin-bottom': '10px'
         });
 
-        // Load parties initial (after fields are created)
+        // Load initial party options (after fields are created)
         this.load_party_options();
     }
 
@@ -301,6 +282,40 @@ class ProductionWizard {
             this.page.main.find('.dropdown-toggle').text(`${__('Sort')}: ${label}`);
             this.sort_pending_items(field);
         });
+
+        this.render_stage_tabs();
+    }
+
+    set_active_tab(value) {
+        if (!this.$stage_tabs) return;
+        this.$stage_tabs.find('.stage-tab').removeClass('active');
+        this.$stage_tabs.find(`.stage-tab[data-value="${value}"]`).addClass('active');
+    }
+
+    render_stage_tabs() {
+        const tabs = [
+            { label: __('Pending Production'), value: 'Pending Production' },
+            { label: __('Ready to Deliver'), value: 'Ready to Deliver' },
+            { label: __('Ready to Invoice'), value: 'Ready to Invoice' },
+            { label: __('All Active'), value: 'All' }
+        ];
+
+        const active = this.filters.invoice_status || 'Pending Production';
+
+        this.$stage_tabs = $('<div class="stage-tabs"></div>');
+        tabs.forEach(tab => {
+            const $tab = $(`<button class="stage-tab${tab.value === active ? ' active' : ''}" data-value="${tab.value}">${tab.label}</button>`);
+            $tab.on('click', () => {
+                this.filters.invoice_status = tab.value;
+                this.set_active_tab(tab.value);
+                this.load_party_options();
+                this.refresh_pending_items();
+            });
+            this.$stage_tabs.append($tab);
+        });
+
+        // Prepend tab strip above the panels row inside the main container
+        this.page.main.find('.production-wizard-container').prepend(this.$stage_tabs);
     }
 
     sort_pending_items(field) {
@@ -538,9 +553,9 @@ class ProductionWizard {
 				<div class="details-header">
 					<div class="item-info">
                         ${details.is_subcontracted ? `<div class="mb-1"><span class="badge badge-warning">${__('Subcontracting Inward')}</span></div>` : ''}
-						<h4>${details.production_item || details.item_name}</h4>
+						<h4><a href="/app/item/${encodeURIComponent(details.production_item || details.item_code)}" target="_blank">${details.production_item_name || details.item_name || details.production_item}</a></h4>
 						<span class="text-muted">
-                            ${details.production_item ? details.production_item : details.item_code}
+                            ${details.production_item || details.item_code}
                             ${details.is_subcontracted ? `<br><small class="text-muted">${__('Service')}: ${details.item_name}</small>` : ''}
                         </span>
 					</div>
@@ -1068,6 +1083,11 @@ class ProductionWizard {
                 ${op.purchase_order ? `<div class="op-link mt-1"><i class="fa fa-shopping-cart mr-1"></i><a href="/app/purchase-order/${op.purchase_order}" class="small">${op.purchase_order}</a></div>` : ''}
             `;
 
+            const meta_parts = [];
+            if (op.workstation) meta_parts.push(`<span class="text-muted small"><i class="fa fa-cog mr-1"></i>${op.workstation}</span>`);
+            if (op.finished_good) meta_parts.push(`<span class="text-muted small"><i class="fa fa-arrow-right mr-1"></i>${__('Produces')}: <a href="/app/item/${encodeURIComponent(op.finished_good)}" target="_blank">${op.finished_good_name || op.finished_good}</a></span>`);
+            const meta_html = meta_parts.length ? `<div class="d-flex flex-wrap gap-2 mt-1">${meta_parts.join('')}</div>` : '';
+
             html += `
 				<div class="operation-card ${status_class}">
 					<div class="op-header">
@@ -1077,6 +1097,7 @@ class ProductionWizard {
                                 <span class="op-name">${op.operation}</span>
                                 ${type_badge}
                             </div>
+                            ${meta_html}
                             ${links_html}
 						</div>
 						<span class="op-status">${status_icon} ${op.status}</span>
@@ -2077,7 +2098,7 @@ class ProductionWizard {
             }
 
             if (op.operation.toLowerCase().includes('dyeing')) {
-                wh = 'Job Work Outward - O';
+                wh = frappe.boot.kniterp_settings?.jw_outward_warehouse || wh;
             }
 
             return {
@@ -3563,7 +3584,7 @@ class ProductionWizard {
 
     __show_po_dialog(details, shortage_items, title) {
         const self = this;
-        const default_warehouse = details.work_order?.source_warehouse || 'Stores - O';
+        const default_warehouse = details.work_order?.source_warehouse || frappe.boot.kniterp_settings?.default_rm_warehouse || '';
         const base_parent_qty = details.pending_qty || 1; // Avoid div by zero
 
         // Calculate initial plan quantity based on min producible from shortages

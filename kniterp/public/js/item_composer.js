@@ -538,14 +538,16 @@ const _update_preview = frappe.utils.debounce(function (dialog) {
     if (cls === "Other") {
         const name = dialog.get_value("other_item_name") || "";
         const code = dialog.get_value("other_item_code") || "";
-        _render_preview(dialog, name, code, []);
+        dialog._missing_tokens = [];
+        _render_preview(dialog, name, code, [], []);
         return;
     }
 
     const selections = _get_selections(dialog);
 
     if (!selections.count && !selections.fiber) {
-        _render_preview(dialog, "", "", []);
+        dialog._missing_tokens = [];
+        _render_preview(dialog, "", "", [], []);
         return;
     }
 
@@ -557,7 +559,8 @@ const _update_preview = frappe.utils.debounce(function (dialog) {
         },
         callback(r) {
             if (r.message) {
-                _render_preview(dialog, r.message.item_name, r.message.item_code, r.message.duplicates);
+                dialog._missing_tokens = r.message.missing_tokens || [];
+                _render_preview(dialog, r.message.item_name, r.message.item_code, r.message.duplicates, r.message.missing_tokens);
             }
         }
     });
@@ -583,12 +586,31 @@ function _get_selections(dialog) {
 }
 
 
-function _render_preview(dialog, name, code, duplicates) {
+function _render_preview(dialog, name, code, duplicates, missing_tokens) {
     const wrapper = dialog.get_field("preview_area").$wrapper;
 
     if (!name && !code) {
         wrapper.html(`<div class="text-muted text-small">${__("Select attributes to see preview")}</div>`);
         return;
+    }
+
+    let missing_html = "";
+    if (missing_tokens && missing_tokens.length) {
+        const fix_buttons = missing_tokens.map(t =>
+            `<button class="btn btn-xs btn-warning ml-1 kniterp-fix-missing-token"
+                     data-canonical="${frappe.utils.escape_html(t.canonical)}"
+                     data-dimension="${frappe.utils.escape_html(t.dimension)}"
+                     style="margin: 2px;">
+                <i class="fa fa-plus"></i> Fix: ${frappe.utils.escape_html(t.canonical)}
+            </button>`
+        ).join("");
+
+        missing_html = `<div class="mt-3 p-2 bg-warning text-dark rounded">
+            <i class="fa fa-exclamation-triangle"></i>
+            <strong>${__("Item code is incomplete")}:</strong>
+            ${__("Some attributes have no short code. Click below to add them (fixes all future items):")}
+            <div class="mt-2">${fix_buttons}</div>
+        </div>`;
     }
 
     let dup_html = "";
@@ -617,6 +639,7 @@ function _render_preview(dialog, name, code, duplicates) {
         <div class="border rounded p-3 bg-light">
             <div><strong>${__("Name")}:</strong> ${name}</div>
             <div><strong>${__("Code")}:</strong> <code>${code}</code></div>
+            ${missing_html}
             ${dup_html}
         </div>
     `);
@@ -637,6 +660,71 @@ function _render_preview(dialog, name, code, duplicates) {
             });
         }, 200);
     });
+
+    // Bind click on "Fix" buttons for missing tokens
+    wrapper.find(".kniterp-fix-missing-token").on("click", function () {
+        const canonical = $(this).attr("data-canonical");
+        const dimension = $(this).attr("data-dimension");
+        _open_fix_token_dialog(canonical, dimension, dialog);
+    });
+}
+
+
+function _open_fix_token_dialog(canonical, dimension, parent_dialog) {
+    const fix_dialog = new frappe.ui.Dialog({
+        title: __("Add short code for: {0}", [canonical]),
+        size: "small",
+        fields: [
+            {
+                fieldtype: "Data",
+                fieldname: "canonical",
+                label: __("Canonical"),
+                read_only: 1,
+                default: canonical,
+            },
+            {
+                fieldtype: "Data",
+                fieldname: "dimension",
+                label: __("Dimension"),
+                read_only: 1,
+                default: dimension,
+            },
+            {
+                fieldtype: "Data",
+                fieldname: "short_code",
+                label: __("Short Code"),
+                reqd: 1,
+                placeholder: __("e.g. CTN, SJ, ILCK"),
+                description: __("2-4 character code for the item code. E.g., 'CTN' for Cotton, 'SJ' for S/Jersey"),
+            }
+        ],
+        primary_action_label: __("Add & Refresh"),
+        primary_action(values) {
+            frappe.call({
+                method: "kniterp.api.item_composer.create_item_token",
+                args: {
+                    canonical: canonical,
+                    short_code: values.short_code,
+                },
+                freeze: true,
+                callback(r) {
+                    if (r.message) {
+                        frappe.show_alert({
+                            message: __("Added: {0} ({1})", [canonical, values.short_code]),
+                            indicator: "green"
+                        });
+                        fix_dialog.hide();
+                        // Refresh the parent dialog's preview
+                        _update_preview(parent_dialog);
+                    }
+                },
+                error(r) {
+                    frappe.msgprint(__("Error adding short code: {0}", [r.responseText]));
+                }
+            });
+        },
+    });
+    fix_dialog.show();
 }
 
 
@@ -654,6 +742,14 @@ function _create_item(dialog, on_select) {
     }
     if (!hsn_code) {
         frappe.msgprint(__("Please select an HSN Code"));
+        return;
+    }
+
+    // Check for missing tokens — block creation if any are present
+    if (dialog._missing_tokens && dialog._missing_tokens.length > 0) {
+        frappe.msgprint(
+            __("Item code is incomplete. Please use the 'Fix' buttons in the preview to add short codes for all attributes before creating.")
+        );
         return;
     }
 

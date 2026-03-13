@@ -3,7 +3,11 @@ from frappe.utils import getdate, add_days
 
 my_logger = frappe.logger("payroll_custom_logs")
 
-MACHINE_EXTRA_RATE = 150
+
+def _get_machine_settings():
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+    settings = KnitERPSettings.get_settings()
+    return settings.machine_extra_rate or 150, settings.machine_min_production_kg or 30
 
 
 def calculate_variable_pay(slip, method):
@@ -11,23 +15,19 @@ def calculate_variable_pay(slip, method):
     start = slip.start_date
     end = slip.end_date
 
+    machine_extra_rate, machine_min_kg = _get_machine_settings()
+
     tea = get_variable_pay(employee, start)
     per_day_salary = get_per_day_salary(slip)
     slip.custom_per_day_salary = per_day_salary
 
-    # reset components
-    # set_component(slip, "Dual Shift Pay", 0)
-    # set_component(slip, "Machine Extra Pay", 0)
-    # set_component(slip, "Conveyance Allowance", 0)
-    # set_component(slip, "Absent / Rejected Day Deduction", 0)
-
     sunday_pays = get_sunday_pay(employee, start, end)
     dual_shift_days = get_dual_shift_days(employee, start, end)
-    machine_extra_pay = get_machine_extra_pay(employee, start, end)
+    machine_extra_pay = get_machine_extra_pay(employee, start, end, machine_extra_rate, machine_min_kg)
     conveyance, conveyance_km = get_conveyance(employee, start, end)
     rejected_days = get_rejected_holiday_days(employee, start, end)
     tea_pay = min((slip.payment_days - rejected_days) * (tea / slip.total_working_days), tea)
-    extra_machine_count = machine_extra_pay // MACHINE_EXTRA_RATE
+    extra_machine_count = machine_extra_pay // machine_extra_rate
     set_component(slip, "Sunday Pay", sunday_pays * per_day_salary,
         f"{sunday_pays} Sunday{'s' if sunday_pays != 1 else ''}")
     set_component(slip, "Dual Shift Pay", dual_shift_days * per_day_salary,
@@ -124,21 +124,26 @@ def get_dual_shift_days(employee, start, end):
     return len(rows)
 
 
-def get_machine_extra_pay(employee, start, end):
+def get_machine_extra_pay(employee, start, end, rate=None, min_kg=None):
+    if rate is None or min_kg is None:
+        _rate, _min_kg = _get_machine_settings()
+        rate = rate or _rate
+        min_kg = min_kg or _min_kg
+
     rows = frappe.db.sql("""
         SELECT date, COUNT(*) cnt
         FROM `tabMachine Attendance`
         WHERE employee=%s
         AND date BETWEEN %s AND %s
-        AND production_qty_kg > 30
+        AND production_qty_kg > %s
         GROUP BY date
         HAVING cnt > 1
-    """, (employee, start, end), as_dict=True)
+    """, (employee, start, end, min_kg), as_dict=True)
 
     total_extra = 0
     for r in rows:
         extra_machines = r.cnt - 1
-        total_extra += extra_machines * 150
+        total_extra += extra_machines * rate
 
     return total_extra
 

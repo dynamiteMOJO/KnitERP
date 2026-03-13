@@ -1,9 +1,11 @@
 import frappe
 from kniterp.api.access_control import require_production_write_access
+from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
 
 @frappe.whitelist()
 def get_subcontract_po_items(sales_order):
     so = frappe.get_doc("Sales Order", sales_order)
+    settings = KnitERPSettings.get_settings()
 
     rows = []
 
@@ -21,7 +23,7 @@ def get_subcontract_po_items(sales_order):
             "fg_item": row.fg_item,
             "fg_qty": row.fg_item_qty,
             "delivery_date": row.delivery_date,
-            "supplier_warehouse": "Job Work Outward - O"
+            "supplier_warehouse": settings.jw_outward_warehouse
         })
 
     return rows
@@ -32,13 +34,14 @@ def get_subcontract_po_items(sales_order):
 def make_subcontract_purchase_order(sales_order, supplier, items):
     require_production_write_access("create subcontract purchase orders")
     items = frappe.parse_json(items)
+    settings = KnitERPSettings.get_settings()
 
     po = frappe.new_doc("Purchase Order")
     po.supplier = supplier
     po.is_subcontracted = 1
     po.company = frappe.get_doc("Sales Order", sales_order).company
     po.schedule_date = max(i["delivery_date"] for i in items)
-    po.supplier_warehouse = "Job Work Outward - O"
+    po.supplier_warehouse = settings.jw_outward_warehouse
 
     po.set_missing_values()
 

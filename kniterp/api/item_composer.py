@@ -175,10 +175,14 @@ def preview_item(selections, classification):
             "match": "same_name"
         })
 
+    # Check for missing tokens (canonicals with no short_code in Item Token table)
+    missing_tokens = _get_missing_tokens(selections, classification)
+
     return {
         "item_name": item_name,
         "item_code": item_code,
         "duplicates": duplicates,
+        "missing_tokens": missing_tokens,
     }
 
 
@@ -277,6 +281,41 @@ def _get_short_code(canonical):
     """Look up the short code for a canonical name from Item Token."""
     code = frappe.db.get_value("Item Token", canonical, "short_code")
     return code or ""
+
+
+def _get_missing_tokens(selections, classification):
+    """
+    Check which selected canonicals have no Item Token record with a short_code.
+
+    Returns:
+        List of dicts: [{"canonical": "Cotton", "dimension": "fiber"}, ...]
+    """
+    missing = []
+
+    # Map each dimension to its selected canonicals
+    dims_to_check = [
+        ("count", [selections.get("count")] if selections.get("count") else []),
+        ("fiber", [selections.get("fiber")] if selections.get("fiber") else []),
+        ("modifier", selections.get("modifier") or []),
+        ("state", [selections.get("state")] if selections.get("state") else []),
+    ]
+
+    if classification == "Fabric":
+        dims_to_check.append(("structure", [selections.get("structure")] if selections.get("structure") else []))
+        dims_to_check.append(("lycra", [selections.get("lycra")] if selections.get("lycra") else []))
+
+    # Check each canonical — if no short_code found, it's missing
+    for dimension, canonicals in dims_to_check:
+        for canonical in canonicals:
+            if canonical:
+                code = frappe.db.get_value("Item Token", canonical, "short_code")
+                if not code:
+                    missing.append({
+                        "canonical": canonical,
+                        "dimension": dimension
+                    })
+
+    return missing
 
 
 # ──────────────────────────────────────────────
@@ -436,4 +475,72 @@ def add_new_token(canonical, dimension, short_code, aliases=""):
         "dimension": dimension,
         "short_code": short_code,
         "aliases": alias_list,
+    }
+
+
+# ──────────────────────────────────────────────
+# 5. CREATE ITEM TOKEN (from degraded state)
+# ──────────────────────────────────────────────
+@frappe.whitelist()
+def create_item_token(canonical, short_code):
+    """
+    Create an Item Token master record for an existing canonical.
+
+    Used when a canonical name is known (exists in Item Token Alias from fixture)
+    but has no short_code in the Item Token table (missing from production).
+    Does NOT create aliases — they already exist from the fixture.
+
+    Args:
+        canonical: Display name (e.g., "Cotton", "S/Jersey")
+        short_code: For item code (e.g., "CTN", "SJ")
+
+    Returns:
+        dict with the new token info
+    """
+    canonical = canonical.strip()
+    short_code = short_code.strip().upper()
+
+    # Get dimension from existing alias (must already exist in production)
+    dimension = frappe.db.get_value("Item Token Alias", {"canonical": canonical}, "dimension")
+    if not dimension:
+        frappe.throw(
+            f"No alias found for '{canonical}' — cannot determine dimension. "
+            "Please ensure the attribute exists in Item Token Alias."
+        )
+
+    # Check if Item Token already exists
+    if frappe.db.exists("Item Token", canonical):
+        frappe.throw(
+            f"Token '{canonical}' already exists in Item Token",
+            frappe.DuplicateEntryError
+        )
+
+    # Check if short code is already used in this dimension
+    existing_code = frappe.db.get_value(
+        "Item Token",
+        {"short_code": short_code, "dimension": dimension},
+        "canonical"
+    )
+    if existing_code:
+        frappe.throw(
+            f"Short code '{short_code}' already used for '{existing_code}' in dimension '{dimension}'",
+            frappe.DuplicateEntryError
+        )
+
+    # Create the Item Token master record
+    token_doc = frappe.get_doc({
+        "doctype": "Item Token",
+        "canonical": canonical,
+        "dimension": dimension,
+        "short_code": short_code,
+        "sort_order": 10,
+        "is_active": 1,
+    })
+    token_doc.insert(ignore_permissions=True)
+    frappe.db.commit()
+
+    return {
+        "canonical": canonical,
+        "dimension": dimension,
+        "short_code": short_code,
     }

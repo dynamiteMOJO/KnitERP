@@ -3,6 +3,8 @@ import frappe
 def after_migrate():
     setup_custom_fields()
     setup_property_setters()
+    setup_service_items()
+    setup_salary_components()
     hide_unwanted_workspaces()
 
 
@@ -59,6 +61,42 @@ def setup_property_setters():
             doc.insert(ignore_permissions=True)
 
     frappe.db.commit()
+
+def setup_service_items():
+    service_items = [
+        {"item_code": "Knitting Jobwork", "item_name": "Knitting Jobwork", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
+        {"item_code": "Dyeing Jobwork", "item_name": "Dyeing Jobwork", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
+        {"item_code": "Yarn Processing", "item_name": "Yarn Processing", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
+    ]
+
+    for item_data in service_items:
+        if not frappe.db.exists("Item", item_data["item_code"]):
+            item = frappe.new_doc("Item")
+            item.update(item_data)
+            item.is_stock_item = 0
+            item.insert(ignore_permissions=True)
+
+    frappe.db.commit()
+
+
+def setup_salary_components():
+    components = [
+        {"salary_component": "Sunday Pay", "type": "Earning"},
+        {"salary_component": "Dual Shift Pay", "type": "Earning"},
+        {"salary_component": "Machine Extra Pay", "type": "Earning"},
+        {"salary_component": "Conveyance Allowance", "type": "Earning"},
+        {"salary_component": "Tea Allowance", "type": "Earning"},
+        {"salary_component": "Rejected Holiday Deduction", "type": "Deduction"},
+    ]
+
+    for comp_data in components:
+        if not frappe.db.exists("Salary Component", comp_data["salary_component"]):
+            comp = frappe.new_doc("Salary Component")
+            comp.update(comp_data)
+            comp.insert(ignore_permissions=True)
+
+    frappe.db.commit()
+
 
 def hide_unwanted_workspaces():
     modules_to_hide = [

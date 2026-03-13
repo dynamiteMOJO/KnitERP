@@ -41,3 +41,9 @@
 .kniterp-attr-pill:hover {
     background: var(--subtle-fg);
 }
+
+/* ===== Login page logo ===== */
+.page-card-head .app-logo {
+    width: 180px;
+    height: auto;
+}

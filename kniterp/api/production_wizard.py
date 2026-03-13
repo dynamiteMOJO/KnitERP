@@ -430,7 +430,8 @@ def get_production_details(sales_order_item):
     so = frappe.db.get_value("Sales Order", soi.parent, ["is_subcontracted", "company"], as_dict=True)
     is_subcontracted = so.is_subcontracted
     production_item = soi.fg_item if is_subcontracted else soi.item_code
-    
+    production_item_name = frappe.db.get_value("Item", production_item, "item_name") or soi.item_name
+
     # Get BOM
     bom_no = soi.bom_no
     if not bom_no:
@@ -793,7 +794,9 @@ def get_production_details(sales_order_item):
                 "job_card": None,
                 "purchase_order": None,
                 "subcontracting_receipt": None,
-                "previous_complete": idx == 0  # First operation can always start
+                "previous_complete": idx == 0,  # First operation can always start
+                "finished_good": op.finished_good or "",
+                "finished_good_name": "",
             }
             
             # Find corresponding job card
@@ -1006,8 +1009,17 @@ def get_production_details(sales_order_item):
         # Store the raw "waiting" qty specifically from flow context (in Op terms for consistency in UI)
         op["qty_ready_from_prev"] = available_op_qty
         op["conversion_factor"] = conversion_factor # Useful for UI debugging if propertie needed
-    
- 
+
+    # Batch-fetch SFG item names (single query, avoids N+1)
+    sfg_codes = [o["finished_good"] for o in operations if o.get("finished_good")]
+    if sfg_codes:
+        sfg_name_map = {r.name: r.item_name for r in frappe.get_all(
+            "Item", filters={"name": ["in", sfg_codes]}, fields=["name", "item_name"]
+        )}
+        for o in operations:
+            if o.get("finished_good"):
+                o["finished_good_name"] = sfg_name_map.get(o["finished_good"], o["finished_good"])
+
     fg_projected_qty = pending_qty
     
 
@@ -1036,6 +1048,7 @@ def get_production_details(sales_order_item):
         "fg_item_qty": soi.fg_item_qty,
         "is_subcontracted": is_subcontracted,
         "production_item": production_item,
+        "production_item_name": production_item_name,
         "item_name": soi.item_name,
         "qty": soi.qty,
         "delivered_qty": soi.delivered_qty,
@@ -1490,18 +1503,10 @@ def create_subcontracting_order(work_order, operation, supplier, qty=None, rate=
     
     order_qty = flt(order_qty, 3)
     
-    # Get company abbreviation for supplier warehouse
-    company_abbr = frappe.get_cached_value("Company", wo.company, "abbr")
-    supplier_warehouse = f"Job Work Outward - {company_abbr}"
-    
-    # Create supplier warehouse if it doesn't exist (shouldn't happen normally)
-    if not frappe.db.exists("Warehouse", supplier_warehouse):
-        # Try to find any subcontracting warehouse
-        supplier_warehouse = frappe.db.get_value(
-            "Warehouse", 
-            {"company": wo.company, "warehouse_name": ("like", "%Job Work%")},
-        "name"
-    ) or wo.wip_warehouse
+    # Get supplier warehouse from KnitERP Settings
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+    settings = KnitERPSettings.get_settings()
+    supplier_warehouse = settings.jw_outward_warehouse or wo.wip_warehouse
     
     # Create Purchase Order
     po = frappe.new_doc("Purchase Order")
@@ -3666,31 +3671,20 @@ def create_subcontracting_inward_order(sales_order, sales_order_item):
         "name"
     )
     
-    # Strategy 2: Create new warehouse following standard: JW-IN - {Customer} - {Abbr}
+    # Strategy 2: Create new warehouse under parent from KnitERP Settings
     if not customer_warehouse:
-        # Standard Parent: Customer Owned - Job Work - {Abbr}
-        parent_wh_name = f"Customer Owned - Job Work - {company_abbr}"
-        parent_wh = frappe.db.exists("Warehouse", parent_wh_name)
-        
+        from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+        scio_settings = KnitERPSettings.get_settings()
+        parent_wh = scio_settings.jw_inward_parent_warehouse
+
         if not parent_wh:
-             # Fallback: Try fuzzy search for parent
-             parent_wh = frappe.db.get_value(
-                "Warehouse",
-                {"name": ["like", "%Customer%Job%Work%"], "is_group": 1, "company": so.company},
-                "name"
-            )
-             
-        if not parent_wh:
-             frappe.throw(_("Could not find parent warehouse 'Customer Owned - Job Work - {0}'. Please create it first.").format(company_abbr))
-        
-        # Create standard warehouse
+             frappe.throw(_("Please set 'Customer JW Parent Warehouse' in KnitERP Settings."))
+
+        # Create standard warehouse: JW-IN - {Customer} - {Abbr}
         new_wh_name = f"JW-IN - {so.customer_name} - {company_abbr}"
-        
-        # Check if warehouse with this name exists but without customer link (edge case)
+
         existing_wh_doc = frappe.db.exists("Warehouse", new_wh_name)
         if existing_wh_doc:
-             # Update it? Or use it?
-             # If it exists, let's update the customer link if missing
              wh_doc = frappe.get_doc("Warehouse", new_wh_name)
              if not wh_doc.customer:
                  wh_doc.customer = so.customer
@@ -3702,26 +3696,21 @@ def create_subcontracting_inward_order(sales_order, sales_order_item):
              new_wh.parent_warehouse = parent_wh
              new_wh.is_group = 0
              new_wh.company = so.company
-             new_wh.customer = so.customer # CRITICAL: Set the customer field
+             new_wh.customer = so.customer
              new_wh.insert(ignore_permissions=True)
              customer_warehouse = new_wh.name
              frappe.msgprint(_("Created new warehouse {0} for customer raw materials").format(customer_warehouse))
 
     if not customer_warehouse:
         frappe.throw(_("No Customer Warehouse found and could not auto-create one. Please create a warehouse for Customer {0} manually.").format(so.customer_name))
-        
-    # Determine Delivery Warehouse: Customer Job Work Completed - {Abbr}
-    delivery_wh_name = f"Customer Job Work Completed - {company_abbr}"
-    if not frappe.db.exists("Warehouse", delivery_wh_name):
-         # Try finding it broadly
-         delivery_wh_name = frappe.db.get_value(
-            "Warehouse",
-            {"name": ["like", "%Customer%Job%Work%Completed%"], "company": so.company},
-            "name"
-        )
-    
+
+    # Determine Delivery Warehouse from KnitERP Settings
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+    delivery_settings = KnitERPSettings.get_settings()
+    delivery_wh_name = delivery_settings.jw_completed_warehouse
+
     if not delivery_wh_name:
-         frappe.throw(_("Could not find Delivery Warehouse 'Customer Job Work Completed - {0}'.").format(company_abbr))
+         frappe.throw(_("Please set 'Customer JW Completed Warehouse' in KnitERP Settings."))
 
     sio = frappe.new_doc("Subcontracting Inward Order")
     sio.sales_order = sales_order
