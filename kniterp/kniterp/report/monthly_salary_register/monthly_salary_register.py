@@ -17,7 +17,9 @@ MONTH_MAP = {
     "September": 9, "October": 10, "November": 11, "December": 12,
 }
 
-MACHINE_EXTRA_RATE = 150
+def _get_machine_extra_rate():
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+    return KnitERPSettings.get_settings().machine_extra_rate or 150
 
 
 def execute(filters=None):
@@ -61,7 +63,7 @@ def execute(filters=None):
         rejected = get_rejected_holiday_days(eid, start_date, end_date)
         festivals = get_festival_count(eid, start_date, end_date)
 
-        extra_machines = machine_pay // MACHINE_EXTRA_RATE if machine_pay else 0
+        extra_machines = machine_pay // _get_machine_extra_rate() if machine_pay else 0
 
         per_day_salary = int(base / days_in_month) if days_in_month else 0
 

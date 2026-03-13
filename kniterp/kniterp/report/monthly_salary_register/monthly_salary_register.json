@@ -19,6 +19,16 @@
     "ref_doctype": "Salary Slip",
     "report_name": "Monthly Salary Register",
     "report_type": "Script Report",
-    "roles": [],
+    "roles": [
+  {
+   "role": "System Manager"
+  },
+  {
+   "role": "HR Manager"
+  },
+  {
+   "role": "HR User"
+  }
+ ],
     "timeout": 0
 }
