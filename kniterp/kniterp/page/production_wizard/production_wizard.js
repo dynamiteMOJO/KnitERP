@@ -2098,7 +2098,7 @@ class ProductionWizard {
             }
 
             if (op.operation.toLowerCase().includes('dyeing')) {
-                wh = 'Job Work Outward - O';
+                wh = frappe.boot.kniterp_settings?.jw_outward_warehouse || wh;
             }
 
             return {
@@ -3584,7 +3584,7 @@ class ProductionWizard {
 
     __show_po_dialog(details, shortage_items, title) {
         const self = this;
-        const default_warehouse = details.work_order?.source_warehouse || 'Stores - O';
+        const default_warehouse = details.work_order?.source_warehouse || frappe.boot.kniterp_settings?.default_rm_warehouse || '';
         const base_parent_qty = details.pending_qty || 1; // Avoid div by zero
 
         // Calculate initial plan quantity based on min producible from shortages

@@ -2,17 +2,24 @@ import frappe
 from erpnext.stock.doctype.item.item import Item
 from frappe.utils import strip
 
+
+def _get_cp_suffix():
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+    return KnitERPSettings.get_settings().cp_item_suffix or " - CP"
+
+
 class CustomItem(Item):
 
-    def autoname(self):        
+    def autoname(self):
         if self.custom_item_classification in ("Fabric", "Yarn"):
             # item_code IS the name (set by Composer)
             self.item_code = strip(self.item_code)
             self.name = self.item_code
-            
+
+            cp_suffix = _get_cp_suffix()
             if self.is_customer_provided_item:
-                if not self.item_code.endswith(" - CP"):
-                    self.item_code = strip(f"{self.item_code} - CP")
+                if not self.item_code.endswith(cp_suffix):
+                    self.item_code = strip(f"{self.item_code}{cp_suffix}")
                     self.name = self.item_code
         else:
             super().autoname()
@@ -42,8 +49,9 @@ class CustomItem(Item):
         Ensures both Base and CP versions exist for Yarn items.
         Links them as Item Alternatives.
         """
-        base_code = self.item_code.replace(" - CP", "").strip()
-        cp_code = f"{base_code} - CP"
+        cp_suffix = _get_cp_suffix()
+        base_code = self.item_code.replace(cp_suffix, "").strip()
+        cp_code = f"{base_code}{cp_suffix}"
 
         # Fix ValidationError: Enable substitution on the current item
         if not self.allow_alternative_item:
@@ -72,7 +80,8 @@ class CustomItem(Item):
 
     def create_purchase_item(self):
         # Legacy method kept for non-Yarn items if they use this flow
-        base_code = self.item_code.replace(" - CP", "").strip()
+        cp_suffix = _get_cp_suffix()
+        base_code = self.item_code.replace(cp_suffix, "").strip()
         if frappe.db.exists("Item", base_code):
             return
         
