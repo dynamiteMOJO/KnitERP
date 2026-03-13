@@ -1,0 +1,130 @@
+{
+ "actions": [],
+ "creation": "2026-03-13 00:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "warehouse_settings_section",
+  "default_rm_warehouse",
+  "default_fg_warehouse",
+  "column_break_wh1",
+  "jw_outward_warehouse",
+  "jw_inward_parent_warehouse",
+  "jw_completed_warehouse",
+  "manufacturing_settings_section",
+  "machine_extra_rate",
+  "column_break_mfg1",
+  "machine_min_production_kg",
+  "item_settings_section",
+  "cp_item_suffix"
+ ],
+ "fields": [
+  {
+   "fieldname": "warehouse_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Warehouse Settings"
+  },
+  {
+   "fieldname": "default_rm_warehouse",
+   "fieldtype": "Link",
+   "label": "Default Raw Material Warehouse",
+   "options": "Warehouse",
+   "description": "Default warehouse for storing raw materials (e.g. Stores)"
+  },
+  {
+   "fieldname": "default_fg_warehouse",
+   "fieldtype": "Link",
+   "label": "Default Finished Goods Warehouse",
+   "options": "Warehouse",
+   "description": "Default warehouse for storing finished goods"
+  },
+  {
+   "fieldname": "column_break_wh1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "jw_outward_warehouse",
+   "fieldtype": "Link",
+   "label": "Job Work Outward Warehouse",
+   "options": "Warehouse",
+   "description": "Warehouse for materials sent to suppliers for job work"
+  },
+  {
+   "fieldname": "jw_inward_parent_warehouse",
+   "fieldtype": "Link",
+   "label": "Customer JW Parent Warehouse",
+   "options": "Warehouse",
+   "description": "Parent group warehouse for customer job work inward materials"
+  },
+  {
+   "fieldname": "jw_completed_warehouse",
+   "fieldtype": "Link",
+   "label": "Customer JW Completed Warehouse",
+   "options": "Warehouse",
+   "description": "Warehouse for completed customer job work goods awaiting delivery"
+  },
+  {
+   "fieldname": "manufacturing_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Manufacturing Settings"
+  },
+  {
+   "fieldname": "machine_extra_rate",
+   "fieldtype": "Currency",
+   "label": "Machine Extra Pay Rate",
+   "default": "150",
+   "description": "Amount paid per extra machine operated (used in payroll)"
+  },
+  {
+   "fieldname": "column_break_mfg1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "machine_min_production_kg",
+   "fieldtype": "Float",
+   "label": "Min Production for Extra Machine (Kg)",
+   "default": "30",
+   "description": "Minimum production in Kg to count a machine as active for extra pay"
+  },
+  {
+   "fieldname": "item_settings_section",
+   "fieldtype": "Section Break",
+   "label": "Item Settings"
+  },
+  {
+   "fieldname": "cp_item_suffix",
+   "fieldtype": "Data",
+   "label": "Customer Provided Item Suffix",
+   "default": " - CP",
+   "description": "Suffix appended to yarn item codes for customer-provided variants"
+  }
+ ],
+ "index_web_pages_for_search": 0,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-03-13 00:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Kniterp",
+ "name": "KnitERP Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "role": "All"
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "track_changes": 1
+}
