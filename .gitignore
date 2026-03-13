@@ -10,4 +10,6 @@ __pycache__
 .claude/
 CLAUDE.md
 GEMINI.md
-docs/
+.superpowers/
+docs/.superpowers/
+docs/superpowers/

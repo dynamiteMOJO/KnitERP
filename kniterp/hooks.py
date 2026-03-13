@@ -8,6 +8,7 @@ app_publisher = "Kartik"
 app_description = "customization related to Knitting manufacturing unit."
 app_email = "krtksng@gmail.com"
 app_license = "mit"
+app_logo_url = "/assets/kniterp/images/kniterp-icon.png"
 
 # Apps
 # ------------------
@@ -38,6 +39,8 @@ app_include_js = [
     "/assets/kniterp/js/sales_order.js",
     "/assets/kniterp/js/purchase_order.js",
 ]
+
+extend_bootinfo = "kniterp.boot.get_bootinfo"
 
 app_include_css = [
     "/assets/kniterp/css/kniterp.css"
@@ -98,6 +101,7 @@ doc_events = {
 
 fixtures = [
     "Transaction Parameter",
+    "Item Token",
     "Item Token Alias",
     {
         "doctype": "Designation",
@@ -118,11 +122,15 @@ fixtures = [
     {
         "doctype": "Print Format",
         "filters": [["module", "=", "Kniterp"]]
+    },
+    {
+        "doctype": "Workstation Type",
+        "filters": [["name", "in", ["Knitting Job Work", "Knitting in-house", "Dyeing Job Work", "Yarn Processing"]]]
     }
 ]
 
 # include js, css files in header of web template
-# web_include_css = "/assets/kniterp/css/kniterp.css"
+web_include_css = "/assets/kniterp/css/kniterp.css"
 # web_include_js = "/assets/kniterp/js/kniterp.js"
 
 # include custom scss in every website theme (without file extension ".scss")
