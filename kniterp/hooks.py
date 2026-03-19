@@ -38,6 +38,7 @@ app_include_js = [
     "/assets/kniterp/js/sales_order_subcontracting_fix.js",
     "/assets/kniterp/js/sales_order.js",
     "/assets/kniterp/js/purchase_order.js",
+    "/assets/kniterp/js/esc_back.js",
 ]
 
 extend_bootinfo = "kniterp.boot.get_bootinfo"

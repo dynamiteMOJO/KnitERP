@@ -3,36 +3,40 @@
   "description": "In-house knitting operations",
   "docstatus": 0,
   "doctype": "Workstation Type",
-  "modified": "2026-03-13 00:00:00.000000",
+  "hour_rate": 0.0,
+  "modified": "2026-03-13 00:00:00",
   "name": "Knitting in-house",
-  "workstation_type": "Knitting in-house",
-  "workstation_costs": []
+  "workstation_costs": [],
+  "workstation_type": "Knitting in-house"
  },
  {
   "description": "Outsourced knitting job work",
   "docstatus": 0,
   "doctype": "Workstation Type",
-  "modified": "2026-03-13 00:00:00.000000",
+  "hour_rate": 0.0,
+  "modified": "2026-03-13 00:00:00",
   "name": "Knitting Job Work",
-  "workstation_type": "Knitting Job Work",
-  "workstation_costs": []
+  "workstation_costs": [],
+  "workstation_type": "Knitting Job Work"
  },
  {
   "description": "Outsourced dyeing job work",
   "docstatus": 0,
   "doctype": "Workstation Type",
-  "modified": "2026-03-13 00:00:00.000000",
+  "hour_rate": 0.0,
+  "modified": "2026-03-13 00:00:00",
   "name": "Dyeing Job Work",
-  "workstation_type": "Dyeing Job Work",
-  "workstation_costs": []
+  "workstation_costs": [],
+  "workstation_type": "Dyeing Job Work"
  },
  {
   "description": "Yarn processing operations",
   "docstatus": 0,
   "doctype": "Workstation Type",
-  "modified": "2026-03-13 00:00:00.000000",
+  "hour_rate": 0.0,
+  "modified": "2026-03-13 00:00:00",
   "name": "Yarn Processing",
-  "workstation_type": "Yarn Processing",
-  "workstation_costs": []
+  "workstation_costs": [],
+  "workstation_type": "Yarn Processing"
  }
 ]
