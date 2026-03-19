@@ -193,7 +193,6 @@ class TransactionDesk {
                 has_tax: true,
                 tax_type: 'sales',
                 is_return: true,
-                allow_no_items: true,
             },
             'stock-entry': {
                 label: __('Stock Entry'),
@@ -448,6 +447,22 @@ class TransactionDesk {
         html += `<div class="row"><div class="col-md-9">`;
         html += `<div class="td-form-body frappe-control" id="td-form-fields"></div>`;
 
+        // Return info banner (for Credit/Debit Notes)
+        if (cfg.is_return) {
+            html += `
+                <div class="td-return-info" id="td-return-info"
+                     style="background: #eaf4fe; border: 1px solid #bee3f8; border-radius: 6px;
+                            padding: 8px 14px; margin-bottom: 12px; color: #2c5282; font-size: 13px;">
+                    <i class="fa fa-info-circle mr-1"></i>
+                    ${__('This is a return transaction — quantities will be automatically inverted when created.')}
+                </div>
+                <div class="td-return-against-banner" id="td-return-against-banner"
+                     style="display: none; background: #f0fff4; border: 1px solid #c6f6d5; border-radius: 6px;
+                            padding: 8px 14px; margin-bottom: 12px; color: #276749; font-size: 13px;">
+                </div>
+            `;
+        }
+
         if (cfg.has_items && cfg.is_job_work) {
             html += this.render_job_work_table_html();
         } else if (cfg.has_items) {
@@ -554,6 +569,10 @@ class TransactionDesk {
             }
 
             this.form_controls[f.fieldname] = control;
+
+            if (f.td_initially_hidden) {
+                $wrapper.hide();
+            }
 
             // Live tax update on template change
             if (f.fieldname === 'tax_template') {
@@ -679,7 +698,164 @@ class TransactionDesk {
                     }, 50);
                 });
             }
+
+            // Return Against: auto-populate items from original invoice
+            if (f.fieldname === 'return_against' && cfg.is_return) {
+                control.$input && control.$input.on('awesomplete-selectcomplete', () => {
+                    setTimeout(() => this.on_return_against_change(), 50);
+                });
+                // Also handle clear via blur
+                control.$input && control.$input.on('change', () => {
+                    setTimeout(() => {
+                        const val = control.get_value();
+                        if (!val) this.on_return_against_clear();
+                    }, 100);
+                });
+            }
         });
+    }
+
+    async on_return_against_change() {
+        const cfg = this.current_config;
+        const invoice_name = this.get_field_value('return_against');
+        if (!invoice_name) return;
+
+        const return_doctype = cfg.tax_type === 'sales' ? 'Sales Invoice' : 'Purchase Invoice';
+
+        try {
+            const result = await frappe.xcall(
+                'kniterp.api.transaction_desk.get_invoice_items_for_return',
+                { doctype: return_doctype, invoice_name: invoice_name }
+            );
+
+            if (!result || !result.items || !result.items.length) {
+                frappe.show_alert({ message: __('No items found in the original invoice'), indicator: 'orange' });
+                return;
+            }
+
+            // Auto-set party if empty
+            if (result.party && !this.get_field_value(cfg.party_field)) {
+                const party_ctrl = this.form_controls[cfg.party_field];
+                if (party_ctrl) {
+                    party_ctrl._selected_value = result.party;
+                    party_ctrl.set_value(result.party);
+                }
+            }
+
+            // Auto-fill address fields from original invoice
+            const address_fields = cfg.tax_type === 'sales'
+                ? ['customer_address', 'shipping_address_name']
+                : ['supplier_address', 'shipping_address', 'billing_address'];
+            for (const af of address_fields) {
+                if (result[af] && this.form_controls[af]) {
+                    this.form_controls[af]._selected_value = result[af];
+                    this.form_controls[af].set_value(result[af]);
+                }
+            }
+
+            // Auto-fill other party reference fields
+            const ref_fields = cfg.tax_type === 'sales'
+                ? { po_no: 'po_no', po_date: 'po_date' }
+                : { bill_no: 'bill_no', bill_date: 'bill_date' };
+            for (const [src, dest] of Object.entries(ref_fields)) {
+                if (result[src] && this.form_controls[dest]) {
+                    this.form_controls[dest].set_value(result[src]);
+                    if (this.form_controls[dest]._selected_value !== undefined) {
+                        this.form_controls[dest]._selected_value = result[src];
+                    }
+                }
+            }
+
+            // Auto-fill return option fields from original invoice
+            if (result.is_reverse_charge !== undefined && this.form_controls['is_reverse_charge']) {
+                this.form_controls['is_reverse_charge'].set_value(result.is_reverse_charge ? 1 : 0);
+            }
+            if (result.apply_tds !== undefined && this.form_controls['apply_tds']) {
+                this.form_controls['apply_tds'].set_value(result.apply_tds ? 1 : 0);
+            }
+
+            // Auto-set tax template if empty
+            if (result.tax_template && !this.get_field_value('tax_template')) {
+                const tax_ctrl = this.form_controls['tax_template'];
+                if (tax_ctrl) {
+                    tax_ctrl._selected_value = result.tax_template;
+                    tax_ctrl.set_value(result.tax_template);
+                }
+            }
+            // Always reload tax details after populating items
+            this.load_tax_details();
+
+            // Clear existing item rows
+            this.clear_all_item_rows();
+
+            // Populate items from the original invoice
+            for (let i = 0; i < result.items.length; i++) {
+                const item = result.items[i];
+                this.add_item_row({ qty: item.qty, uom: item.uom, rate: item.rate });
+                const row = this.item_rows[this.item_rows.length - 1];
+                if (row) {
+                    row.item_ctrl._selected_value = item.item_code;
+                    row.item_ctrl.set_value(item.item_code);
+                    row.item_name = item.item_name;
+                    row.description = item.description;
+                    row.reference_row = item.reference_row || '';
+                    row.$row.find('.td-item-name-sub').text(item.item_name || '');
+                    if (row.desc_ctrl) {
+                        row.desc_ctrl.set_value(item.description || '');
+                    }
+                }
+            }
+
+            // Deferred amount update — wait for set_value to finish updating DOM
+            setTimeout(() => {
+                this.item_rows.forEach(row => {
+                    if (row) this.update_row_amount(row);
+                });
+                this.update_totals();
+            }, 200);
+
+            // Show return-against banner
+            const $banner = this.page.main.find('#td-return-against-banner');
+            $banner.html(`<i class="fa fa-check-circle mr-1"></i> ${__('Items loaded from {0} — adjust quantities for partial return', [invoice_name])}`);
+            $banner.show();
+
+            // Show update_outstanding_for_self (only relevant when return_against is set)
+            const $uofs = this.page.main.find('.td-field-wrapper[data-fieldname="update_outstanding_for_self"]');
+            if ($uofs.length) $uofs.show();
+
+        } catch (e) {
+            frappe.msgprint({
+                title: __('Error'),
+                message: e.message || __('Failed to fetch invoice items'),
+                indicator: 'red',
+            });
+        }
+    }
+
+    on_return_against_clear() {
+        // Clear items and hide banner
+        this.clear_all_item_rows();
+        this.add_item_row();
+        this.update_totals();
+        this.page.main.find('#td-return-against-banner').hide();
+
+        // Hide and reset update_outstanding_for_self
+        const $uofs = this.page.main.find('.td-field-wrapper[data-fieldname="update_outstanding_for_self"]');
+        if ($uofs.length) $uofs.hide();
+        if (this.form_controls['update_outstanding_for_self']) {
+            this.form_controls['update_outstanding_for_self'].set_value(1);
+        }
+    }
+
+    clear_all_item_rows() {
+        // Remove all item rows from DOM and reset array
+        this.item_rows.forEach(row => {
+            if (row) {
+                row.$row.remove();
+                if (row.$detail_row) row.$detail_row.remove();
+            }
+        });
+        this.item_rows = [];
     }
 
     get_form_fields() {
@@ -792,6 +968,81 @@ class TransactionDesk {
             }
         }
 
+        // Return Details section for Credit/Debit Notes — placed prominently after party/address
+        if (cfg.is_return) {
+            fields.push({ fieldtype: 'Section Break', label: __('Return Details') });
+            const return_doctype = cfg.tax_type === 'sales' ? 'Sales Invoice' : 'Purchase Invoice';
+            fields.push({
+                fieldname: 'return_against',
+                fieldtype: 'Link',
+                options: return_doctype,
+                label: __('Return Against'),
+                description: __('Select the original invoice to auto-fill items (optional)'),
+                get_query: () => {
+                    const filters = { docstatus: 1, is_return: 0, company: this.get_field_value('company') || d.company };
+                    const party = this.get_field_value(cfg.party_field);
+                    if (party) {
+                        filters[cfg.party_field] = party;
+                    }
+                    return { filters };
+                },
+            });
+
+            // Return Options — controls how the return affects linked documents
+            fields.push({ fieldtype: 'Section Break', label: __('Return Options') });
+
+            if (cfg.tax_type === 'sales') {
+                fields.push({
+                    fieldname: 'update_billed_amount_in_sales_order',
+                    fieldtype: 'Check',
+                    label: __('Update Billed Amount in Sales Order'),
+                    default: 0,
+                });
+                fields.push({
+                    fieldname: 'update_billed_amount_in_delivery_note',
+                    fieldtype: 'Check',
+                    label: __('Update Billed Amount in Delivery Note'),
+                    default: 1,
+                });
+            } else {
+                fields.push({
+                    fieldname: 'update_billed_amount_in_purchase_order',
+                    fieldtype: 'Check',
+                    label: __('Update Billed Amount in Purchase Order'),
+                    default: 0,
+                });
+                fields.push({
+                    fieldname: 'update_billed_amount_in_purchase_receipt',
+                    fieldtype: 'Check',
+                    label: __('Update Billed Amount in Purchase Receipt'),
+                    default: 1,
+                });
+            }
+
+            fields.push({
+                fieldname: 'update_outstanding_for_self',
+                fieldtype: 'Check',
+                label: __('Update Outstanding for Self'),
+                default: 1,
+                description: cfg.tax_type === 'sales'
+                    ? __('Credit Note will update its own outstanding, even if Return Against is specified.')
+                    : __('Debit Note will update its own outstanding, even if Return Against is specified.'),
+                td_initially_hidden: true,
+            });
+            fields.push({
+                fieldname: 'is_reverse_charge',
+                fieldtype: 'Check',
+                label: __('Is Reverse Charge'),
+                default: 0,
+            });
+            fields.push({
+                fieldname: 'apply_tds',
+                fieldtype: 'Check',
+                label: __('Consider for Tax Withholding'),
+                default: 0,
+            });
+        }
+
         if (cfg.date_field) {
             fields.push({
                 fieldname: cfg.date_field,
@@ -849,35 +1100,6 @@ class TransactionDesk {
                 fieldname: 'supplier_delivery_note',
                 fieldtype: 'Data',
                 label: __('Supplier Delivery Note'),
-            });
-        }
-
-        // Return Against for Debit/Credit Notes
-        if (cfg.is_return) {
-            const return_doctype = cfg.tax_type === 'sales' ? 'Sales Invoice' : 'Purchase Invoice';
-            fields.push({
-                fieldname: 'return_against',
-                fieldtype: 'Link',
-                options: return_doctype,
-                label: __('Return Against'),
-                get_query: () => {
-                    const filters = { docstatus: 1, company: this.get_field_value('company') || d.company };
-                    const party = this.get_field_value(cfg.party_field);
-                    if (party) {
-                        filters[cfg.party_field] = party;
-                    }
-                    return { filters };
-                },
-            });
-        }
-
-        // Credit Note without items — amount field
-        if (cfg.allow_no_items) {
-            fields.push({
-                fieldname: 'credit_amount',
-                fieldtype: 'Currency',
-                label: __('Credit Amount (if no items)'),
-                description: __('Leave blank if adding items below'),
             });
         }
 
@@ -2150,7 +2372,7 @@ class TransactionDesk {
                 if (!row) return;
                 const item_code = row.item_ctrl.get_value();
                 if (!item_code) return;
-                data.items.push({
+                const item_data = {
                     item_code: item_code,
                     qty: flt(row.qty_ctrl.get_value()) || 1,
                     rate: flt(row.rate_ctrl.get_value()),
@@ -2158,7 +2380,11 @@ class TransactionDesk {
                     description: row.desc_ctrl ? row.desc_ctrl.get_value() : '',
                     warehouse: data.warehouse || '',
                     transaction_params: row.transaction_params || [],
-                });
+                };
+                if (row.reference_row) {
+                    item_data.reference_row = row.reference_row;
+                }
+                data.items.push(item_data);
             });
         }
 

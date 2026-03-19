@@ -1,5 +1,6 @@
 import frappe
 from frappe import _
+from frappe.utils import cint
 
 
 # ──────────────────────────────────────────────────────────────
@@ -347,6 +348,61 @@ def get_recent_transactions(voucher_type: str = None, limit: int = 10) -> list:
         )
 
     return []
+
+
+@frappe.whitelist()
+def get_invoice_items_for_return(doctype: str, invoice_name: str) -> dict:
+    """Fetch items from an original Sales/Purchase Invoice for return (CN/DN) creation."""
+    if doctype not in ("Sales Invoice", "Purchase Invoice"):
+        frappe.throw(_("Invalid doctype for return"))
+
+    frappe.has_permission(doctype, "read", invoice_name, throw=True)
+
+    doc = frappe.get_doc(doctype, invoice_name)
+    if doc.docstatus != 1:
+        frappe.throw(_("Only submitted invoices can be used for returns"))
+
+    items = []
+    for item in doc.items:
+        items.append({
+            "item_code": item.item_code,
+            "item_name": item.item_name or "",
+            "qty": item.qty,
+            "rate": item.rate,
+            "uom": item.uom or "",
+            "description": (item.description or "").strip(),
+            "warehouse": item.warehouse or "",
+            "reference_row": item.name,
+        })
+
+    result = {
+        "tax_template": doc.taxes_and_charges or "",
+        "items": items,
+    }
+
+    if doctype == "Sales Invoice":
+        result.update({
+            "party": doc.customer or "",
+            "customer_address": doc.customer_address or "",
+            "shipping_address_name": doc.shipping_address_name or "",
+            "po_no": doc.po_no or "",
+            "po_date": str(doc.po_date) if doc.po_date else "",
+        })
+    else:
+        result.update({
+            "party": doc.supplier or "",
+            "supplier_address": doc.supplier_address or "",
+            "shipping_address": doc.shipping_address or "",
+            "billing_address": doc.billing_address or "",
+            "bill_no": doc.bill_no or "",
+            "bill_date": str(doc.bill_date) if doc.bill_date else "",
+        })
+
+    # Return tax-related flags for auto-population
+    result["is_reverse_charge"] = cint(doc.get("is_reverse_charge"))
+    result["apply_tds"] = cint(doc.get("apply_tds"))
+
+    return result
 
 
 # ──────────────────────────────────────────────────────────────
@@ -724,6 +780,8 @@ def _create_debit_note(data: dict):
             item_row["uom"] = row["uom"]
         if row.get("description"):
             item_row["description"] = row["description"]
+        if row.get("reference_row"):
+            item_row["purchase_invoice_item"] = row["reference_row"]
         items.append(item_row)
 
     if not items:
@@ -733,10 +791,17 @@ def _create_debit_note(data: dict):
         "doctype": "Purchase Invoice",
         "supplier": data["supplier"],
         "supplier_address": data.get("supplier_address"),
+        "shipping_address": data.get("shipping_address") or "",
+        "billing_address": data.get("billing_address") or "",
         "posting_date": data.get("posting_date") or frappe.utils.today(),
         "company": data.get("company"),
         "currency": data.get("currency"),
         "is_return": 1,
+        "update_outstanding_for_self": cint(data.get("update_outstanding_for_self", 1)),
+        "update_billed_amount_in_purchase_order": cint(data.get("update_billed_amount_in_purchase_order", 0)),
+        "update_billed_amount_in_purchase_receipt": cint(data.get("update_billed_amount_in_purchase_receipt", 1)),
+        "is_reverse_charge": cint(data.get("is_reverse_charge", 0)),
+        "apply_tds": cint(data.get("apply_tds", 0)),
         "bill_no": data.get("bill_no") or "",
         "bill_date": data.get("bill_date") or "",
         "items": items,
@@ -758,52 +823,41 @@ def _create_debit_note(data: dict):
 
 
 def _create_credit_note(data: dict):
-    """Create a Credit Note (Sales Invoice with is_return=1).
-    Can be with or without items.
-    """
+    """Create a Credit Note (Sales Invoice with is_return=1)."""
     import json as _json
     items = []
+    for row in data.get("items", []):
+        item_row = {
+            "item_code": row["item_code"],
+            "qty": -abs(frappe.utils.flt(row.get("qty", 1))),   # negative
+            "rate": row.get("rate", 0),
+            "warehouse": row.get("warehouse") or data.get("warehouse") or "",
+        }
+        if row.get("uom"):
+            item_row["uom"] = row["uom"]
+        if row.get("description"):
+            item_row["description"] = row["description"]
+        if row.get("reference_row"):
+            item_row["sales_invoice_item"] = row["reference_row"]
+        items.append(item_row)
 
-    if data.get("items"):
-        for row in data["items"]:
-            item_row = {
-                "item_code": row["item_code"],
-                "qty": -abs(frappe.utils.flt(row.get("qty", 1))),   # negative
-                "rate": row.get("rate", 0),
-                "warehouse": row.get("warehouse") or data.get("warehouse") or "",
-            }
-            if row.get("uom"):
-                item_row["uom"] = row["uom"]
-            if row.get("description"):
-                item_row["description"] = row["description"]
-            items.append(item_row)
-
-    # Credit note without items — just an amount
     if not items:
-        # Create a single item row if no items provided but amount is given
-        amount = frappe.utils.flt(data.get("credit_amount", 0))
-        if amount:
-            income_account = frappe.db.get_value(
-                "Company", data.get("company"), "default_income_account"
-            ) or ""
-            items.append({
-                "item_name": "Credit Note",
-                "description": data.get("remarks") or "Credit Note",
-                "qty": -1,
-                "rate": amount,
-                "income_account": income_account,
-            })
-        else:
-            frappe.throw(_("Either items or credit amount is required for a Credit Note."))
+        frappe.throw(_("At least one item is required."))
 
     doc_data = {
         "doctype": "Sales Invoice",
         "customer": data["customer"],
         "customer_address": data.get("customer_address"),
+        "shipping_address_name": data.get("shipping_address_name") or "",
         "posting_date": data.get("posting_date") or frappe.utils.today(),
         "company": data.get("company"),
         "currency": data.get("currency"),
         "is_return": 1,
+        "update_outstanding_for_self": cint(data.get("update_outstanding_for_self", 1)),
+        "update_billed_amount_in_sales_order": cint(data.get("update_billed_amount_in_sales_order", 0)),
+        "update_billed_amount_in_delivery_note": cint(data.get("update_billed_amount_in_delivery_note", 1)),
+        "is_reverse_charge": cint(data.get("is_reverse_charge", 0)),
+        "apply_tds": cint(data.get("apply_tds", 0)),
         "po_no": data.get("po_no") or "",
         "po_date": data.get("po_date") or "",
         "items": items,
