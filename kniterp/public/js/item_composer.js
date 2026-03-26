@@ -896,7 +896,7 @@ function _open_add_token_dialog(dimension, label, parent_dialog, options) {
 }
 
 
-function _refresh_autocomplete(dialog, dimension, new_value) {
+function _refresh_autocomplete(dialog, dimension, new_value, old_value = null) {
     const field_map = {
         count: ["count"],
         fiber: ["fiber"],
@@ -922,7 +922,11 @@ function _refresh_autocomplete(dialog, dimension, new_value) {
                 if (field && field.awesomplete) {
                     const current = dialog.get_value(fname);
                     field.set_data(dim_opts);
-                    if (!current && fname === fields[0]) {
+                    if (old_value && current === old_value) {
+                        // Field held the renamed token — update to new canonical
+                        dialog.set_value(fname, new_value);
+                    } else if (!current && fname === fields[0]) {
+                        // Empty field (add-new flow) — auto-select the new token
                         dialog.set_value(fname, new_value);
                     } else {
                         dialog.set_value(fname, current);
@@ -932,6 +936,8 @@ function _refresh_autocomplete(dialog, dimension, new_value) {
 
             // Re-setup alias matching
             _setup_alias_autocomplete(dialog, new_options);
+            // Update edit button visibility after values may have changed
+            _update_edit_buttons_visibility(dialog);
             _update_preview(dialog);
         }
     });
