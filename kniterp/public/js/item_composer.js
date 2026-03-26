@@ -125,6 +125,7 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
                 options: ac_lists.modifier,
                 onchange() { _update_preview(dialog); }
             },
+            { fieldtype: "HTML", fieldname: "modifier2_edit_btn" },
 
             { fieldtype: "Section Break", fieldname: "structure_section" },
             {
@@ -143,6 +144,7 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
                 options: ac_lists.lycra,
                 onchange() { _update_preview(dialog); }
             },
+            { fieldtype: "HTML", fieldname: "lycra_edit_btn" },
 
             { fieldtype: "Section Break", fieldname: "state_section" },
             {
@@ -152,6 +154,7 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
                 options: ac_lists.state,
                 onchange() { _update_preview(dialog); }
             },
+            { fieldtype: "HTML", fieldname: "state_edit_btn" },
             { fieldtype: "Column Break" },
             // empty col for layout balance
             { fieldtype: "HTML", fieldname: "state_spacer" },
@@ -477,13 +480,13 @@ function _toggle_fields(dialog) {
     const textile_fields = [
         "textile_section", "count", "count_add_btn",
         "fiber", "fiber_add_btn",
-        "modifier1", "modifier_add_btn", "modifier2",
-        "state_section", "state", "state_spacer",
+        "modifier1", "modifier_add_btn", "modifier2", "modifier2_edit_btn",
+        "state_section", "state", "state_edit_btn", "state_spacer",
     ];
 
     // Structure fields (hidden for Yarn)
     const structure_fields = [
-        "structure_section", "structure", "structure_add_btn", "lycra",
+        "structure_section", "structure", "structure_add_btn", "lycra", "lycra_edit_btn",
     ];
 
     // Other fields
