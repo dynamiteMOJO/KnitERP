@@ -1009,6 +1009,121 @@ function _setup_edit_buttons(dialog) {
 }
 
 
+// ──────────────────────────────────────────────
+// EDIT TOKEN DIALOG
+// ──────────────────────────────────────────────
+function _open_edit_token_dialog(canonical, dimension, parent_dialog) {
+    const options = parent_dialog._composer_options || {};
+    const dim_tokens = options[dimension] || [];
+    const token = dim_tokens.find(t => t.canonical === canonical);
+
+    if (!token) {
+        frappe.show_alert({
+            message: __("Token data not found — please reopen the composer"),
+            indicator: "red"
+        });
+        return;
+    }
+
+    const current_aliases = (token.aliases || []).join(", ");
+
+    const edit_dialog = new frappe.ui.Dialog({
+        title: __("Edit Token: {0}", [canonical]),
+        size: "small",
+        fields: [
+            {
+                fieldtype: "Data",
+                fieldname: "dimension",
+                label: __("Dimension"),
+                read_only: 1,
+                default: dimension,
+            },
+            {
+                fieldtype: "Data",
+                fieldname: "canonical",
+                label: __("Display Name"),
+                reqd: 1,
+                default: canonical,
+                description: __("The name shown in dropdowns and used in item names"),
+            },
+            {
+                fieldtype: "Data",
+                fieldname: "short_code",
+                label: __("Short Code"),
+                reqd: 1,
+                default: token.short_code,
+                description: __("Used in item codes (e.g. CTN, SJ). Must be unique within this dimension."),
+            },
+            {
+                fieldtype: "Small Text",
+                fieldname: "aliases",
+                label: __("Aliases"),
+                default: current_aliases,
+                description: __("Comma-separated. Used for quick-fill and search matching."),
+            },
+            {
+                fieldtype: "HTML",
+                fieldname: "rename_warning",
+            },
+        ],
+        primary_action_label: __("Save Changes"),
+        primary_action(values) {
+            frappe.call({
+                method: "kniterp.api.item_composer.update_item_token",
+                args: {
+                    canonical: canonical,
+                    new_canonical: values.canonical,
+                    new_short_code: values.short_code,
+                    new_aliases: values.aliases || "",
+                },
+                freeze: true,
+                freeze_message: __("Saving..."),
+                callback(r) {
+                    if (r.message) {
+                        frappe.show_alert({
+                            message: __("Token updated: {0}", [r.message.canonical]),
+                            indicator: "green"
+                        });
+                        edit_dialog.hide();
+                        _refresh_autocomplete(
+                            parent_dialog,
+                            dimension,
+                            r.message.canonical,
+                            canonical  // old_value: for rename case
+                        );
+                    }
+                }
+            });
+        },
+    });
+
+    edit_dialog.show();
+
+    // Show rename warning when user edits the canonical field
+    const canonical_field = edit_dialog.fields_dict.canonical;
+    if (canonical_field && canonical_field.$input) {
+        canonical_field.$input.on("input", function () {
+            const new_val = $(this).val();
+            const warning_wrapper = edit_dialog.get_field("rename_warning")?.$wrapper;
+            if (!warning_wrapper) return;
+            if (new_val !== canonical) {
+                warning_wrapper.html(`
+                    <div class="alert alert-warning mt-2 p-2 text-small">
+                        <i class="fa fa-exclamation-triangle"></i>
+                        <strong>${__("Renaming display name")}</strong> —
+                        ${__("existing item names will not update. Run")}
+                        <code>bench export-fixtures</code>
+                        ${__("after saving to keep fixtures in sync.")}
+                    </div>
+                `);
+            } else {
+                warning_wrapper.html("");
+            }
+        });
+    }
+}
+
+
 // ======================================================
 // INTERCEPT "Create a new Item" IN LINK FIELDS
 // Monkey-patch ControlLink.new_doc:
