@@ -218,6 +218,9 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
     // Add "+ Add New" buttons
     _setup_add_new_buttons(dialog, options);
 
+    // Add "✏️ Edit" buttons (visible only when a value is selected)
+    _setup_edit_buttons(dialog);
+
     // Set initial field visibility
     _toggle_fields(dialog);
 
@@ -931,6 +934,77 @@ function _refresh_autocomplete(dialog, dimension, new_value) {
             _setup_alias_autocomplete(dialog, new_options);
             _update_preview(dialog);
         }
+    });
+}
+
+
+// ──────────────────────────────────────────────
+// EDIT BUTTONS — show/hide based on field value
+// ──────────────────────────────────────────────
+function _update_edit_buttons_visibility(dialog) {
+    const field_to_slot = {
+        count:     "count_add_btn",
+        fiber:     "fiber_add_btn",
+        modifier1: "modifier_add_btn",
+        structure: "structure_add_btn",
+        modifier2: "modifier2_edit_btn",
+        lycra:     "lycra_edit_btn",
+        state:     "state_edit_btn",
+    };
+
+    for (const [fname, slot_name] of Object.entries(field_to_slot)) {
+        const val = dialog.get_value(fname);
+        const slot_wrapper = dialog.get_field(slot_name)?.$wrapper;
+        if (slot_wrapper) {
+            slot_wrapper.find(".kniterp-edit-token-btn").toggle(!!val);
+        }
+    }
+}
+
+
+function _setup_edit_buttons(dialog) {
+    const all_configs = [
+        // Shared slots: edit button appended alongside existing "Add New"
+        { ac_field: "count",     slot_field: "count_add_btn",     dimension: "count" },
+        { ac_field: "fiber",     slot_field: "fiber_add_btn",     dimension: "fiber" },
+        { ac_field: "modifier1", slot_field: "modifier_add_btn",  dimension: "modifier" },
+        { ac_field: "structure", slot_field: "structure_add_btn", dimension: "structure" },
+        // Dedicated edit-only slots
+        { ac_field: "modifier2", slot_field: "modifier2_edit_btn", dimension: "modifier" },
+        { ac_field: "lycra",     slot_field: "lycra_edit_btn",     dimension: "lycra" },
+        { ac_field: "state",     slot_field: "state_edit_btn",     dimension: "state" },
+    ];
+
+    all_configs.forEach(({ ac_field, slot_field, dimension }) => {
+        const slot_wrapper = dialog.get_field(slot_field)?.$wrapper;
+        if (!slot_wrapper) return;
+
+        const $edit_btn = $(`
+            <button class="btn btn-xs btn-default mt-1 ml-1 kniterp-edit-token-btn"
+                    style="display:none;">
+                <i class="fa fa-pencil"></i> ${__("Edit")}
+            </button>
+        `);
+        slot_wrapper.append($edit_btn);
+
+        const ac_field_obj = dialog.fields_dict[ac_field];
+        if (!ac_field_obj || !ac_field_obj.$input) return;
+
+        // Show/hide after dropdown selection (delay for Frappe to update its value)
+        ac_field_obj.$input.on("awesomplete-selectcomplete", function () {
+            setTimeout(() => _update_edit_buttons_visibility(dialog), 100);
+        });
+
+        // Hide immediately when field is cleared by typing
+        ac_field_obj.$input.on("input", function () {
+            if (!this.value) _update_edit_buttons_visibility(dialog);
+        });
+
+        $edit_btn.on("click", function () {
+            const canonical = dialog.get_value(ac_field);
+            if (!canonical) return;
+            _open_edit_token_dialog(canonical, dimension, dialog);
+        });
     });
 }
 
