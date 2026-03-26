@@ -235,6 +235,9 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
     if (prefill.state) dialog.set_value("state", prefill.state);
     if (prefill.lycra) dialog.set_value("lycra", prefill.lycra);
 
+    // Show edit buttons for any pre-filled slots
+    _update_edit_buttons_visibility(dialog);
+
     // Auto Quick Fill if text was provided (e.g., from Link field)
     if (quick_fill_text) {
         dialog.set_value("quick_fill", quick_fill_text);
@@ -348,6 +351,7 @@ function _do_quick_fill(dialog) {
             }
 
             _update_preview(dialog);
+            _update_edit_buttons_visibility(dialog);
         }
     });
 }
