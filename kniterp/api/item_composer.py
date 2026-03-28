@@ -544,3 +544,134 @@ def create_item_token(canonical, short_code):
         "dimension": dimension,
         "short_code": short_code,
     }
+
+
+# ──────────────────────────────────────────────
+# 6. UPDATE EXISTING TOKEN
+# ──────────────────────────────────────────────
+@frappe.whitelist()
+def update_item_token(canonical, new_canonical, new_short_code, new_aliases=""):
+    """
+    Update an existing Item Token's canonical name, short code, and aliases.
+
+    If canonical changes, renames the Item Token document and updates
+    all Item Token Alias records that reference the old canonical.
+    Aliases are reconciled: removed if not in new list, added if new.
+    Alias conflicts with other tokens are logged and skipped (not thrown).
+
+    Args:
+        canonical:     Current canonical name (existing token to update)
+        new_canonical: Updated display name (may be same as canonical)
+        new_short_code: Updated short code (uppercase, unique per dimension)
+        new_aliases:   Comma-separated alias string
+
+    Returns:
+        dict with canonical, dimension, short_code, aliases
+    """
+    canonical = (canonical or "").strip()
+    new_canonical = (new_canonical or "").strip()
+    new_short_code = (new_short_code or "").strip().upper()
+
+    if not canonical or not new_canonical or not new_short_code:
+        frappe.throw("Canonical, new canonical, and short code are required")
+
+    token = frappe.db.get_value(
+        "Item Token", canonical,
+        ["canonical", "dimension", "short_code"],
+        as_dict=True
+    )
+    if not token:
+        frappe.throw(f"Token '{canonical}' not found")
+
+    dimension = token["dimension"]
+
+    # Check new_canonical doesn't collide with a different existing token
+    if new_canonical != canonical and frappe.db.exists("Item Token", new_canonical):
+        frappe.throw(
+            f"Token '{new_canonical}' already exists",
+            frappe.DuplicateEntryError
+        )
+
+    # Check short code conflict in same dimension
+    if new_short_code != token["short_code"]:
+        existing_sc = frappe.db.get_value(
+            "Item Token",
+            {"short_code": new_short_code, "dimension": dimension},
+            "canonical"
+        )
+        if existing_sc and existing_sc != canonical:
+            frappe.throw(
+                f"Short code '{new_short_code}' already used for '{existing_sc}' "
+                f"in dimension '{dimension}'",
+                frappe.DuplicateEntryError
+            )
+
+    # Rename if canonical changed
+    if new_canonical != canonical:
+        from frappe.model.rename_doc import rename_doc as _rename_doc
+        _rename_doc(
+            "Item Token", canonical, new_canonical,
+            ignore_permissions=True, show_alert=False
+        )
+        # Update Data field in aliases — not auto-updated by rename_doc
+        frappe.db.set_value(
+            "Item Token Alias",
+            {"canonical": canonical},
+            "canonical",
+            new_canonical
+        )
+
+    # Update short code
+    frappe.db.set_value("Item Token", new_canonical, "short_code", new_short_code)
+
+    # Reconcile aliases
+    alias_list = [a.strip().lower() for a in (new_aliases or "").split(",") if a.strip()]
+    canonical_lower = new_canonical.lower()
+    if canonical_lower not in alias_list:
+        alias_list.insert(0, canonical_lower)
+
+    existing_aliases = frappe.db.get_all(
+        "Item Token Alias",
+        filters={"canonical": new_canonical},
+        pluck="alias"
+    )
+
+    # Delete aliases no longer wanted
+    for alias in existing_aliases:
+        if alias not in alias_list:
+            frappe.db.delete("Item Token Alias", {"alias": alias, "canonical": new_canonical})
+
+    # Insert new aliases, skipping conflicts with other tokens
+    for alias in alias_list:
+        if alias in existing_aliases:
+            continue
+        conflict = frappe.db.get_value("Item Token Alias", {"alias": alias}, "canonical")
+        if conflict and conflict != new_canonical:
+            frappe.log_error(
+                f"Alias '{alias}' skipped — already mapped to '{conflict}'",
+                "update_item_token alias conflict"
+            )
+            continue
+        frappe.get_doc({
+            "doctype": "Item Token Alias",
+            "alias": alias,
+            "canonical": new_canonical,
+            "dimension": dimension,
+            "token": new_canonical,
+            "is_auto": 0,
+        }).insert(ignore_permissions=True)
+
+    frappe.db.commit()
+
+    final_aliases = frappe.db.get_all(
+        "Item Token Alias",
+        filters={"canonical": new_canonical},
+        pluck="alias"
+    )
+
+    return {
+        "canonical": new_canonical,
+        "dimension": dimension,
+        "short_code": new_short_code,
+        "aliases": final_aliases,
+    }
