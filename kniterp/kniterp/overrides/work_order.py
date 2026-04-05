@@ -227,9 +227,9 @@ def set_planned_qty_on_work_order(doc, method=None):
 
             
             planned_qty = flt(
-                flt(doc.qty, 3)
-                * flt(bom_op.finished_good_qty, 3)
-                / flt(bom.quantity, 3),
+                flt(doc.qty)
+                * flt(bom_op.finished_good_qty)
+                / flt(bom.quantity),
                 3
             )
 

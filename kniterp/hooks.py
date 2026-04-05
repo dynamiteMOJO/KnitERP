@@ -1,5 +1,6 @@
 import kniterp.kniterp.overrides.job_card
 import kniterp.kniterp.overrides.sre_dashboard_fix  # guarded patch — see module docstring
+import kniterp.kniterp.overrides.shipping_party_fix  # guarded patch — see module docstring
 
 
 app_name = "kniterp"
@@ -73,12 +74,23 @@ doc_events = {
         "before_save": "kniterp.payroll.calculate_variable_pay"
     },
     "Sales Order": {
+        "before_validate": "kniterp.api.shipping_party.validate_shipping_party",
         "on_update": "kniterp.api.transaction_parameters.sync_so_params",
         "on_update_after_submit": "kniterp.api.transaction_parameters.sync_so_params"
     },
+    "Delivery Note": {
+        "before_validate": "kniterp.api.shipping_party.validate_shipping_party"
+    },
+    "Sales Invoice": {
+        "before_validate": "kniterp.api.shipping_party.validate_shipping_party"
+    },
     "Purchase Order": {
+        "before_validate": "kniterp.api.shipping_party.validate_deliver_to_customer",
         "on_update": "kniterp.api.transaction_parameters.sync_po_params",
         "on_update_after_submit": "kniterp.api.transaction_parameters.sync_po_params"
+    },
+    "Subcontracting Order": {
+        "before_validate": "kniterp.api.shipping_party.validate_deliver_to_customer"
     },
     "Work Order": {
         "before_submit": "kniterp.kniterp.overrides.work_order.set_planned_qty_on_work_order"
@@ -127,6 +139,14 @@ fixtures = [
     {
         "doctype": "Workstation Type",
         "filters": [["name", "in", ["Knitting Job Work", "Knitting in-house", "Dyeing Job Work", "Yarn Processing"]]]
+    },
+    {
+        "doctype": "Operation",
+        "filters": [["name", "in", ["Knitting", "Dyeing", "Yarn Processing"]]]
+    },
+    {
+        "doctype": "Workstation",
+        "filters": [["workstation_type", "in", ["Knitting in-house", "Dyeing Job Work"]]]
     }
 ]
 

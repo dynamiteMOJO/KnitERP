@@ -177,7 +177,7 @@ def release_scio_fg_sres_on_revert(wo_doc, se_doc):
 
     # Step 2: reduce any blocking SCIO-level SREs that are partially/fully reserved
     # (handles case where the direct SRE is already Delivered but stale SREs block SE cancel)
-    qty_to_free = flt(se_doc.fg_completed_qty, 3)
+    qty_to_free = flt(se_doc.fg_completed_qty)
     fg_row = next(
         (r for r in se_doc.items if r.is_finished_item and not r.is_scrap_item), None
     )
@@ -203,9 +203,9 @@ def release_scio_fg_sres_on_revert(wo_doc, se_doc):
         if qty_to_free <= 0:
             break
 
-        current_reserved = flt(s.reserved_qty, 3)
-        current_delivered = flt(s.delivered_qty, 3)
-        net_reserved = flt(current_reserved - current_delivered, 3)
+        current_reserved = flt(s.reserved_qty)
+        current_delivered = flt(s.delivered_qty)
+        net_reserved = current_reserved - current_delivered
 
         if net_reserved <= 0:
             continue

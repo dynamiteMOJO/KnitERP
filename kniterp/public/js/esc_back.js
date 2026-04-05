@@ -11,6 +11,9 @@ document.addEventListener('keydown', function(e) {
 	// Let Bootstrap close dropdowns
 	if ($('.dropdown-menu.show').length > 0) return;
 
+	// Let Transaction Desk handle ESC when a form is open
+	if (frappe.transaction_desk && frappe.transaction_desk.current_type) return;
+
 	// Let Frappe blur focused inputs first
 	var ae = document.activeElement;
 	if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(ae.tagName) !== -1) return;
