@@ -559,16 +559,22 @@ class ActionCenter {
                 });
             }
         } else if (action === 'send_material') {
-            frappe.route_options = {
-                'selected_item': rowData.sales_order_item
-            };
-            frappe.set_route('production-wizard');
+            if (rowData.sales_order_item) {
+                frappe.route_options = { 'selected_item': rowData.sales_order_item };
+                frappe.set_route('production-wizard');
+            } else {
+                frappe.route_options = { 'selected_po': rowData.po_name };
+                frappe.set_route('outsourcing-desk');
+            }
             dialog.hide();
         } else if (action === 'receive_goods') {
-            frappe.route_options = {
-                'selected_item': rowData.sales_order_item
-            };
-            frappe.set_route('production-wizard');
+            if (rowData.sales_order_item) {
+                frappe.route_options = { 'selected_item': rowData.sales_order_item };
+                frappe.set_route('production-wizard');
+            } else {
+                frappe.route_options = { 'selected_po': rowData.po_name };
+                frappe.set_route('outsourcing-desk');
+            }
             dialog.hide();
         } else if (action === 'receive_rm') {
             frappe.set_route('Form', 'Subcontracting Inward Order', rowData.order_name);
