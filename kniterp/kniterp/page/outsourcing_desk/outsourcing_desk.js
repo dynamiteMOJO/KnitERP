@@ -867,9 +867,14 @@ class OutsourcingDesk {
             build_and_show();
         };
 
-        frappe.db.get_value('Item', item_code, 'has_batch_no', (r) => {
-            has_batch = !!(r && cint(r.has_batch_no));
-            on_data_ready();
+        frappe.call({
+            method: 'frappe.client.get_value',
+            args: { doctype: 'Item', filters: item_code, fieldname: 'has_batch_no' },
+            callback: (r) => {
+                if (r.message) has_batch = !!(cint(r.message.has_batch_no));
+                on_data_ready();
+            },
+            error: () => on_data_ready(),
         });
 
         frappe.call({
@@ -884,7 +889,8 @@ class OutsourcingDesk {
                     });
                 }
                 on_data_ready();
-            }
+            },
+            error: () => on_data_ready(),
         });
 
         const build_and_show = () => {
@@ -894,7 +900,7 @@ class OutsourcingDesk {
                     fieldtype: 'HTML',
                     options: `<div class="mb-3 od-dialog-info">
                         <div><strong>${__('RM Item')}:</strong> ${frappe.utils.escape_html(rm_item.rm_item_name)}</div>
-                        <div><strong>${__('Purchase Order')}:</strong> <a href="/app/purchase-order/${po_name}" target="_blank">${po_name}</a></div>
+                        <div><strong>${__('Purchase Order')}:</strong> <a href="/app/purchase-order/${frappe.utils.escape_html(po_name)}" target="_blank">${frappe.utils.escape_html(po_name)}</a></div>
                     </div>`
                 },
                 {
@@ -927,7 +933,7 @@ class OutsourcingDesk {
                 title: __('Receive Raw Material — {0}', [rm_item.rm_item_name || item_code]),
                 fields,
                 primary_action_label: __('Create & Submit'),
-                primary_action: () => on_submit(d),
+                primary_action: (values) => on_submit(d, values),
                 secondary_action_label: __('Save as Draft'),
                 secondary_action: () => on_draft(d),
             });
@@ -935,8 +941,8 @@ class OutsourcingDesk {
             const render_batch_table = (num_batches) => {
                 let html = '<table class="table table-bordered table-condensed"><thead><tr>'
                     + `<th>${__('Quantity')}</th><th>${__('Batch No')}</th></tr></thead><tbody>`;
+                const qty_val = (num_batches === 1 && pending_qty) ? pending_qty : '';
                 for (let i = 0; i < num_batches; i++) {
-                    const qty_val = (num_batches === 1 && pending_qty) ? pending_qty : '';
                     html += `<tr class="rm-batch-row">
                         <td><input type="number" class="form-control batch-qty" min="0" step="any" placeholder="${__('Qty')}" value="${qty_val}"></td>
                         <td><input type="text" class="form-control batch-lot" placeholder="${__('Batch No')}"></td>
@@ -951,10 +957,7 @@ class OutsourcingDesk {
                 });
             };
 
-            const on_submit = (dlg) => {
-                const values = dlg.get_values();
-                if (!values) return;
-
+            const on_submit = (dlg, values) => {
                 let received_batches = null;
 
                 if (has_batch) {
@@ -988,7 +991,6 @@ class OutsourcingDesk {
                     }
                 }
 
-                dlg.hide();
                 const args = {
                     purchase_order: po_name,
                     items: JSON.stringify([{ item_code, qty: values.qty }]),
@@ -1003,16 +1005,15 @@ class OutsourcingDesk {
                     freeze_message: __('Creating and submitting Purchase Receipt...'),
                     callback: (r) => {
                         if (r.message) {
+                            dlg.hide();
                             frappe.show_alert({ message: __('Purchase Receipt submitted'), indicator: 'green' });
                             frappe.set_route('Form', 'Purchase Receipt', r.message.name);
-                            self.load_details(po_name);
                         }
                     }
                 });
             };
 
             const on_draft = (dlg) => {
-                dlg.hide();
                 frappe.call({
                     method: 'kniterp.api.outsourcing_desk.create_rm_purchase_receipt',
                     args: {
@@ -1023,6 +1024,7 @@ class OutsourcingDesk {
                     freeze_message: __('Creating Purchase Receipt...'),
                     callback: (r) => {
                         if (r.message) {
+                            dlg.hide();
                             frappe.set_route('Form', 'Purchase Receipt', r.message.name);
                         }
                     }
