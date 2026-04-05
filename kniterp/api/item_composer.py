@@ -479,6 +479,67 @@ def add_new_token(canonical, dimension, short_code, aliases=""):
 
 
 # ──────────────────────────────────────────────
+# 4b. ADD ALIAS TO EXISTING TOKEN
+# ──────────────────────────────────────────────
+@frappe.whitelist()
+def add_alias_to_existing_token(alias, canonical):
+    """
+    Add a single alias to an existing Item Token.
+
+    Args:
+        alias: The unresolved text to register as an alias (e.g., "ct")
+        canonical: The existing token's canonical name (e.g., "Cotton")
+
+    Returns:
+        dict with alias, canonical, dimension
+    """
+    alias = (alias or "").strip().lower()
+    canonical = (canonical or "").strip()
+
+    if not alias or not canonical:
+        frappe.throw("Both alias and token name are required")
+
+    # Verify the target token exists
+    token = frappe.db.get_value(
+        "Item Token", canonical,
+        ["canonical", "dimension"],
+        as_dict=True
+    )
+    if not token:
+        frappe.throw(f"Token '{canonical}' not found")
+
+    # Check alias doesn't already exist
+    existing = frappe.db.get_value(
+        "Item Token Alias",
+        {"alias": alias},
+        ["canonical", "dimension"],
+        as_dict=True
+    )
+    if existing:
+        frappe.throw(
+            f"Alias '{alias}' already mapped to '{existing['canonical']}' ({existing['dimension']})",
+            frappe.DuplicateEntryError
+        )
+
+    frappe.get_doc({
+        "doctype": "Item Token Alias",
+        "alias": alias,
+        "canonical": canonical,
+        "dimension": token["dimension"],
+        "token": canonical,
+        "is_auto": 0,
+    }).insert(ignore_permissions=True)
+
+    frappe.db.commit()
+
+    return {
+        "alias": alias,
+        "canonical": canonical,
+        "dimension": token["dimension"],
+    }
+
+
+# ──────────────────────────────────────────────
 # 5. CREATE ITEM TOKEN (from degraded state)
 # ──────────────────────────────────────────────
 @frappe.whitelist()

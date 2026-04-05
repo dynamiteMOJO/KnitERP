@@ -235,8 +235,8 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
     if (prefill.state) dialog.set_value("state", prefill.state);
     if (prefill.lycra) dialog.set_value("lycra", prefill.lycra);
 
-    // Show edit buttons for any pre-filled slots
-    _update_edit_buttons_visibility(dialog);
+    // Show edit buttons for any pre-filled slots (set_value is async via frappe.run_serially)
+    setTimeout(() => _update_edit_buttons_visibility(dialog), 0);
 
     // Auto Quick Fill if text was provided (e.g., from Link field)
     if (quick_fill_text) {
@@ -346,14 +346,138 @@ function _do_quick_fill(dialog) {
                 // Bind click handlers for unresolved token buttons
                 result_wrapper.find(".kniterp-add-unresolved").on("click", function () {
                     const token_text = $(this).data("token");
-                    _open_add_token_from_quick_fill(token_text, dialog);
+                    _show_unresolved_token_choice(token_text, dialog);
                 });
             }
 
             _update_preview(dialog);
-            _update_edit_buttons_visibility(dialog);
+            // field.value is set inside frappe.run_serially (Promise microtasks).
+            // setTimeout(0) runs after the microtask queue drains, so field.value is ready.
+            setTimeout(() => _update_edit_buttons_visibility(dialog), 0);
         }
     });
+}
+
+
+function _show_unresolved_token_choice(token_text, parent_dialog) {
+    const choice_dialog = new frappe.ui.Dialog({
+        title: __('"{0}" — not recognized', [token_text]),
+        fields: [
+            {
+                fieldtype: "HTML",
+                fieldname: "choice_buttons",
+            },
+        ],
+        minimizable: false,
+    });
+
+    const wrapper = choice_dialog.get_field("choice_buttons").$wrapper;
+    wrapper.html(`
+        <p class="text-muted">
+            ${__("What would you like to do with")} "<strong>${frappe.utils.escape_html(token_text)}</strong>"?
+        </p>
+        <div class="d-flex flex-column" style="gap: 10px;">
+            <button class="btn btn-primary btn-sm kniterp-choice-alias">
+                <i class="fa fa-link"></i>
+                ${__("Add as alias of existing token")}
+            </button>
+            <button class="btn btn-default btn-sm kniterp-choice-new">
+                <i class="fa fa-plus"></i>
+                ${__("Create new token")}
+            </button>
+        </div>
+    `);
+
+    wrapper.find(".kniterp-choice-alias").on("click", function () {
+        choice_dialog.hide();
+        _open_add_alias_dialog(token_text, parent_dialog);
+    });
+
+    wrapper.find(".kniterp-choice-new").on("click", function () {
+        choice_dialog.hide();
+        _open_add_token_from_quick_fill(token_text, parent_dialog);
+    });
+
+    choice_dialog.show();
+}
+
+
+function _open_add_alias_dialog(token_text, parent_dialog) {
+    const options = parent_dialog._composer_options || {};
+
+    // Build flat list of all tokens: "Cotton (fiber)", "30's (count)", etc.
+    const token_list = [];
+    for (const [dim, tokens] of Object.entries(options)) {
+        (tokens || []).forEach(t => {
+            token_list.push({
+                label: `${t.canonical} (${dim})`,
+                canonical: t.canonical,
+                dimension: dim,
+            });
+        });
+    }
+
+    const alias_dialog = new frappe.ui.Dialog({
+        title: __('Add "{0}" as alias', [token_text]),
+        fields: [
+            {
+                fieldtype: "Data",
+                fieldname: "alias_text",
+                label: __("Alias"),
+                read_only: 1,
+                default: token_text,
+            },
+            {
+                fieldtype: "Autocomplete",
+                fieldname: "target_token",
+                label: __("Add as alias of"),
+                reqd: 1,
+                options: token_list.map(t => t.label),
+                description: __("Start typing to search existing tokens"),
+            },
+        ],
+        primary_action_label: __("Add Alias"),
+        primary_action(values) {
+            const selected = token_list.find(t => t.label === values.target_token);
+            if (!selected) {
+                frappe.msgprint(__("Please select a valid token"));
+                return;
+            }
+
+            frappe.call({
+                method: "kniterp.api.item_composer.add_alias_to_existing_token",
+                args: {
+                    alias: token_text,
+                    canonical: selected.canonical,
+                },
+                freeze: true,
+                callback(r) {
+                    if (r.message) {
+                        frappe.show_alert({
+                            message: __('"{0}" added as alias of {1}', [token_text, r.message.canonical]),
+                            indicator: "green",
+                        });
+                        alias_dialog.hide();
+
+                        // Re-fetch options then re-run Quick Fill to resolve the slot
+                        frappe.call({
+                            method: "kniterp.api.item_composer.get_composer_options",
+                            callback(r2) {
+                                parent_dialog._composer_options = r2.message || {};
+                                for (const dim of ["count", "fiber", "modifier", "structure", "lycra", "state"]) {
+                                    parent_dialog._ac_lists[dim] = (parent_dialog._composer_options[dim] || []).map(t => t.canonical);
+                                }
+                                _setup_alias_autocomplete(parent_dialog, parent_dialog._composer_options);
+                                _do_quick_fill(parent_dialog);
+                            }
+                        });
+                    }
+                },
+            });
+        },
+    });
+
+    alias_dialog.show();
 }
 
 
@@ -824,7 +948,10 @@ function _setup_add_new_buttons(dialog, options) {
         { field: "count_add_btn", dimension: "count", label: "Count" },
         { field: "fiber_add_btn", dimension: "fiber", label: "Fiber" },
         { field: "modifier_add_btn", dimension: "modifier", label: "Modifier" },
+        { field: "modifier2_edit_btn", dimension: "modifier", label: "Modifier" },
         { field: "structure_add_btn", dimension: "structure", label: "Structure" },
+        { field: "lycra_edit_btn", dimension: "lycra", label: "Lycra / Denier" },
+        { field: "state_edit_btn", dimension: "state", label: "State / Finish" },
     ];
 
     dims.forEach(({ field, dimension, label }) => {
@@ -941,7 +1068,7 @@ function _refresh_autocomplete(dialog, dimension, new_value, old_value = null) {
             // Re-setup alias matching
             _setup_alias_autocomplete(dialog, new_options);
             // Update edit button visibility after values may have changed
-            _update_edit_buttons_visibility(dialog);
+            setTimeout(() => _update_edit_buttons_visibility(dialog), 0);
             _update_preview(dialog);
         }
     });
@@ -963,7 +1090,7 @@ function _update_edit_buttons_visibility(dialog) {
     };
 
     for (const [fname, slot_name] of Object.entries(field_to_slot)) {
-        const val = dialog.get_value(fname);
+        const val = dialog.fields_dict[fname]?.value;
         const slot_wrapper = dialog.get_field(slot_name)?.$wrapper;
         if (slot_wrapper) {
             slot_wrapper.find(".kniterp-edit-token-btn").toggle(!!val);
@@ -1007,7 +1134,7 @@ function _setup_edit_buttons(dialog) {
 
         // Hide immediately when field is cleared by typing
         ac_field_obj.$input.on("input", function () {
-            if (!this.value) _update_edit_buttons_visibility(dialog);
+            slot_wrapper.find(".kniterp-edit-token-btn").toggle(!!this.value);
         });
 
         $edit_btn.on("click", function () {
