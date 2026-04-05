@@ -5,6 +5,64 @@ from frappe.model.mapper import get_mapped_doc
 from erpnext.subcontracting.doctype.subcontracting_inward_order.subcontracting_inward_order import SubcontractingInwardOrder
 
 class CustomSubcontractingInwardOrder(SubcontractingInwardOrder):
+    def update_status(self, status=None, update_modified=True):
+        """
+        Override to guard against ZeroDivisionError when no CP items or FG items exist yet
+        (ERPNext does not guard total_to_be_received or total_to_be_produced against zero).
+        """
+        if self.status == "Closed" and self.status != status:
+            from erpnext.controllers.status_updater import check_on_hold_or_closed_status
+            check_on_hold_or_closed_status("Sales Order", self.sales_order)
+
+        total_to_be_received = total_received = total_rm_returned = 0
+        for rm in self.get("received_items"):
+            if rm.get("is_customer_provided_item"):
+                total_to_be_received += flt(rm.required_qty)
+                total_received += flt(rm.received_qty)
+                total_rm_returned += flt(rm.returned_qty)
+
+        total_to_be_produced = total_produced = total_process_loss = total_delivered = total_fg_returned = 0
+        for item in self.get("items"):
+            total_to_be_produced += flt(item.qty)
+            total_produced += flt(item.produced_qty)
+            total_process_loss += flt(item.process_loss_qty)
+            total_delivered += flt(item.delivered_qty)
+            total_fg_returned += flt(item.returned_qty)
+
+        per_raw_material_received = flt(total_received / total_to_be_received * 100, 2) if total_to_be_received else 0
+        per_raw_material_returned = flt(total_rm_returned / total_received * 100, 2) if total_received else 0
+        per_produced = flt(total_produced / total_to_be_produced * 100, 2) if total_to_be_produced else 0
+        per_process_loss = flt(total_process_loss / total_produced * 100, 2) if total_produced else 0
+        per_delivered = flt(total_delivered / total_to_be_produced * 100, 2) if total_to_be_produced else 0
+        per_returned = flt(total_fg_returned / total_delivered * 100, 2) if total_delivered else 0
+
+        self.db_set("per_raw_material_received", per_raw_material_received, update_modified=update_modified)
+        self.db_set("per_raw_material_returned", per_raw_material_returned, update_modified=update_modified)
+        self.db_set("per_produced", per_produced, update_modified=update_modified)
+        self.db_set("per_process_loss", per_process_loss, update_modified=update_modified)
+        self.db_set("per_delivered", per_delivered, update_modified=update_modified)
+        self.db_set("per_returned", per_returned, update_modified=update_modified)
+
+        if self.docstatus >= 1 and not status:
+            if self.docstatus == 1:
+                if self.status == "Draft":
+                    status = "Open"
+                elif self.per_returned == 100:
+                    status = "Returned"
+                elif self.per_delivered == 100:
+                    status = "Delivered"
+                elif self.per_produced == 100:
+                    status = "Produced"
+                elif self.per_raw_material_received > 0:
+                    status = "Ongoing"
+                else:
+                    status = "Open"
+            elif self.docstatus == 2:
+                status = "Cancelled"
+
+        if status and self.status != status:
+            self.db_set("status", status, update_modified=update_modified)
+
     def get_production_items(self):
         """
         OVERRIDE: Removed precision rounding on ratio calculation to prevent rounding errors
@@ -34,8 +92,7 @@ class CustomSubcontractingInwardOrder(SubcontractingInwardOrder):
             qty_list = []
             for item in self.get("received_items"):
                 if item.reference_name == d.name and item.is_customer_provided_item and item.required_qty:
-                    # FIX: Round ratio to 9 decimal places for intermediate precision, final qty to 3
-                    ratio = flt(flt(item.required_qty, 3) / flt(d.qty, 3))
+                    ratio = flt(item.required_qty) / flt(d.qty)
 
                     qty = flt(
                         (flt(item.received_qty, 3) - flt(item.returned_qty, 3) - flt(item.work_order_qty, 3)) / ratio,
@@ -89,7 +146,7 @@ class CustomSubcontractingInwardOrder(SubcontractingInwardOrder):
         allow_over = frappe.get_single_value("Selling Settings", "allow_delivery_of_overproduced_qty")
         for fg_item in self.items:
             # FIX: Always subtract delivered_qty!
-            produced_limit = flt(fg_item.produced_qty, 3)
+            produced_limit = flt(fg_item.produced_qty)
             if not allow_over:
                 produced_limit = flt(min(flt(fg_item.qty, 3), flt(fg_item.produced_qty, 3)), 3)
             

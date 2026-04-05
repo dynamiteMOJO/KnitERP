@@ -69,8 +69,8 @@ def make_subcontracting_po(source_name, target_doc=None):
         _item_details = get_subcontracting_boms_for_finished_goods(fg_item)
 
         pending_qty = source.for_quantity - source.manufactured_qty
-        service_item_qty = flt(_item_details.service_item_qty, 3) or 1.0
-        fg_item_qty = flt(_item_details.finished_good_qty, 3) or 1.0
+        service_item_qty = flt(_item_details.service_item_qty) or 1.0
+        fg_item_qty = flt(_item_details.finished_good_qty) or 1.0
 
         target.is_subcontracted = 1
         target.supplier_warehouse = source.wip_warehouse
@@ -403,11 +403,11 @@ class CustomJobCard(JobCard):
         # We need to scale them up proportionally if overpricing occurred
         if self.semi_fg_bom:
             bom_doc = frappe.get_cached_doc("BOM", self.semi_fg_bom)
-            bom_qty = flt(bom_doc.quantity, 3) or 1.0
-            
+            bom_qty = flt(bom_doc.quantity) or 1.0
+
             # Ratio: How much we are making vs BOM batch size
             # If BOM is for 100kg and we make 320kg, ratio is 3.2
-            ratio = flt(actual_qty_to_manufacture / bom_qty, 3)
+            ratio = actual_qty_to_manufacture / bom_qty
             
             for item in ste.stock_entry.items:
                 # Skip the finished good itself and scrap items
@@ -418,7 +418,7 @@ class CustomJobCard(JobCard):
                 bom_item_qty = 0
                 for bi in bom_doc.items:
                     if bi.item_code == item.item_code:
-                        bom_item_qty = flt(bi.qty, 3)
+                        bom_item_qty = flt(bi.qty)
                         break
                 
                 if bom_item_qty > 0:
@@ -492,7 +492,7 @@ class CustomJobCard(JobCard):
             if not self.for_quantity or self.for_quantity == 0:
                 return
                 
-            ratio = flt(flt(self.total_completed_qty, 3) / flt(self.for_quantity, 3), 3)
+            ratio = flt(self.total_completed_qty) / flt(self.for_quantity)
             if ratio <= 1.0:
                 return
 

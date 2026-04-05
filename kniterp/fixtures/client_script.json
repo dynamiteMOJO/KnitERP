@@ -1,1 +1,47 @@
-[]
+[
+ {
+  "doctype": "Client Script",
+  "dt": "Sales Order",
+  "enabled": 1,
+  "module": "Kniterp",
+  "name": "Sales Order-ship-to-party",
+  "script": "frappe.ui.form.on('Sales Order', {\n    refresh(frm) {\n        kniterp_so_apply_shipping_party_query(frm);\n    },\n    customer(frm) {\n        // Re-apply after ERPNext resets the query on customer change\n        setTimeout(() => kniterp_so_apply_shipping_party_query(frm), 500);\n    },\n    custom_shipping_party(frm) {\n        kniterp_so_apply_shipping_party_query(frm);\n        frm.set_value('shipping_address_name', '');\n        if (frm.doc.custom_shipping_party) {\n            frappe.call({\n                method: 'frappe.contacts.doctype.address.address.get_default_address',\n                args: { doctype: 'Customer', name: frm.doc.custom_shipping_party },\n                callback(r) {\n                    if (r.message) frm.set_value('shipping_address_name', r.message);\n                }\n            });\n        }\n    }\n});\n\nfunction kniterp_so_apply_shipping_party_query(frm) {\n    const party = frm.doc.custom_shipping_party || frm.doc.customer;\n    if (!party) return;\n    frm.set_query('shipping_address_name', () => ({\n        query: 'frappe.contacts.doctype.address.address.address_query',\n        filters: { link_doctype: 'Customer', link_name: party }\n    }));\n}\n",
+  "view": "Form"
+ },
+ {
+  "doctype": "Client Script",
+  "dt": "Delivery Note",
+  "enabled": 1,
+  "module": "Kniterp",
+  "name": "Delivery Note-ship-to-party",
+  "script": "frappe.ui.form.on('Delivery Note', {\n    refresh(frm) {\n        kniterp_dn_apply_shipping_party_query(frm);\n    },\n    customer(frm) {\n        setTimeout(() => kniterp_dn_apply_shipping_party_query(frm), 500);\n    },\n    custom_shipping_party(frm) {\n        kniterp_dn_apply_shipping_party_query(frm);\n        frm.set_value('shipping_address_name', '');\n        if (frm.doc.custom_shipping_party) {\n            frappe.call({\n                method: 'frappe.contacts.doctype.address.address.get_default_address',\n                args: { doctype: 'Customer', name: frm.doc.custom_shipping_party },\n                callback(r) {\n                    if (r.message) frm.set_value('shipping_address_name', r.message);\n                }\n            });\n        }\n    }\n});\n\nfunction kniterp_dn_apply_shipping_party_query(frm) {\n    const party = frm.doc.custom_shipping_party || frm.doc.customer;\n    if (!party) return;\n    frm.set_query('shipping_address_name', () => ({\n        query: 'frappe.contacts.doctype.address.address.address_query',\n        filters: { link_doctype: 'Customer', link_name: party }\n    }));\n}\n",
+  "view": "Form"
+ },
+ {
+  "doctype": "Client Script",
+  "dt": "Sales Invoice",
+  "enabled": 1,
+  "module": "Kniterp",
+  "name": "Sales Invoice-ship-to-party",
+  "script": "frappe.ui.form.on('Sales Invoice', {\n    refresh(frm) {\n        kniterp_si_apply_shipping_party_query(frm);\n    },\n    customer(frm) {\n        setTimeout(() => kniterp_si_apply_shipping_party_query(frm), 500);\n    },\n    custom_shipping_party(frm) {\n        kniterp_si_apply_shipping_party_query(frm);\n        frm.set_value('shipping_address_name', '');\n        if (frm.doc.custom_shipping_party) {\n            frappe.call({\n                method: 'frappe.contacts.doctype.address.address.get_default_address',\n                args: { doctype: 'Customer', name: frm.doc.custom_shipping_party },\n                callback(r) {\n                    if (r.message) frm.set_value('shipping_address_name', r.message);\n                }\n            });\n        }\n    }\n});\n\nfunction kniterp_si_apply_shipping_party_query(frm) {\n    const party = frm.doc.custom_shipping_party || frm.doc.customer;\n    if (!party) return;\n    frm.set_query('shipping_address_name', () => ({\n        query: 'frappe.contacts.doctype.address.address.address_query',\n        filters: { link_doctype: 'Customer', link_name: party }\n    }));\n}\n",
+  "view": "Form"
+ },
+ {
+  "doctype": "Client Script",
+  "dt": "Purchase Order",
+  "enabled": 1,
+  "module": "Kniterp",
+  "name": "Purchase Order-deliver-to-customer",
+  "script": "frappe.ui.form.on('Purchase Order', {\n    refresh(frm) {\n        kniterp_po_apply_deliver_to_query(frm);\n    },\n    custom_deliver_to_customer(frm) {\n        kniterp_po_apply_deliver_to_query(frm);\n        frm.set_value('custom_deliver_to_address', '');\n        if (frm.doc.custom_deliver_to_customer) {\n            frappe.call({\n                method: 'frappe.contacts.doctype.address.address.get_default_address',\n                args: { doctype: 'Customer', name: frm.doc.custom_deliver_to_customer },\n                callback(r) {\n                    if (r.message) frm.set_value('custom_deliver_to_address', r.message);\n                }\n            });\n        }\n    }\n});\n\nfunction kniterp_po_apply_deliver_to_query(frm) {\n    if (frm.doc.custom_deliver_to_customer) {\n        frm.set_query('custom_deliver_to_address', () => ({\n            query: 'frappe.contacts.doctype.address.address.address_query',\n            filters: { link_doctype: 'Customer', link_name: frm.doc.custom_deliver_to_customer }\n        }));\n    }\n}\n",
+  "view": "Form"
+ },
+ {
+  "doctype": "Client Script",
+  "dt": "Subcontracting Order",
+  "enabled": 1,
+  "module": "Kniterp",
+  "name": "Subcontracting Order-deliver-to-customer",
+  "script": "frappe.ui.form.on('Subcontracting Order', {\n    refresh(frm) {\n        kniterp_sco_apply_deliver_to_query(frm);\n    },\n    custom_deliver_to_customer(frm) {\n        kniterp_sco_apply_deliver_to_query(frm);\n        frm.set_value('custom_deliver_to_address', '');\n        if (frm.doc.custom_deliver_to_customer) {\n            frappe.call({\n                method: 'frappe.contacts.doctype.address.address.get_default_address',\n                args: { doctype: 'Customer', name: frm.doc.custom_deliver_to_customer },\n                callback(r) {\n                    if (r.message) frm.set_value('custom_deliver_to_address', r.message);\n                }\n            });\n        }\n    }\n});\n\nfunction kniterp_sco_apply_deliver_to_query(frm) {\n    if (frm.doc.custom_deliver_to_customer) {\n        frm.set_query('custom_deliver_to_address', () => ({\n            query: 'frappe.contacts.doctype.address.address.address_query',\n            filters: { link_doctype: 'Customer', link_name: frm.doc.custom_deliver_to_customer }\n        }));\n    }\n}\n",
+  "view": "Form"
+ }
+]

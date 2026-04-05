@@ -19,6 +19,15 @@ def setup_custom_fields():
             "read_only": 1,
             "bold": 1,
         },
+        {
+            "dt": "Purchase Order Item",
+            "fieldname": "custom_jw_description",
+            "label": "Job Work Description",
+            "fieldtype": "Small Text",
+            "insert_after": "custom_transaction_params_json",
+            "hidden": 1,
+            "print_hide": 1,
+        },
     ]
 
     for cf in custom_fields:
@@ -67,6 +76,10 @@ def setup_service_items():
         {"item_code": "Knitting Jobwork", "item_name": "Knitting Jobwork", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
         {"item_code": "Dyeing Jobwork", "item_name": "Dyeing Jobwork", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
         {"item_code": "Yarn Processing", "item_name": "Yarn Processing", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
+        {"item_code": "Knitting Jobwork outward", "item_name": "Knitting Jobwork outward", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
+        {"item_code": "Knitting Jobwork inward", "item_name": "Knitting Jobwork inward", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
+        {"item_code": "Knitting+Dyeing Jobwork", "item_name": "Knitting+Dyeing Jobwork", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
+        {"item_code": "Yarn processing Jobwork", "item_name": "Yarn processing Jobwork", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
     ]
 
     for item_data in service_items:

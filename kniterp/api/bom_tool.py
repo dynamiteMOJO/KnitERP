@@ -36,7 +36,7 @@ def create_multilevel_bom(data):
             bom_map[op['type']] = bom_name
 
         # --- Step 3: Find or create Subcontracting BOMs ---
-        # --- Step 3: Find or create Subcontracting BOMs ---
+        has_subcontracting_bom = False
         for op in operations_data:
             if op.get('is_job_work'):
                 is_inward = op.get('job_work_direction') == 'inward'
@@ -45,14 +45,15 @@ def create_multilevel_bom(data):
                 # Assuming 'knitting' is the main service for now, or if single operation?
                 # Actually, find_or_create handles service item lookup.
                 # But for Inward, we MUST use the SO Item Code as Service Item if it matches.
-                
+
                 target_service_item = service_item_code if is_inward and op['type'] == 'knitting' else None
-                
+
                 find_or_create_subcontracting_bom(
-                    op, bom_map[op['type']], 
-                    sales_order=sales_order, 
+                    op, bom_map[op['type']],
+                    sales_order=sales_order,
                     forced_service_item=target_service_item
                 )
+                has_subcontracting_bom = True
 
         # --- Step 4: Find or create Master BOM ---
         bom = find_or_create_master_bom(
@@ -61,9 +62,9 @@ def create_multilevel_bom(data):
 
         if isinstance(bom, str):
             # Existing BOM was found
-            return {"message": "Existing BOM Selected", "name": bom}
+            return {"message": "Existing BOM Selected", "name": bom, "has_subcontracting_bom": has_subcontracting_bom}
 
-        return {"message": "BOMs Created Successfully", "name": bom.name}
+        return {"message": "BOMs Created Successfully", "name": bom.name, "has_subcontracting_bom": has_subcontracting_bom}
 
     except Exception:
         frappe.db.rollback()
@@ -120,16 +121,14 @@ def process_cp_item_swap(op_data):
             base_item = inp['item']
             cp_item = base_item + cp_suffix if not base_item.endswith(cp_suffix) else base_item
 
-            # Verify the CP item exists
-            if frappe.db.exists("Item", cp_item):
-                inp['item'] = cp_item
-            else:
-                frappe.throw(
-                    _("Customer Provided version '{0}' not found for item '{1}'. "
-                      "Please ensure the CP item exists in the Item master.").format(
-                        cp_item, base_item
-                    )
+            if not frappe.db.exists("Item", cp_item):
+                base_item_doc = frappe.get_doc("Item", base_item)
+                base_item_doc.ensure_dual_yarn_versions()
+                frappe.msgprint(
+                    _("Customer Provided item '{0}' was automatically created.").format(cp_item),
+                    alert=True
                 )
+            inp['item'] = cp_item
 
 
 def find_or_create_phase_a_bom(op_data, rm_cost_as_per="Valuation Rate"):
@@ -214,7 +213,7 @@ def create_phase_a_bom(op_data, rm_cost_as_per="Valuation Rate"):
 
         item_row = {
             "item_code": inp['item'],
-            "qty": flt(qty, 3),
+            "qty": flt(qty, 6),
             "uom": frappe.db.get_value("Item", inp['item'], "stock_uom")
         }
 
@@ -452,7 +451,7 @@ def find_or_create_master_bom(final_good, final_qty, operations_data, bom_map, r
             "sequence_id": i + 1,
             "operation": frappe.unscrub(op['type']),
             "finished_good": op['output_item'],
-            "finished_good_qty": flt(op['output_qty'], 3),
+            "finished_good_qty": flt(op['output_qty'], 6),
             "is_subcontracted": 1 if (is_job_work and jw_direction != 'inward') else 0,
             "is_final_finished_good": 1 if is_final else 0,
             "bom_no": bom_map.get(op['type']),
@@ -511,15 +510,15 @@ def get_multilevel_bom(bom_no):
         if op.bom_no:
             sub_bom = frappe.get_doc("BOM", op.bom_no)
 
-            total_input = flt(sum(flt(item.qty, 3) for item in sub_bom.items), 3)
-            output = flt(sub_bom.quantity, 3)
+            total_input = flt(sum(flt(item.qty) for item in sub_bom.items))
+            output = flt(sub_bom.quantity)
 
             if total_input > 0:
-                loss_val = 100.0 * (1.0 - (flt(output, 3) / flt(total_input, 3)))
+                loss_val = 100.0 * (1.0 - (output / total_input))
                 op_data["loss_percent"] = max(0, float("{:.2f}".format(loss_val)))
 
             for item in sub_bom.items:
-                mix_val = flt((flt(item.qty, 3) / total_input) * 100, 3)
+                mix_val = flt((flt(item.qty) / total_input) * 100, 3)
 
                 inp_data = {
                     "item": item.item_code,

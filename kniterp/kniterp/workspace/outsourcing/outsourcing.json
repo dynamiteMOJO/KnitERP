@@ -163,7 +163,15 @@
  "quick_lists": [],
  "roles": [],
  "sequence_id": 8.0,
- "shortcuts": [],
+ "shortcuts": [
+  {
+   "color": "Orange",
+   "doc_view": "",
+   "label": "Outsourcing Desk",
+   "link_to": "outsourcing-desk",
+   "type": "Page"
+  }
+ ],
  "title": "Outsourcing",
  "type": "Workspace"
 }

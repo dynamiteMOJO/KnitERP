@@ -11,6 +11,8 @@ Resolution layers (in order):
   4. LIKE fallback on item_name
 """
 
+import json
+
 import frappe
 import re
 from frappe.utils import cint
@@ -245,6 +247,65 @@ def _try_prefix_match(token, alias_map):
     return None
 
 
+# ── Filter condition builder ──────────────────────────────────────────
+
+def _build_filter_conditions(filters):
+    """Build parameterized WHERE conditions from Frappe-style filters.
+
+    Supports dict filters (e.g., {"is_stock_item": 0}) and list-of-lists
+    filters (e.g., [["is_stock_item", "=", 0]]). Field names are validated
+    against the Item doctype to prevent injection.
+
+    Returns:
+        tuple: (sql_fragment, params_list)
+               e.g. (" AND i.`is_stock_item` = %s", [0])
+    """
+    if not filters:
+        return "", []
+
+    if isinstance(filters, str):
+        filters = json.loads(filters)
+
+    conditions = []
+    params = []
+    valid_fields = {df.fieldname for df in frappe.get_meta("Item").fields}
+    valid_fields.update(("name", "owner", "modified", "creation"))
+
+    if isinstance(filters, dict):
+        for key, value in filters.items():
+            if key not in valid_fields:
+                continue
+            if isinstance(value, (list, tuple)):
+                if value:
+                    ph = ", ".join(["%s"] * len(value))
+                    conditions.append(f"i.`{key}` IN ({ph})")
+                    params.extend(value)
+            else:
+                conditions.append(f"i.`{key}` = %s")
+                params.append(value)
+    elif isinstance(filters, (list, tuple)):
+        for f in filters:
+            if not isinstance(f, (list, tuple)):
+                continue
+            if len(f) == 4:
+                f = list(f)[1:]
+            if len(f) != 3:
+                continue
+            fieldname, operator, value = f
+            if fieldname not in valid_fields:
+                continue
+            operator = str(operator).strip().upper()
+            if operator not in ("=", "!=", "<", ">", "<=", ">=", "LIKE", "NOT LIKE"):
+                continue
+            conditions.append(f"i.`{fieldname}` {operator} %s")
+            params.append(value)
+
+    if not conditions:
+        return "", []
+
+    return " AND " + " AND ".join(conditions), params
+
+
 # ── Search API (Frappe query override) ────────────────────────────────
 
 @frappe.whitelist()
@@ -266,13 +327,22 @@ def smart_search(doctype, txt, searchfield=None, start=0, page_length=20,
     start = cint(start)
     page_length = cint(page_length) or 20
 
+    # Parse filters for use in all query branches
+    if isinstance(filters, str):
+        filters = json.loads(filters)
+    filter_sql, filter_params = _build_filter_conditions(filters)
+
     if not txt or not txt.strip():
-        # Fallback: return recent/popular items
+        # Fallback: return popular items (most-linked first)
+        base_filters = {"disabled": 0}
+        if isinstance(filters, dict):
+            base_filters.update({k: v for k, v in filters.items()
+                                 if k != "include_disabled"})
         return frappe.get_all(
             "Item",
-            filters={"disabled": 0},
+            filters=base_filters,
             fields=["name as value", "item_name as description"],
-            order_by="modified desc",
+            order_by="idx desc, modified desc",
             limit_start=start,
             limit_page_length=page_length,
             as_list=not as_dict
@@ -325,6 +395,13 @@ def smart_search(doctype, txt, searchfield=None, start=0, page_length=20,
         token_subquery = None
         token_params = []
 
+    # Total tokens per item (for match precision scoring)
+    total_tokens_subquery = """(
+        SELECT item_code, COUNT(*) AS total_tokens
+        FROM `tabItem Search Token`
+        GROUP BY item_code
+    )"""
+
     # Build LIKE score expression using CASE WHEN (more compatible than boolean)
     like_score_parts = []
     like_score_params = []
@@ -346,7 +423,7 @@ def smart_search(doctype, txt, searchfield=None, start=0, page_length=20,
 
     # Build final query
     if token_subquery:
-        # Items found via token index, ranked by token match + LIKE score
+        # Items found via token index, ranked by token match + precision + LIKE
         if like_where_conditions:
             # Also include items matched only by LIKE (unresolved token fallback)
             where_extra = f" OR ({' AND '.join(like_where_conditions)})"
@@ -358,20 +435,24 @@ def smart_search(doctype, txt, searchfield=None, start=0, page_length=20,
         sql = f"""
             SELECT i.name AS value, i.item_name AS description,
                    COALESCE(tm.match_count, 0) AS _token_score,
+                   COALESCE(tm.match_count, 0) / GREATEST(COALESCE(tt.total_tokens, 1), 1) AS _precision,
                    ({like_score_expr}) AS _like_score
             FROM `tabItem` i
             LEFT JOIN {token_subquery} tm ON tm.item_code = i.name
+            LEFT JOIN {total_tokens_subquery} tt ON tt.item_code = i.name
             WHERE i.disabled = 0
                 AND (tm.item_code IS NOT NULL{where_extra})
-            ORDER BY _token_score DESC, _like_score DESC, i.item_name ASC
+                {filter_sql}
+            ORDER BY _token_score DESC, _precision DESC, _like_score DESC, i.idx DESC, i.item_name ASC
             LIMIT %s, %s
         """
         # IMPORTANT: params order must match %s left-to-right in SQL text:
-        # 1. CASE WHEN LIKE %s (in SELECT) → like_score_params
-        # 2. IN (%s) (in subquery)         → token_params
-        # 3. WHERE LIKE %s (if any)        → where_params
-        # 4. LIMIT %s, %s                  → start, page_length
-        final_params = like_score_params + token_params + where_params + [start, page_length]
+        # 1. CASE WHEN LIKE %s (in SELECT)   → like_score_params
+        # 2. IN (%s) (in token subquery)      → token_params
+        # 3. WHERE LIKE %s (if any)           → where_params
+        # 4. Filter conditions                → filter_params
+        # 5. LIMIT %s, %s                     → start, page_length
+        final_params = like_score_params + token_params + where_params + filter_params + [start, page_length]
 
     elif like_where_conditions:
         # Only LIKE fallback (no canonical tokens resolved)
@@ -382,10 +463,11 @@ def smart_search(doctype, txt, searchfield=None, start=0, page_length=20,
             FROM `tabItem` i
             WHERE i.disabled = 0
                 AND ({' AND '.join(like_where_conditions)})
-            ORDER BY _like_score DESC, i.item_name ASC
+                {filter_sql}
+            ORDER BY _like_score DESC, i.idx DESC, i.item_name ASC
             LIMIT %s, %s
         """
-        final_params = like_score_params + like_where_params + [start, page_length]
+        final_params = like_score_params + like_where_params + filter_params + [start, page_length]
     else:
         return []
 
@@ -395,6 +477,7 @@ def smart_search(doctype, txt, searchfield=None, start=0, page_length=20,
     for r in results:
         r.pop("_token_score", None)
         r.pop("_like_score", None)
+        r.pop("_precision", None)
 
     if as_dict:
         return results

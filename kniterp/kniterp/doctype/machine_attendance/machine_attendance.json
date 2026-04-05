@@ -5,9 +5,9 @@
  "doctype": "DocType",
  "engine": "InnoDB",
  "field_order": [
-  "employee",
   "date",
   "shift",
+  "employee",
   "machine",
   "production_qty_kg",
   "company"

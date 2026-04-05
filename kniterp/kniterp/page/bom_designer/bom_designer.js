@@ -5,6 +5,46 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
         single_column: true
     });
 
+    // ─── Cart State Manager ──────────────────────────────────
+    class CartManager {
+        constructor() {
+            this.STORAGE_KEY = 'kniterp_bom_cart';
+        }
+
+        getItems() {
+            try {
+                return JSON.parse(sessionStorage.getItem(this.STORAGE_KEY) || '[]');
+            } catch (e) {
+                return [];
+            }
+        }
+
+        addItem(item) {
+            const items = this.getItems().filter(i => i.item_code !== item.item_code);
+            items.push(item);
+            sessionStorage.setItem(this.STORAGE_KEY, JSON.stringify(items));
+            return items;
+        }
+
+        removeItem(item_code) {
+            const items = this.getItems().filter(i => i.item_code !== item_code);
+            sessionStorage.setItem(this.STORAGE_KEY, JSON.stringify(items));
+            return items;
+        }
+
+        clear() {
+            sessionStorage.removeItem(this.STORAGE_KEY);
+        }
+
+        hasItem(item_code) {
+            return this.getItems().some(i => i.item_code === item_code);
+        }
+
+        getCount() {
+            return this.getItems().length;
+        }
+    }
+
     class BomDesigner {
         constructor(wrapper, page) {
             this.wrapper = $(wrapper);
@@ -22,6 +62,10 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
 
             // Clear route options so they don't persist on refresh unintentionally
             frappe.route_options = null;
+
+            // Cart mode: enabled when not returning to Production Wizard
+            this.cart_mode = !this.return_to;
+            this.cart = new CartManager();
 
             this.setup_ui();
 
@@ -173,61 +217,95 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
         }
 
         setup_ui() {
-            const html = `
-                <div class="bom-designer-container">
-                    <div class="mb-5 d-flex justify-content-between align-items-center">
-                        <h3 class="font-weight-bold" style="color: var(--text-color); letter-spacing: -0.5px;">BOM Designer</h3>
-                        <div class="text-muted small">Streamlining Multi-level Textile BOMs</div>
+            const cart_panel_html = this.cart_mode ? `
+                <div class="bom-cart-panel">
+                    <div class="bom-cart-header">
+                        <span class="bom-cart-title"><i class="fa fa-shopping-cart mr-2"></i>Cart (<span class="bom-cart-count">0</span>)</span>
                     </div>
+                    <div class="bom-cart-items"></div>
+                    <div class="bom-cart-footer">
+                        <button class="btn btn-primary btn-sm w-100 btn-create-voucher" disabled>
+                            Create Voucher <i class="fa fa-arrow-right ml-1"></i>
+                        </button>
+                    </div>
+                </div>
+            ` : '';
 
-                    <div class="header-card p-4 mb-5">
-                        <div class="row align-items-end">
-                            <div class="col-md-5 mb-3 mb-md-0">
-                                <label class="section-label">Final Good Name</label>
-                                <div class="fg-selector-target"></div>
-                            </div>
-                            <div class="col-md-2 mb-3 mb-md-0">
-                                <label class="section-label">Total Quantity (Kg)</label>
-                                <div class="unit-input-group">
-                                    <input type="number" class="form-control final-qty" value="100">
-                                    <span class="unit-label">Kg</span>
+            const html = `
+                <div class="bom-designer-container${this.cart_mode ? ' bom-designer-with-cart' : ''}">
+                    <div class="bom-workspace">
+                        <div class="mb-5 d-flex justify-content-between align-items-center">
+                            <h3 class="font-weight-bold" style="color: var(--text-color); letter-spacing: -0.5px;">BOM Designer</h3>
+                            <div class="text-muted small">Streamlining Multi-level Textile BOMs</div>
+                        </div>
+
+                        <div class="header-card p-4 mb-5">
+                            <div class="row align-items-end">
+                                <div class="col-md-5 mb-3 mb-md-0">
+                                    <label class="section-label">Final Good Name</label>
+                                    <div class="fg-selector-target"></div>
+                                </div>
+                                <div class="col-md-2 mb-3 mb-md-0">
+                                    <label class="section-label">Total Quantity (Kg)</label>
+                                    <div class="unit-input-group">
+                                        <input type="number" class="form-control final-qty" value="100">
+                                        <span class="unit-label">Kg</span>
+                                    </div>
+                                </div>
+                                <div class="col-md-3 mb-3 mb-md-0">
+                                    <label class="section-label">RM Cost Based On</label>
+                                    <div class="rm-cost-target"></div>
                                 </div>
                             </div>
-                            <div class="col-md-3 mb-3 mb-md-0">
-                                <label class="section-label">RM Cost Based On</label>
-                                <div class="rm-cost-target"></div>
+                        </div>
+
+                        <div class="mb-3 d-flex justify-content-between align-items-center" style="border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
+                            <label class="section-label m-0">Production Workflow</label>
+                            <span class="text-muted small">Add stages to define the process</span>
+                        </div>
+
+                        <div class="sequence-bar d-flex align-items-center mb-5">
+                            <span class="mr-4 font-weight-bold small text-muted">Add Stage:</span>
+                            <div class="d-flex gap-3">
+                                <button class="op-pill pill-yarn btn-add-op" data-type="yarn_processing">
+                                    <i class="fa fa-archive" style="color: var(--yarn-accent)"></i> Yarn Processing
+                                </button>
+                                <button class="op-pill pill-knit btn-add-op" data-type="knitting">
+                                    <i class="fa fa-th" style="color: var(--knit-accent)"></i> Knitting
+                                </button>
+                                <button class="op-pill pill-dye btn-add-op" data-type="dyeing">
+                                    <i class="fa fa-tint" style="color: var(--dye-accent)"></i> Dyeing
+                                </button>
                             </div>
                         </div>
-                    </div>
 
-                    <div class="mb-3 d-flex justify-content-between align-items-center" style="border-bottom: 1px solid var(--border-color); padding-bottom: 10px;">
-                        <label class="section-label m-0">Production Workflow</label>
-                        <span class="text-muted small">Add stages to define the process</span>
+                        <div class="workflow-stack d-flex flex-column align-items-center mb-5"></div>
                     </div>
-
-                    <div class="sequence-bar d-flex align-items-center mb-5">
-                        <span class="mr-4 font-weight-bold small text-muted">Add Stage:</span>
-                        <div class="d-flex gap-3">
-                            <button class="op-pill pill-yarn btn-add-op" data-type="yarn_processing">
-                                <i class="fa fa-archive" style="color: var(--yarn-accent)"></i> Yarn Processing
-                            </button>
-                            <button class="op-pill pill-knit btn-add-op" data-type="knitting">
-                                <i class="fa fa-th" style="color: var(--knit-accent)"></i> Knitting
-                            </button>
-                            <button class="op-pill pill-dye btn-add-op" data-type="dyeing">
-                                <i class="fa fa-tint" style="color: var(--dye-accent)"></i> Dyeing
-                            </button>
-                        </div>
-                    </div>
-
-                    <div class="workflow-stack d-flex flex-column align-items-center mb-5"></div>
+                    ${cart_panel_html}
                 </div>
             `;
 
             this.body.html(html);
 
-            // Primary action
-            this.page.set_primary_action('Generate BOMs', () => this.create_bom(), 'fa fa-magic');
+            // Primary action depends on mode
+            if (this.cart_mode) {
+                this.page.set_primary_action('Add to Cart', () => this.add_to_cart(), 'fa fa-cart-plus');
+                this.page.set_secondary_action('Generate BOMs only', () => this.create_bom(), 'fa fa-magic');
+            } else {
+                this.page.set_primary_action('Generate BOMs', () => this.create_bom(), 'fa fa-magic');
+            }
+
+            if (this.cart_mode) {
+                this.render_cart();
+                // Bind "Create Voucher" button
+                this.body.on('click', '.btn-create-voucher', () => this.show_create_voucher_dialog());
+                // Bind cart item remove buttons (delegated)
+                this.body.on('click', '.bom-cart-remove', (e) => {
+                    const item_code = $(e.currentTarget).data('item-code');
+                    this.cart.removeItem(item_code);
+                    this.render_cart();
+                });
+            }
 
             // Initialize Final Good Link Control
             const $fg_target = this.wrapper.find('.fg-selector-target');
@@ -269,6 +347,8 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                             }
                         },
                         parent: $fg_target[0],
+                        only_input: true,
+                        with_link_btn: true,
                         render_input: true
                     });
 
@@ -443,17 +523,13 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
 
             if (!has_dyeing) {
                 let fg = this.fg_item_select ? this.fg_item_select.get_value() : '';
-                let display = fg;
-                if (fg && this.fg_item_name) {
-                    display = `${fg} : ${this.fg_item_name}`;
-                }
-                $card.find('.output-item-name').text(display || 'Select Final Good...');
+                $card.find('.output-item-name').html(this.render_item_link(fg, this.fg_item_name, 'Select Final Good...'));
             } else {
                 let sfg_ctrl = $card.data('sfg_control');
                 if (sfg_ctrl && sfg_ctrl.get_value()) {
                     this.sync_output_display($card);
                 } else {
-                    $card.find('.output-item-name').text('Select SFG...');
+                    $card.find('.output-item-name').html(`<span class="text-muted">Select SFG...</span>`);
                 }
             }
         }
@@ -548,7 +624,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                     <div>
                                         <label class="small text-muted mb-2">Process Loss (%)</label>
                                         <div class="unit-input-group">
-                                            <input type="number" class="form-control form-control-sm input-loss" value="2">
+                                            <input type="number" class="form-control form-control-sm input-loss" value="${is_knit ? '1.5' : '2'}">
                                             <span class="unit-label">%</span>
                                         </div>
                                     </div>
@@ -615,12 +691,13 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                     }
                                 },
                                 parent: target[0],
+                                only_input: true,
+                                with_link_btn: true,
                                 render_input: true
                             });
                             if (ctrl) {
                                 ctrl.make();
                                 ctrl.refresh();
-
                                 $card.data('sfg_control', ctrl);
                             }
                         } catch (e) {
@@ -698,12 +775,13 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                                 placeholder: 'Input Item'
                             },
                             parent: target[0],
+                            only_input: true,
+                            with_link_btn: true,
                             render_input: true
                         });
                         if (ctrl) {
                             ctrl.make();
                             ctrl.refresh();
-
                             $row.data('control', ctrl);
                             if (is_dye) this.sync_dyeing();
                         }
@@ -733,14 +811,17 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
             this.calculate_quantities();
         }
 
+        render_item_link(item, name, placeholder) {
+            if (!item) return `<span class="text-muted">${placeholder}</span>`;
+            let label = name ? `${item} : ${name}` : item;
+            let url = `/app/item/${encodeURIComponent(item)}`;
+            return `<a href="${url}" target="_blank" style="color: inherit; text-decoration: underline; text-underline-offset: 2px;" onclick="event.stopPropagation();">${label}</a>`;
+        }
+
         sync_output_display($card) {
             let item = $card.find('.sfg-output-target .form-control').val();
             let name = $card.data('item_name');
-            let display = item;
-            if (item && name) {
-                display = `${item} : ${name}`;
-            }
-            $card.find('.output-item-name').text(display || 'Select SFG...');
+            $card.find('.output-item-name').html(this.render_item_link(item, name, 'Select SFG...'));
         }
 
         sync_all_knitting_outputs() {
@@ -759,11 +840,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
 
             // 1. Sync Output (always Final Good)
             let fg = this.fg_item_select ? this.fg_item_select.get_value() : '';
-            let display = fg;
-            if (fg && this.fg_item_name) {
-                display = `${fg} : ${this.fg_item_name}`;
-            }
-            $dye_card.find('.output-item-name').text(display || 'Select Final Good...');
+            $dye_card.find('.output-item-name').html(this.render_item_link(fg, this.fg_item_name, 'Select Final Good...'));
 
             // 2. Sync Input (from Knitting Output)
             let knitting_op = this.operations.find(o => o.type === 'knitting');
@@ -918,14 +995,18 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                 let $card = this.operations[i].$el;
                 let loss = flt($card.find('.input-loss').val());
 
-                $card.find('.output-qty-display').removeClass('d-none').find('.val').text(flt(current_output_qty, this.PRECISION));
+                $card.find('.output-qty-display').removeClass('d-none').find('.val')
+                    .text(flt(current_output_qty, this.PRECISION))
+                    .attr('data-full-precision', current_output_qty);
 
                 let total_input_for_op = 0;
                 $card.find('.input-row-mini').each((_, el) => {
                     let $row = $(el);
                     let mix = flt($row.find('.input-mix').val());
                     let row_qty = (current_output_qty * (mix / 100)) / (1 - (loss / 100));
-                    $row.find('.row-qty-display').removeClass('d-none').find('.val').text(flt(row_qty, this.PRECISION));
+                    $row.find('.row-qty-display').removeClass('d-none').find('.val')
+                        .text(flt(row_qty, this.PRECISION))
+                        .attr('data-full-precision', row_qty);
                     total_input_for_op += row_qty;
                 });
 
@@ -1037,7 +1118,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                     job_work_direction: jw_direction,
                     loss_percent: flt($card.find('.input-loss').val()),
                     output_item: this.get_operation_output_item(type, $card, data.final_good, sfg_ctrl),
-                    output_qty: flt($card.find('.output-qty-display .val').text()),
+                    output_qty: flt($card.find('.output-qty-display .val').attr('data-full-precision')),
                     workstation_type: this.get_workstation_type(type, is_job_work),
                     inputs: []
                 };
@@ -1049,7 +1130,7 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
                     let inp = {
                         item: ctrl ? ctrl.get_value() : $row.find('.item-link-target .form-control').val(),
                         mix: flt($row.find('.input-mix').val()),
-                        qty: flt($row.find('.row-qty-display .val').text()),
+                        qty: flt($row.find('.row-qty-display .val').attr('data-full-precision')),
                     };
 
                     // Collect per-RM flags
@@ -1068,6 +1149,218 @@ frappe.pages['bom_designer'].on_page_load = function (wrapper) {
 
             return data;
         }
+
+        // ─── Cart Methods ────────────────────────────────────────
+
+        render_cart() {
+            const items = this.cart.getItems();
+            const count = items.length;
+
+            this.body.find('.bom-cart-count').text(count);
+            const $btn = this.body.find('.btn-create-voucher');
+            $btn.prop('disabled', count === 0);
+
+            const $container = this.body.find('.bom-cart-items');
+            if (count === 0) {
+                $container.html('<div class="bom-cart-empty">No items yet.<br>Configure a BOM and click "Add to Cart".</div>');
+                return;
+            }
+
+            const cards = items.map(item => {
+                const op_badges = (item.operations_summary || [])
+                    .map(op => `<span class="bom-cart-op-badge">${op}</span>`)
+                    .join('');
+                const sc_badge = item.has_subcontracting_bom
+                    ? '<span class="bom-cart-sc-badge">JW</span>'
+                    : '';
+                return `
+                    <div class="bom-cart-item-card">
+                        <div class="bom-cart-item-header">
+                            <span class="bom-cart-item-name" title="${item.item_code}">${item.item_name || item.item_code}</span>
+                            <button class="bom-cart-remove btn btn-xs btn-link text-danger" data-item-code="${item.item_code}" title="Remove">
+                                <i class="fa fa-times"></i>
+                            </button>
+                        </div>
+                        <div class="bom-cart-item-meta">
+                            <span class="text-muted">${item.qty} Kg</span>
+                            ${sc_badge}
+                        </div>
+                        <div class="bom-cart-item-ops">${op_badges}</div>
+                        <div class="bom-cart-item-bom text-muted">${item.bom_no || ''}</div>
+                    </div>
+                `;
+            }).join('');
+
+            $container.html(cards);
+        }
+
+        add_to_cart() {
+            let data = this.get_data();
+            data.sales_order_item = this.sales_order_item;
+
+            if (!data.final_good) {
+                frappe.msgprint(__('Please select a Final Good'));
+                return;
+            }
+            if (!data.operations.length) {
+                frappe.msgprint(__('Please add at least one stage'));
+                return;
+            }
+            if (!this.validate_data(data)) {
+                return;
+            }
+
+            const do_add = () => {
+                frappe.call({
+                    method: 'kniterp.api.bom_tool.create_multilevel_bom',
+                    args: { data: data },
+                    freeze: true,
+                    freeze_message: __('Creating BOMs...'),
+                    callback: (r) => {
+                        if (!r.message) return;
+
+                        // Build operations summary for display
+                        const ops_summary = data.operations.map(op => {
+                            let label = frappe.unscrub(op.type);
+                            if (op.is_job_work) {
+                                label += op.job_work_direction === 'inward' ? ' (JW In)' : ' (JW Out)';
+                            } else {
+                                label += ' (In-house)';
+                            }
+                            return label;
+                        });
+
+                        const cart_item = {
+                            item_code: data.final_good,
+                            item_name: this.fg_item_name || data.final_good,
+                            qty: data.final_qty,
+                            bom_no: r.message.name,
+                            operations_summary: ops_summary,
+                            has_subcontracting_bom: !!r.message.has_subcontracting_bom,
+                        };
+
+                        this.cart.addItem(cart_item);
+                        this.render_cart();
+
+                        frappe.show_alert({
+                            message: __(`{0} added to cart`, [cart_item.item_name || cart_item.item_code]),
+                            indicator: 'green'
+                        });
+
+                        this.reset_workspace();
+                    }
+                });
+            };
+
+            if (this.cart.hasItem(data.final_good)) {
+                frappe.confirm(
+                    __(`{0} is already in cart. Replace it with this new BOM?`, [data.final_good]),
+                    do_add
+                );
+            } else {
+                do_add();
+            }
+        }
+
+        reset_workspace() {
+            // Clear Final Good
+            if (this.fg_item_select) {
+                this.fg_item_select.set_value('');
+            }
+            this.fg_item_name = '';
+            this.bom_no = null;
+            this.bom_prompt_shown = false;
+            this.last_checked_item = null;
+            this.is_populating = false;
+
+            // Reset quantity
+            this.body.find('.final-qty').val(100);
+
+            // Remove all operations
+            this.operations = [];
+            this.body.find('.workflow-stack').empty();
+
+            // Focus Final Good input
+            setTimeout(() => {
+                if (this.fg_item_select && this.fg_item_select.$input) {
+                    this.fg_item_select.$input.focus();
+                }
+            }, 100);
+        }
+
+        show_create_voucher_dialog() {
+            const items = this.cart.getItems();
+            if (!items.length) return;
+
+            // Voucher types we support from cart
+            const voucher_types = [
+                { type: 'job-work-out', label: 'Job Work Out', icon: 'fa-sign-out', color: '#d35400', requires_scbom: true },
+                { type: 'job-work-in', label: 'Job Work In', icon: 'fa-sign-in', color: '#16a085', requires_scbom: true },
+                { type: 'sales-order', label: 'Sales Order', icon: 'fa-file-text', color: '#2490ef', requires_scbom: false },
+                { type: 'purchase-order', label: 'Purchase Order', icon: 'fa-shopping-cart', color: '#ff5858', requires_scbom: false },
+            ];
+
+            const type_cards_html = voucher_types.map(vt => `
+                <div class="bom-cart-voucher-type-card" data-type="${vt.type}" style="cursor:pointer; border: 2px solid var(--border-color); border-radius: 8px; padding: 16px; text-align: center; transition: border-color 0.2s;">
+                    <i class="fa ${vt.icon} fa-2x mb-2" style="color: ${vt.color}"></i>
+                    <div class="font-weight-bold">${__(vt.label)}</div>
+                </div>
+            `).join('');
+
+            const d = new frappe.ui.Dialog({
+                title: __('Select Voucher Type'),
+                fields: [{
+                    fieldtype: 'HTML',
+                    fieldname: 'type_selector',
+                    options: `
+                        <div class="mb-3 text-muted small">${items.length} item(s) will be pre-loaded</div>
+                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                            ${type_cards_html}
+                        </div>
+                    `,
+                }],
+            });
+
+            d.show();
+
+            // Handle card clicks
+            d.$wrapper.find('.bom-cart-voucher-type-card').on('click', (e) => {
+                const selected_type = $(e.currentTarget).data('type');
+                const vt_config = voucher_types.find(v => v.type === selected_type);
+
+                d.hide();
+
+                // Validate for job work types
+                if (vt_config.requires_scbom) {
+                    const missing = items.filter(i => !i.has_subcontracting_bom).map(i => i.item_name || i.item_code);
+                    if (missing.length) {
+                        frappe.msgprint({
+                            title: __('Subcontracting BOM Required'),
+                            indicator: 'red',
+                            message: __(
+                                'The following items have no outward Job Work operation and cannot be added to a Job Work order. Please go back and add a job work stage (Dyeing or Yarn Processing) for each:<br><ul>{0}</ul>',
+                                ['<li>' + missing.join('</li><li>') + '</li>']
+                            ),
+                        });
+                        return;
+                    }
+                }
+
+                // Store cart data for Transaction Desk to read
+                sessionStorage.setItem('kniterp_bom_cart_voucher_type', selected_type);
+
+                frappe.set_route('transaction-desk', { type: selected_type, from_bom_cart: true });
+            });
+
+            // Hover effect
+            d.$wrapper.find('.bom-cart-voucher-type-card').on('mouseenter', function () {
+                $(this).css('border-color', 'var(--primary)');
+            }).on('mouseleave', function () {
+                $(this).css('border-color', 'var(--border-color)');
+            });
+        }
+
+        // ─── BOM Creation (original flow) ───────────────────────
 
         create_bom() {
             let data = this.get_data();

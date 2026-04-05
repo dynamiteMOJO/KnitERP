@@ -125,6 +125,7 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
                 options: ac_lists.modifier,
                 onchange() { _update_preview(dialog); }
             },
+            { fieldtype: "HTML", fieldname: "modifier2_edit_btn" },
 
             { fieldtype: "Section Break", fieldname: "structure_section" },
             {
@@ -143,6 +144,7 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
                 options: ac_lists.lycra,
                 onchange() { _update_preview(dialog); }
             },
+            { fieldtype: "HTML", fieldname: "lycra_edit_btn" },
 
             { fieldtype: "Section Break", fieldname: "state_section" },
             {
@@ -152,6 +154,7 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
                 options: ac_lists.state,
                 onchange() { _update_preview(dialog); }
             },
+            { fieldtype: "HTML", fieldname: "state_edit_btn" },
             { fieldtype: "Column Break" },
             // empty col for layout balance
             { fieldtype: "HTML", fieldname: "state_spacer" },
@@ -215,6 +218,9 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
     // Add "+ Add New" buttons
     _setup_add_new_buttons(dialog, options);
 
+    // Add "✏️ Edit" buttons (visible only when a value is selected)
+    _setup_edit_buttons(dialog);
+
     // Set initial field visibility
     _toggle_fields(dialog);
 
@@ -228,6 +234,9 @@ function _show_composer_dialog(options, on_select, prefill, initial_classificati
     if (prefill.structure) dialog.set_value("structure", prefill.structure);
     if (prefill.state) dialog.set_value("state", prefill.state);
     if (prefill.lycra) dialog.set_value("lycra", prefill.lycra);
+
+    // Show edit buttons for any pre-filled slots (set_value is async via frappe.run_serially)
+    setTimeout(() => _update_edit_buttons_visibility(dialog), 0);
 
     // Auto Quick Fill if text was provided (e.g., from Link field)
     if (quick_fill_text) {
@@ -337,13 +346,138 @@ function _do_quick_fill(dialog) {
                 // Bind click handlers for unresolved token buttons
                 result_wrapper.find(".kniterp-add-unresolved").on("click", function () {
                     const token_text = $(this).data("token");
-                    _open_add_token_from_quick_fill(token_text, dialog);
+                    _show_unresolved_token_choice(token_text, dialog);
                 });
             }
 
             _update_preview(dialog);
+            // field.value is set inside frappe.run_serially (Promise microtasks).
+            // setTimeout(0) runs after the microtask queue drains, so field.value is ready.
+            setTimeout(() => _update_edit_buttons_visibility(dialog), 0);
         }
     });
+}
+
+
+function _show_unresolved_token_choice(token_text, parent_dialog) {
+    const choice_dialog = new frappe.ui.Dialog({
+        title: __('"{0}" — not recognized', [token_text]),
+        fields: [
+            {
+                fieldtype: "HTML",
+                fieldname: "choice_buttons",
+            },
+        ],
+        minimizable: false,
+    });
+
+    const wrapper = choice_dialog.get_field("choice_buttons").$wrapper;
+    wrapper.html(`
+        <p class="text-muted">
+            ${__("What would you like to do with")} "<strong>${frappe.utils.escape_html(token_text)}</strong>"?
+        </p>
+        <div class="d-flex flex-column" style="gap: 10px;">
+            <button class="btn btn-primary btn-sm kniterp-choice-alias">
+                <i class="fa fa-link"></i>
+                ${__("Add as alias of existing token")}
+            </button>
+            <button class="btn btn-default btn-sm kniterp-choice-new">
+                <i class="fa fa-plus"></i>
+                ${__("Create new token")}
+            </button>
+        </div>
+    `);
+
+    wrapper.find(".kniterp-choice-alias").on("click", function () {
+        choice_dialog.hide();
+        _open_add_alias_dialog(token_text, parent_dialog);
+    });
+
+    wrapper.find(".kniterp-choice-new").on("click", function () {
+        choice_dialog.hide();
+        _open_add_token_from_quick_fill(token_text, parent_dialog);
+    });
+
+    choice_dialog.show();
+}
+
+
+function _open_add_alias_dialog(token_text, parent_dialog) {
+    const options = parent_dialog._composer_options || {};
+
+    // Build flat list of all tokens: "Cotton (fiber)", "30's (count)", etc.
+    const token_list = [];
+    for (const [dim, tokens] of Object.entries(options)) {
+        (tokens || []).forEach(t => {
+            token_list.push({
+                label: `${t.canonical} (${dim})`,
+                canonical: t.canonical,
+                dimension: dim,
+            });
+        });
+    }
+
+    const alias_dialog = new frappe.ui.Dialog({
+        title: __('Add "{0}" as alias', [token_text]),
+        fields: [
+            {
+                fieldtype: "Data",
+                fieldname: "alias_text",
+                label: __("Alias"),
+                read_only: 1,
+                default: token_text,
+            },
+            {
+                fieldtype: "Autocomplete",
+                fieldname: "target_token",
+                label: __("Add as alias of"),
+                reqd: 1,
+                options: token_list.map(t => t.label),
+                description: __("Start typing to search existing tokens"),
+            },
+        ],
+        primary_action_label: __("Add Alias"),
+        primary_action(values) {
+            const selected = token_list.find(t => t.label === values.target_token);
+            if (!selected) {
+                frappe.msgprint(__("Please select a valid token"));
+                return;
+            }
+
+            frappe.call({
+                method: "kniterp.api.item_composer.add_alias_to_existing_token",
+                args: {
+                    alias: token_text,
+                    canonical: selected.canonical,
+                },
+                freeze: true,
+                callback(r) {
+                    if (r.message) {
+                        frappe.show_alert({
+                            message: __('"{0}" added as alias of {1}', [token_text, r.message.canonical]),
+                            indicator: "green",
+                        });
+                        alias_dialog.hide();
+
+                        // Re-fetch options then re-run Quick Fill to resolve the slot
+                        frappe.call({
+                            method: "kniterp.api.item_composer.get_composer_options",
+                            callback(r2) {
+                                parent_dialog._composer_options = r2.message || {};
+                                for (const dim of ["count", "fiber", "modifier", "structure", "lycra", "state"]) {
+                                    parent_dialog._ac_lists[dim] = (parent_dialog._composer_options[dim] || []).map(t => t.canonical);
+                                }
+                                _setup_alias_autocomplete(parent_dialog, parent_dialog._composer_options);
+                                _do_quick_fill(parent_dialog);
+                            }
+                        });
+                    }
+                },
+            });
+        },
+    });
+
+    alias_dialog.show();
 }
 
 
@@ -477,13 +611,13 @@ function _toggle_fields(dialog) {
     const textile_fields = [
         "textile_section", "count", "count_add_btn",
         "fiber", "fiber_add_btn",
-        "modifier1", "modifier_add_btn", "modifier2",
-        "state_section", "state", "state_spacer",
+        "modifier1", "modifier_add_btn", "modifier2", "modifier2_edit_btn",
+        "state_section", "state", "state_edit_btn", "state_spacer",
     ];
 
     // Structure fields (hidden for Yarn)
     const structure_fields = [
-        "structure_section", "structure", "structure_add_btn", "lycra",
+        "structure_section", "structure", "structure_add_btn", "lycra", "lycra_edit_btn",
     ];
 
     // Other fields
@@ -814,7 +948,10 @@ function _setup_add_new_buttons(dialog, options) {
         { field: "count_add_btn", dimension: "count", label: "Count" },
         { field: "fiber_add_btn", dimension: "fiber", label: "Fiber" },
         { field: "modifier_add_btn", dimension: "modifier", label: "Modifier" },
+        { field: "modifier2_edit_btn", dimension: "modifier", label: "Modifier" },
         { field: "structure_add_btn", dimension: "structure", label: "Structure" },
+        { field: "lycra_edit_btn", dimension: "lycra", label: "Lycra / Denier" },
+        { field: "state_edit_btn", dimension: "state", label: "State / Finish" },
     ];
 
     dims.forEach(({ field, dimension, label }) => {
@@ -890,7 +1027,7 @@ function _open_add_token_dialog(dimension, label, parent_dialog, options) {
 }
 
 
-function _refresh_autocomplete(dialog, dimension, new_value) {
+function _refresh_autocomplete(dialog, dimension, new_value, old_value = null) {
     const field_map = {
         count: ["count"],
         fiber: ["fiber"],
@@ -916,7 +1053,11 @@ function _refresh_autocomplete(dialog, dimension, new_value) {
                 if (field && field.awesomplete) {
                     const current = dialog.get_value(fname);
                     field.set_data(dim_opts);
-                    if (!current && fname === fields[0]) {
+                    if (old_value && current === old_value) {
+                        // Field held the renamed token — update to new canonical
+                        dialog.set_value(fname, new_value);
+                    } else if (!current && fname === fields[0]) {
+                        // Empty field (add-new flow) — auto-select the new token
                         dialog.set_value(fname, new_value);
                     } else {
                         dialog.set_value(fname, current);
@@ -926,9 +1067,197 @@ function _refresh_autocomplete(dialog, dimension, new_value) {
 
             // Re-setup alias matching
             _setup_alias_autocomplete(dialog, new_options);
+            // Update edit button visibility after values may have changed
+            setTimeout(() => _update_edit_buttons_visibility(dialog), 0);
             _update_preview(dialog);
         }
     });
+}
+
+
+// ──────────────────────────────────────────────
+// EDIT BUTTONS — show/hide based on field value
+// ──────────────────────────────────────────────
+function _update_edit_buttons_visibility(dialog) {
+    const field_to_slot = {
+        count:     "count_add_btn",
+        fiber:     "fiber_add_btn",
+        modifier1: "modifier_add_btn",
+        structure: "structure_add_btn",
+        modifier2: "modifier2_edit_btn",
+        lycra:     "lycra_edit_btn",
+        state:     "state_edit_btn",
+    };
+
+    for (const [fname, slot_name] of Object.entries(field_to_slot)) {
+        const val = dialog.fields_dict[fname]?.value;
+        const slot_wrapper = dialog.get_field(slot_name)?.$wrapper;
+        if (slot_wrapper) {
+            slot_wrapper.find(".kniterp-edit-token-btn").toggle(!!val);
+        }
+    }
+}
+
+
+function _setup_edit_buttons(dialog) {
+    const all_configs = [
+        // Shared slots: edit button appended alongside existing "Add New"
+        { ac_field: "count",     slot_field: "count_add_btn",     dimension: "count" },
+        { ac_field: "fiber",     slot_field: "fiber_add_btn",     dimension: "fiber" },
+        { ac_field: "modifier1", slot_field: "modifier_add_btn",  dimension: "modifier" },
+        { ac_field: "structure", slot_field: "structure_add_btn", dimension: "structure" },
+        // Dedicated edit-only slots
+        { ac_field: "modifier2", slot_field: "modifier2_edit_btn", dimension: "modifier" },
+        { ac_field: "lycra",     slot_field: "lycra_edit_btn",     dimension: "lycra" },
+        { ac_field: "state",     slot_field: "state_edit_btn",     dimension: "state" },
+    ];
+
+    all_configs.forEach(({ ac_field, slot_field, dimension }) => {
+        const slot_wrapper = dialog.get_field(slot_field)?.$wrapper;
+        if (!slot_wrapper) return;
+
+        const $edit_btn = $(`
+            <button class="btn btn-xs btn-default mt-1 ml-1 kniterp-edit-token-btn"
+                    style="display:none;">
+                <i class="fa fa-pencil"></i> ${__("Edit")}
+            </button>
+        `);
+        slot_wrapper.append($edit_btn);
+
+        const ac_field_obj = dialog.fields_dict[ac_field];
+        if (!ac_field_obj || !ac_field_obj.$input) return;
+
+        // Show/hide after dropdown selection (delay for Frappe to update its value)
+        ac_field_obj.$input.on("awesomplete-selectcomplete", function () {
+            setTimeout(() => _update_edit_buttons_visibility(dialog), 100);
+        });
+
+        // Hide immediately when field is cleared by typing
+        ac_field_obj.$input.on("input", function () {
+            slot_wrapper.find(".kniterp-edit-token-btn").toggle(!!this.value);
+        });
+
+        $edit_btn.on("click", function () {
+            const canonical = dialog.get_value(ac_field);
+            if (!canonical) return;
+            _open_edit_token_dialog(canonical, dimension, dialog);
+        });
+    });
+}
+
+
+// ──────────────────────────────────────────────
+// EDIT TOKEN DIALOG
+// ──────────────────────────────────────────────
+function _open_edit_token_dialog(canonical, dimension, parent_dialog) {
+    const options = parent_dialog._composer_options || {};
+    const dim_tokens = options[dimension] || [];
+    const token = dim_tokens.find(t => t.canonical === canonical);
+
+    if (!token) {
+        frappe.show_alert({
+            message: __("Token data not found — please reopen the composer"),
+            indicator: "red"
+        });
+        return;
+    }
+
+    const current_aliases = (token.aliases || []).join(", ");
+
+    const edit_dialog = new frappe.ui.Dialog({
+        title: __("Edit Token: {0}", [canonical]),
+        size: "small",
+        fields: [
+            {
+                fieldtype: "Data",
+                fieldname: "dimension",
+                label: __("Dimension"),
+                read_only: 1,
+                default: dimension,
+            },
+            {
+                fieldtype: "Data",
+                fieldname: "canonical",
+                label: __("Display Name"),
+                reqd: 1,
+                default: canonical,
+                description: __("The name shown in dropdowns and used in item names"),
+            },
+            {
+                fieldtype: "Data",
+                fieldname: "short_code",
+                label: __("Short Code"),
+                reqd: 1,
+                default: token.short_code,
+                description: __("Used in item codes (e.g. CTN, SJ). Must be unique within this dimension."),
+            },
+            {
+                fieldtype: "Small Text",
+                fieldname: "aliases",
+                label: __("Aliases"),
+                default: current_aliases,
+                description: __("Comma-separated. Used for quick-fill and search matching."),
+            },
+            {
+                fieldtype: "HTML",
+                fieldname: "rename_warning",
+            },
+        ],
+        primary_action_label: __("Save Changes"),
+        primary_action(values) {
+            frappe.call({
+                method: "kniterp.api.item_composer.update_item_token",
+                args: {
+                    canonical: canonical,
+                    new_canonical: values.canonical,
+                    new_short_code: values.short_code,
+                    new_aliases: values.aliases || "",
+                },
+                freeze: true,
+                freeze_message: __("Saving..."),
+                callback(r) {
+                    if (r.message) {
+                        frappe.show_alert({
+                            message: __("Token updated: {0}", [r.message.canonical]),
+                            indicator: "green"
+                        });
+                        edit_dialog.hide();
+                        _refresh_autocomplete(
+                            parent_dialog,
+                            dimension,
+                            r.message.canonical,
+                            canonical  // old_value: for rename case
+                        );
+                    }
+                }
+            });
+        },
+    });
+
+    edit_dialog.show();
+
+    // Show rename warning when user edits the canonical field
+    const canonical_field = edit_dialog.fields_dict.canonical;
+    if (canonical_field && canonical_field.$input) {
+        canonical_field.$input.on("input", function () {
+            const new_val = $(this).val();
+            const warning_wrapper = edit_dialog.get_field("rename_warning")?.$wrapper;
+            if (!warning_wrapper) return;
+            if (new_val !== canonical) {
+                warning_wrapper.html(`
+                    <div class="alert alert-warning mt-2 p-2 text-small">
+                        <i class="fa fa-exclamation-triangle"></i>
+                        <strong>${__("Renaming display name")}</strong> —
+                        ${__("existing item names will not update. Run")}
+                        <code>bench export-fixtures</code>
+                        ${__("after saving to keep fixtures in sync.")}
+                    </div>
+                `);
+            } else {
+                warning_wrapper.html("");
+            }
+        });
+    }
 }
 
 

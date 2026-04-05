@@ -15,6 +15,11 @@
   "machine_extra_rate",
   "column_break_mfg1",
   "machine_min_production_kg",
+  "production_defaults_section",
+  "default_dyeing_machine",
+  "default_dyeing_warehouse",
+  "column_break_prod1",
+  "default_knitting_machine",
   "item_settings_section",
   "cp_item_suffix"
  ],
@@ -87,6 +92,36 @@
    "description": "Minimum production in Kg to count a machine as active for extra pay"
   },
   {
+   "fieldname": "production_defaults_section",
+   "fieldtype": "Section Break",
+   "label": "Production Defaults"
+  },
+  {
+   "fieldname": "default_dyeing_machine",
+   "fieldtype": "Link",
+   "label": "Default Dyeing Machine",
+   "options": "Workstation",
+   "description": "Machine auto-filled for Dyeing operations when starting a Work Order"
+  },
+  {
+   "fieldname": "default_dyeing_warehouse",
+   "fieldtype": "Link",
+   "label": "Default Dyeing WIP Warehouse",
+   "options": "Warehouse",
+   "description": "WIP warehouse auto-filled for Dyeing operations when starting a Work Order"
+  },
+  {
+   "fieldname": "column_break_prod1",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "default_knitting_machine",
+   "fieldtype": "Link",
+   "label": "Default Knitting Machine",
+   "options": "Workstation",
+   "description": "Machine auto-filled for Knitting operations when starting a Work Order"
+  },
+  {
    "fieldname": "item_settings_section",
    "fieldtype": "Section Break",
    "label": "Item Settings"
@@ -102,7 +137,7 @@
  "index_web_pages_for_search": 0,
  "issingle": 1,
  "links": [],
- "modified": "2026-03-13 00:00:00.000000",
+ "modified": "2026-03-26 00:00:00.000000",
  "modified_by": "Administrator",
  "module": "Kniterp",
  "name": "KnitERP Settings",

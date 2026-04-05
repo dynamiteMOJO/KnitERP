@@ -7,6 +7,9 @@ from frappe.utils import cint
 # Type classification helpers
 # ──────────────────────────────────────────────────────────────
 
+TRANSPORT_FIELDS = ('transporter', 'transporter_name', 'gst_transporter_id',
+                    'vehicle_no', 'lr_no', 'lr_date', 'distance')
+
 SALES_TYPES = ("sales-order", "sales-invoice", "delivery-note", "credit-note", "job-work-in")
 PURCHASE_TYPES = ("purchase-order", "purchase-invoice", "purchase-receipt", "debit-note", "job-work-out")
 ITEM_TYPES = SALES_TYPES + PURCHASE_TYPES + ("stock-entry",)
@@ -277,8 +280,7 @@ def get_party_tax_template(voucher_type, party, company=None):
 
 @frappe.whitelist()
 def get_recent_transactions(voucher_type: str = None, limit: int = 10) -> list:
-    """Return recent transactions created by the current user."""
-    user = frappe.session.user
+    """Return recent transactions visible to the current user."""
     limit = min(int(limit), 50)
 
     type_map = {
@@ -300,7 +302,7 @@ def get_recent_transactions(voucher_type: str = None, limit: int = 10) -> list:
 
     if voucher_type and voucher_type in type_map:
         doctype = type_map[voucher_type]
-        filters = {"owner": user}
+        filters = {}
 
         if voucher_type == "payment-receive":
             filters["payment_type"] = "Receive"
@@ -384,6 +386,7 @@ def get_invoice_items_for_return(doctype: str, invoice_name: str) -> dict:
         result.update({
             "party": doc.customer or "",
             "customer_address": doc.customer_address or "",
+            "custom_shipping_party": doc.get("custom_shipping_party") or "",
             "shipping_address_name": doc.shipping_address_name or "",
             "po_no": doc.po_no or "",
             "po_date": str(doc.po_date) if doc.po_date else "",
@@ -403,6 +406,162 @@ def get_invoice_items_for_return(doctype: str, invoice_name: str) -> dict:
     result["apply_tds"] = cint(doc.get("apply_tds"))
 
     return result
+
+
+@frappe.whitelist()
+def get_cart_items_for_voucher(items_json: str, voucher_type: str) -> list:
+    """Map BOM cart items to Transaction Desk row data for the selected voucher type.
+
+    For job-work-out/in: resolves active Subcontracting BOMs to derive service items and quantities.
+    For sales-order: returns items with BOM references for Production Wizard.
+    For purchase-order: returns basic item details.
+    """
+    from erpnext.subcontracting.doctype.subcontracting_bom.subcontracting_bom import (
+        get_subcontracting_boms_for_finished_goods,
+    )
+
+    items = frappe.parse_json(items_json) if isinstance(items_json, str) else items_json
+    result = []
+
+    for item in items:
+        item_code = item.get("item_code")
+        qty = frappe.utils.flt(item.get("qty", 1))
+        bom_no = item.get("bom_no", "")
+        item_name = item.get("item_name") or frappe.db.get_value("Item", item_code, "item_name") or item_code
+        uom = frappe.db.get_value("Item", item_code, "stock_uom") or "Kg"
+
+        if voucher_type in ("job-work-out", "job-work-in"):
+            sc_boms = get_subcontracting_boms_for_finished_goods([item_code])
+            sc_bom = sc_boms.get(item_code) if sc_boms else None
+            if not sc_bom:
+                frappe.throw(
+                    _("No active Subcontracting BOM found for {0}. Please go back to BOM Designer and ensure a Job Work Out stage is configured.").format(item_code)
+                )
+            service_item_qty = frappe.utils.flt(sc_bom.get("service_item_qty", 1))
+            finished_good_qty = frappe.utils.flt(sc_bom.get("finished_good_qty", 1)) or 1
+            gross_qty = qty * service_item_qty / finished_good_qty
+
+            result.append({
+                "voucher_type": voucher_type,
+                "service_item": sc_bom.get("service_item"),
+                "fg_item": item_code,
+                "fg_item_name": item_name,
+                "fg_item_qty": qty,
+                "gross_qty": frappe.utils.flt(gross_qty, 3),
+                "bom": sc_bom.get("finished_good_bom") or bom_no,
+            })
+
+        elif voucher_type == "sales-order":
+            result.append({
+                "voucher_type": voucher_type,
+                "item_code": item_code,
+                "item_name": item_name,
+                "qty": qty,
+                "uom": uom,
+                "bom_no": bom_no,
+            })
+
+        else:  # purchase-order and others
+            result.append({
+                "voucher_type": voucher_type,
+                "item_code": item_code,
+                "item_name": item_name,
+                "qty": qty,
+                "uom": uom,
+            })
+
+    return result
+
+
+@frappe.whitelist()
+def get_subcontracting_bom_details(service_item: str = "", fg_item: str = "") -> dict:
+    """Look up Subcontracting BOM details for auto-fill in JW IN/OUT forms.
+
+    If fg_item is given: return BOM details (service_item, uom, ratios, bom).
+    If service_item only: return the single matching FG item (if unambiguous).
+    Returns {} when no BOM found rather than throwing (frontend uses this for conditional fill).
+    """
+    from erpnext.subcontracting.doctype.subcontracting_bom.subcontracting_bom import (
+        get_subcontracting_boms_for_finished_goods,
+    )
+
+    if fg_item:
+        boms = get_subcontracting_boms_for_finished_goods([fg_item])
+        sc_bom = boms.get(fg_item) if boms else None
+        if not sc_bom:
+            return {}
+        return {
+            "service_item": sc_bom.get("service_item"),
+            "fg_item": fg_item,
+            "fg_item_name": frappe.db.get_value("Item", fg_item, "item_name") or fg_item,
+            "service_item_uom": sc_bom.get("service_item_uom") or "Kg",
+            "conversion_factor": frappe.utils.flt(sc_bom.get("conversion_factor") or 1),
+            "finished_good_bom": sc_bom.get("finished_good_bom"),
+            "finished_good_qty": frappe.utils.flt(sc_bom.get("finished_good_qty") or 1),
+            "service_item_qty": frappe.utils.flt(sc_bom.get("service_item_qty") or 1),
+        }
+
+    if service_item:
+        # Find active Subcontracting BOMs where this item is the service item
+        sc_bom_rows = frappe.get_all(
+            "Subcontracting BOM",
+            filters={"service_item": service_item, "is_active": 1},
+            fields=["name", "service_item", "finished_good", "service_item_uom",
+                    "finished_good_bom", "finished_good_qty", "service_item_qty", "conversion_factor"],
+            limit=2,
+        )
+        if not sc_bom_rows:
+            return {}
+        # Only auto-fill when there is exactly one matching FG item
+        if len(sc_bom_rows) > 1:
+            return {"multiple": True}
+        sc_bom = sc_bom_rows[0]
+        fg = sc_bom.finished_good
+        return {
+            "service_item": service_item,
+            "fg_item": fg,
+            "fg_item_name": frappe.db.get_value("Item", fg, "item_name") or fg if fg else "",
+            "service_item_uom": sc_bom.service_item_uom or "Kg",
+            "conversion_factor": frappe.utils.flt(sc_bom.conversion_factor or 1),
+            "finished_good_bom": sc_bom.finished_good_bom,
+            "finished_good_qty": frappe.utils.flt(sc_bom.finished_good_qty or 1),
+            "service_item_qty": frappe.utils.flt(sc_bom.service_item_qty or 1),
+        }
+
+    return {}
+
+
+@frappe.whitelist()
+def search_fg_items_for_service(doctype, txt, searchfield=None, start=0, page_length=20,
+                                filters=None, as_dict=False, **kwargs):
+    """Search FG items eligible for a given service item via active Subcontracting BOMs.
+
+    Used as get_query for the FG Item link control in Job Work rows.
+    """
+    import json
+    from kniterp.api.item_search import smart_search
+
+    if isinstance(filters, str):
+        filters = json.loads(filters)
+    filters = filters or {}
+
+    service_item = filters.pop("service_item", "")
+
+    if service_item:
+        fg_items = frappe.get_all(
+            "Subcontracting BOM",
+            filters={"service_item": service_item, "is_active": 1},
+            pluck="finished_good",
+        )
+        if not fg_items:
+            return []
+        filters["name"] = ["in", fg_items]
+
+    return smart_search(
+        doctype=doctype, txt=txt, searchfield=searchfield,
+        start=start, page_length=page_length,
+        filters=filters, as_dict=as_dict, **kwargs
+    )
 
 
 # ──────────────────────────────────────────────────────────────
@@ -426,6 +585,10 @@ def _create_sales_order(data: dict):
             item_row["description"] = row["description"]
         if row.get("transaction_params"):
             item_row["custom_transaction_params_json"] = _json.dumps(row["transaction_params"])
+        if row.get("custom_knitting_charges"):
+            item_row["custom_knitting_charges"] = frappe.utils.flt(row["custom_knitting_charges"])
+        if row.get("bom_no"):
+            item_row["bom_no"] = row["bom_no"]
         items.append(item_row)
 
     if not items:
@@ -435,6 +598,7 @@ def _create_sales_order(data: dict):
         "doctype": "Sales Order",
         "customer": data["customer"],
         "customer_address": data.get("customer_address"),
+        "custom_shipping_party": data.get("custom_shipping_party") or "",
         "shipping_address_name": data.get("shipping_address_name"),
         "transaction_date": data.get("posting_date") or frappe.utils.today(),
         "delivery_date": data.get("delivery_date") or frappe.utils.add_days(frappe.utils.today(), 7),
@@ -482,6 +646,8 @@ def _create_purchase_order(data: dict):
         "supplier": data["supplier"],
         "supplier_address": data.get("supplier_address"),
         "billing_address": data.get("billing_address"),
+        "custom_deliver_to_customer": data.get("custom_deliver_to_customer") or "",
+        "custom_deliver_to_address": data.get("custom_deliver_to_address") or "",
         "shipping_address": data.get("shipping_address"),
         "transaction_date": data.get("posting_date") or frappe.utils.today(),
         "schedule_date": data.get("required_date") or frappe.utils.add_days(frappe.utils.today(), 14),
@@ -599,6 +765,12 @@ def _create_sales_invoice(data: dict):
             item_row["description"] = row["description"]
         if row.get("transaction_params"):
             item_row["custom_transaction_params_json"] = _json.dumps(row["transaction_params"])
+        if row.get("custom_no_of_pkgs"):
+            item_row["custom_no_of_pkgs"] = cint(row["custom_no_of_pkgs"])
+        if row.get("custom_kind_of_pkgs"):
+            item_row["custom_kind_of_pkgs"] = row["custom_kind_of_pkgs"]
+        if row.get("custom_kind_of_pkgs_other"):
+            item_row["custom_kind_of_pkgs_other"] = row["custom_kind_of_pkgs_other"]
         items.append(item_row)
 
     if not items:
@@ -608,6 +780,7 @@ def _create_sales_invoice(data: dict):
         "doctype": "Sales Invoice",
         "customer": data["customer"],
         "customer_address": data.get("customer_address"),
+        "custom_shipping_party": data.get("custom_shipping_party") or "",
         "shipping_address_name": data.get("shipping_address_name"),
         "posting_date": data.get("posting_date") or frappe.utils.today(),
         "due_date": data.get("due_date") or frappe.utils.add_days(frappe.utils.today(), 30),
@@ -645,6 +818,12 @@ def _create_purchase_invoice(data: dict):
             item_row["description"] = row["description"]
         if row.get("transaction_params"):
             item_row["custom_transaction_params_json"] = _json.dumps(row["transaction_params"])
+        if row.get("custom_no_of_pkgs"):
+            item_row["custom_no_of_pkgs"] = cint(row["custom_no_of_pkgs"])
+        if row.get("custom_kind_of_pkgs"):
+            item_row["custom_kind_of_pkgs"] = row["custom_kind_of_pkgs"]
+        if row.get("custom_kind_of_pkgs_other"):
+            item_row["custom_kind_of_pkgs_other"] = row["custom_kind_of_pkgs_other"]
         items.append(item_row)
 
     if not items:
@@ -692,6 +871,12 @@ def _create_delivery_note(data: dict):
             item_row["description"] = row["description"]
         if row.get("transaction_params"):
             item_row["custom_transaction_params_json"] = _json.dumps(row["transaction_params"])
+        if row.get("custom_no_of_pkgs"):
+            item_row["custom_no_of_pkgs"] = cint(row["custom_no_of_pkgs"])
+        if row.get("custom_kind_of_pkgs"):
+            item_row["custom_kind_of_pkgs"] = row["custom_kind_of_pkgs"]
+        if row.get("custom_kind_of_pkgs_other"):
+            item_row["custom_kind_of_pkgs_other"] = row["custom_kind_of_pkgs_other"]
         items.append(item_row)
 
     if not items:
@@ -701,6 +886,7 @@ def _create_delivery_note(data: dict):
         "doctype": "Delivery Note",
         "customer": data["customer"],
         "customer_address": data.get("customer_address"),
+        "custom_shipping_party": data.get("custom_shipping_party") or "",
         "shipping_address_name": data.get("shipping_address_name"),
         "posting_date": data.get("posting_date") or frappe.utils.today(),
         "company": data.get("company"),
@@ -716,6 +902,17 @@ def _create_delivery_note(data: dict):
         doc.set_taxes()
         doc.run_method("set_missing_values")
         doc.run_method("calculate_taxes_and_totals")
+
+    # Set transport/e-way bill fields
+    for field in TRANSPORT_FIELDS:
+        val = data.get(field)
+        if val:
+            doc.set(field, val)
+    if any(data.get(f) for f in TRANSPORT_FIELDS):
+        if not doc.get('mode_of_transport'):
+            doc.mode_of_transport = 'Road'
+        if not doc.get('gst_vehicle_type'):
+            doc.gst_vehicle_type = 'Regular'
 
     return doc
 
@@ -737,6 +934,12 @@ def _create_purchase_receipt(data: dict):
             item_row["description"] = row["description"]
         if row.get("transaction_params"):
             item_row["custom_transaction_params_json"] = _json.dumps(row["transaction_params"])
+        if row.get("custom_no_of_pkgs"):
+            item_row["custom_no_of_pkgs"] = cint(row["custom_no_of_pkgs"])
+        if row.get("custom_kind_of_pkgs"):
+            item_row["custom_kind_of_pkgs"] = row["custom_kind_of_pkgs"]
+        if row.get("custom_kind_of_pkgs_other"):
+            item_row["custom_kind_of_pkgs_other"] = row["custom_kind_of_pkgs_other"]
         items.append(item_row)
 
     if not items:
@@ -762,6 +965,17 @@ def _create_purchase_receipt(data: dict):
         doc.run_method("set_missing_values")
         doc.run_method("calculate_taxes_and_totals")
 
+    # Set transport/e-way bill fields
+    for field in TRANSPORT_FIELDS:
+        val = data.get(field)
+        if val:
+            doc.set(field, val)
+    if any(data.get(f) for f in TRANSPORT_FIELDS):
+        if not doc.get('mode_of_transport'):
+            doc.mode_of_transport = 'Road'
+        if not doc.get('gst_vehicle_type'):
+            doc.gst_vehicle_type = 'Regular'
+
     return doc
 
 
@@ -782,6 +996,12 @@ def _create_debit_note(data: dict):
             item_row["description"] = row["description"]
         if row.get("reference_row"):
             item_row["purchase_invoice_item"] = row["reference_row"]
+        if row.get("custom_no_of_pkgs"):
+            item_row["custom_no_of_pkgs"] = cint(row["custom_no_of_pkgs"])
+        if row.get("custom_kind_of_pkgs"):
+            item_row["custom_kind_of_pkgs"] = row["custom_kind_of_pkgs"]
+        if row.get("custom_kind_of_pkgs_other"):
+            item_row["custom_kind_of_pkgs_other"] = row["custom_kind_of_pkgs_other"]
         items.append(item_row)
 
     if not items:
@@ -839,6 +1059,12 @@ def _create_credit_note(data: dict):
             item_row["description"] = row["description"]
         if row.get("reference_row"):
             item_row["sales_invoice_item"] = row["reference_row"]
+        if row.get("custom_no_of_pkgs"):
+            item_row["custom_no_of_pkgs"] = cint(row["custom_no_of_pkgs"])
+        if row.get("custom_kind_of_pkgs"):
+            item_row["custom_kind_of_pkgs"] = row["custom_kind_of_pkgs"]
+        if row.get("custom_kind_of_pkgs_other"):
+            item_row["custom_kind_of_pkgs_other"] = row["custom_kind_of_pkgs_other"]
         items.append(item_row)
 
     if not items:
@@ -848,6 +1074,7 @@ def _create_credit_note(data: dict):
         "doctype": "Sales Invoice",
         "customer": data["customer"],
         "customer_address": data.get("customer_address"),
+        "custom_shipping_party": data.get("custom_shipping_party") or "",
         "shipping_address_name": data.get("shipping_address_name") or "",
         "posting_date": data.get("posting_date") or frappe.utils.today(),
         "company": data.get("company"),
@@ -891,6 +1118,12 @@ def _create_stock_entry(data: dict):
             item_row["uom"] = row["uom"]
         if row.get("description"):
             item_row["description"] = row["description"]
+        if row.get("custom_no_of_pkgs"):
+            item_row["custom_no_of_pkgs"] = cint(row["custom_no_of_pkgs"])
+        if row.get("custom_kind_of_pkgs"):
+            item_row["custom_kind_of_pkgs"] = row["custom_kind_of_pkgs"]
+        if row.get("custom_kind_of_pkgs_other"):
+            item_row["custom_kind_of_pkgs_other"] = row["custom_kind_of_pkgs_other"]
         # Source/target warehouse based on purpose
         if purpose in ("Material Transfer", "Material Transfer for Manufacture", "Send to Subcontractor"):
             item_row["s_warehouse"] = row.get("s_warehouse") or data.get("from_warehouse") or ""
@@ -917,6 +1150,22 @@ def _create_stock_entry(data: dict):
         "items": items,
     })
 
+    # Set transport/e-way bill fields
+    for field in TRANSPORT_FIELDS:
+        val = data.get(field)
+        if val:
+            doc.set(field, val)
+    if not doc.get('mode_of_transport'):
+        doc.mode_of_transport = 'Road'
+    if not doc.get('gst_vehicle_type'):
+        doc.gst_vehicle_type = 'Regular'
+
+    # Append JW instructions to item descriptions for subcontracting
+    jw_desc = data.get('jw_description')
+    if jw_desc and purpose == 'Send to Subcontractor':
+        for item in doc.items:
+            item.description = (item.description or '') + '\n\n' + jw_desc
+
     return doc
 
 
@@ -926,8 +1175,11 @@ def _create_job_work_in(data: dict, submit: bool = False):
     The user provides:
     - customer
     - items: list of {item_code (service item), fg_item (finished good), gross_qty (service qty),
-              net_qty (FG qty), rate (service charge)}
+              net_qty (FG qty), rate (service charge), description, transaction_params}
     """
+    import json as _json
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+
     company = data.get("company")
     customer = data.get("customer")
     if not customer:
@@ -937,24 +1189,44 @@ def _create_job_work_in(data: dict, submit: bool = False):
     if not service_items:
         frappe.throw(_("At least one service item is required."))
 
+    settings = KnitERPSettings.get_settings()
+    delivery_date = data.get("delivery_date") or frappe.utils.add_days(frappe.utils.today(), 14)
+
     # 1. Create Sales Order with is_subcontracted = 1
     so_items = []
     for row in service_items:
-        so_items.append({
-            "item_code": row.get("item_code"),  # service item
+        service_item = row.get("item_code")
+        fg_item = row.get("fg_item") or ""
+        if not fg_item:
+            frappe.throw(_("Each row must have a Finished Good item for Job Work In."))
+
+        _resolve_subcontracting_bom(service_item, fg_item)  # validate BOM exists
+
+        so_item = {
+            "item_code": service_item,
+            "fg_item": fg_item,
+            "fg_item_qty": frappe.utils.flt(row.get("net_qty", 1)),
             "qty": frappe.utils.flt(row.get("gross_qty", 1)),
             "rate": frappe.utils.flt(row.get("rate", 0)),
-            "delivery_date": data.get("delivery_date") or frappe.utils.add_days(frappe.utils.today(), 14),
+            "delivery_date": delivery_date,
             "warehouse": row.get("warehouse") or data.get("warehouse") or "",
-        })
+        }
+        if row.get("description"):
+            so_item["description"] = row["description"]
+        if row.get("transaction_params"):
+            so_item["custom_transaction_params_json"] = _json.dumps(row["transaction_params"])
+        so_items.append(so_item)
 
     so = frappe.get_doc({
         "doctype": "Sales Order",
         "customer": customer,
         "company": company,
         "transaction_date": data.get("posting_date") or frappe.utils.today(),
-        "delivery_date": data.get("delivery_date") or frappe.utils.add_days(frappe.utils.today(), 14),
+        "delivery_date": delivery_date,
         "is_subcontracted": 1,
+        "customer_address": data.get("customer_address") or "",
+        "custom_shipping_party": data.get("custom_shipping_party") or "",
+        "shipping_address_name": data.get("shipping_address_name") or "",
         "items": so_items,
     })
 
@@ -963,44 +1235,82 @@ def _create_job_work_in(data: dict, submit: bool = False):
         so.set_taxes()
         so.run_method("set_missing_values")
         so.run_method("calculate_taxes_and_totals")
+    else:
+        so.run_method("set_missing_values")
 
+    if not so.dispatch_address_name and so.company_address:
+        so.dispatch_address_name = so.company_address
+
+    so.flags.ignore_mandatory = True
     so.insert()
 
     if submit:
         so.submit()
 
-    # 2. Create Subcontracting Inward Order linked to the Sales Order
+    # 2. Resolve customer warehouse (auto-create if needed)
+    customer_warehouse = _get_or_create_customer_jw_warehouse(customer, company)
+    delivery_wh = settings.jw_completed_warehouse or ""
+    if not delivery_wh:
+        frappe.throw(_("Please set 'Customer JW Completed Warehouse' in KnitERP Settings."))
+
+    customer_name = frappe.db.get_value("Customer", customer, "customer_name") or customer
+
+    # 3. Create Subcontracting Inward Order linked to the Sales Order
     scio_service_items = []
     for i, row in enumerate(service_items):
         so_item = so.items[i] if i < len(so.items) else None
         scio_service_items.append({
-            "item_code": row.get("item_code"),  # service item
-            "fg_item": row.get("fg_item", ""),  # finished good
+            "item_code": row.get("item_code"),
+            "fg_item": row.get("fg_item", ""),
             "fg_item_qty": frappe.utils.flt(row.get("net_qty", 1)),
             "required_qty": frappe.utils.flt(row.get("gross_qty", 1)),
             "rate": frappe.utils.flt(row.get("rate", 0)),
             "sales_order_item": so_item.name if so_item else "",
         })
 
-    scio = frappe.get_doc({
-        "doctype": "Subcontracting Inward Order",
-        "sales_order": so.name,
-        "customer": customer,
-        "company": company,
-        "transaction_date": data.get("posting_date") or frappe.utils.today(),
-        "service_items": scio_service_items,
-    })
+    scio = frappe.new_doc("Subcontracting Inward Order")
+    scio.sales_order = so.name
+    scio.customer = customer
+    scio.customer_name = customer_name
+    scio.company = company
+    scio.transaction_date = data.get("posting_date") or frappe.utils.today()
+    scio.customer_warehouse = customer_warehouse
+    scio.set_delivery_warehouse = delivery_wh
 
-    scio.run_method("set_missing_values")
-    scio.insert()
+    for si_row in scio_service_items:
+        scio.append("service_items", si_row)
 
-    if submit:
-        scio.submit()
+    scio_created = None
+    try:
+        # Populate raw materials (items) table BEFORE insert — ERPNext's
+        # validate_service_items() filters service_items to only those whose
+        # sales_order_item exists in items table, so items must be populated first.
+        scio.run_method("populate_items_table")
+        if scio.items:
+            for item in scio.items:
+                if not item.get("delivery_warehouse"):
+                    item.delivery_warehouse = delivery_wh
+
+        scio.flags.ignore_mandatory = True
+        scio.insert()
+        scio_created = scio
+
+        if submit:
+            scio.submit()
+    except Exception:
+        frappe.log_error(frappe.get_traceback(), "Job Work In: SCIO creation failed")
+        try:
+            if so.docstatus == 1:
+                so.cancel()
+            frappe.delete_doc("Sales Order", so.name, force=True, ignore_permissions=True)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Job Work In: SO rollback failed")
+        frappe.throw(_("Failed to create Subcontracting Inward Order. The Sales Order has been rolled back. Please try again."))
 
     return {
-        "name": scio.name,
+        "name": scio_created.name,
         "doctype": "Subcontracting Inward Order",
-        "docstatus": scio.docstatus,
+        "docstatus": scio_created.docstatus,
         "sales_order": so.name,
         "grand_total": so.grand_total if hasattr(so, "grand_total") else 0,
     }
@@ -1012,8 +1322,11 @@ def _create_job_work_out(data: dict, submit: bool = False):
     The user provides:
     - supplier
     - items: list of {item_code (service item), fg_item (finished good), gross_qty (service qty),
-              net_qty (FG qty), rate (service charge)}
+              net_qty (FG qty), rate (service charge), description, transaction_params}
     """
+    import json as _json
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+
     company = data.get("company")
     supplier = data.get("supplier")
     if not supplier:
@@ -1023,24 +1336,51 @@ def _create_job_work_out(data: dict, submit: bool = False):
     if not service_items:
         frappe.throw(_("At least one service item is required."))
 
+    settings = KnitERPSettings.get_settings()
+    supplier_warehouse = settings.jw_outward_warehouse or ""
+    schedule_date = data.get("schedule_date") or frappe.utils.add_days(frappe.utils.today(), 14)
+
     # 1. Create Purchase Order with is_subcontracted = 1
     po_items = []
     for row in service_items:
-        po_items.append({
-            "item_code": row.get("item_code"),  # service item
+        service_item = row.get("item_code")
+        fg_item = row.get("fg_item") or ""
+        if not fg_item:
+            frappe.throw(_("Each row must have a Finished Good item for Job Work Out."))
+
+        sc_bom = _resolve_subcontracting_bom(service_item, fg_item)
+
+        po_item = {
+            "item_code": service_item,
+            "fg_item": fg_item,
+            "fg_item_qty": frappe.utils.flt(row.get("net_qty", 1)),
+            "bom": sc_bom["finished_good_bom"],
+            "uom": sc_bom["service_item_uom"],
+            "stock_uom": sc_bom["service_item_uom"],
+            "conversion_factor": sc_bom["conversion_factor"],
             "qty": frappe.utils.flt(row.get("gross_qty", 1)),
             "rate": frappe.utils.flt(row.get("rate", 0)),
-            "schedule_date": data.get("schedule_date") or frappe.utils.add_days(frappe.utils.today(), 14),
+            "schedule_date": schedule_date,
             "warehouse": row.get("warehouse") or data.get("warehouse") or "",
-        })
+        }
+        if row.get("description"):
+            po_item["description"] = row["description"]
+        if row.get("transaction_params"):
+            po_item["custom_transaction_params_json"] = _json.dumps(row["transaction_params"])
+        po_items.append(po_item)
 
     po = frappe.get_doc({
         "doctype": "Purchase Order",
         "supplier": supplier,
         "company": company,
         "transaction_date": data.get("posting_date") or frappe.utils.today(),
-        "schedule_date": data.get("schedule_date") or frappe.utils.add_days(frappe.utils.today(), 14),
+        "schedule_date": schedule_date,
         "is_subcontracted": 1,
+        "supplier_warehouse": supplier_warehouse,
+        "supplier_address": data.get("supplier_address") or "",
+        "custom_deliver_to_customer": data.get("custom_deliver_to_customer") or "",
+        "custom_deliver_to_address": data.get("custom_deliver_to_address") or "",
+        "shipping_address": data.get("shipping_address") or "",
         "items": po_items,
     })
 
@@ -1049,40 +1389,54 @@ def _create_job_work_out(data: dict, submit: bool = False):
         po.set_taxes()
         po.run_method("set_missing_values")
         po.run_method("calculate_taxes_and_totals")
+    else:
+        po.run_method("set_missing_values")
 
+    po.flags.ignore_mandatory = True
     po.insert()
 
-    if submit:
+    if not submit:
+        # Draft mode: only create the PO; SCO requires a submitted PO
+        return {
+            "name": po.name,
+            "doctype": "Purchase Order",
+            "docstatus": po.docstatus,
+            "grand_total": po.grand_total if hasattr(po, "grand_total") else 0,
+        }
+
+    sco = None
+    try:
         po.submit()
-
-    # 2. Create Subcontracting Order linked to the Purchase Order
-    sco_service_items = []
-    for i, row in enumerate(service_items):
-        po_item = po.items[i] if i < len(po.items) else None
-        sco_service_items.append({
-            "item_code": row.get("item_code"),  # service item
-            "fg_item": row.get("fg_item", ""),  # finished good
-            "fg_item_qty": frappe.utils.flt(row.get("net_qty", 1)),
-            "qty": frappe.utils.flt(row.get("gross_qty", 1)),
-            "rate": frappe.utils.flt(row.get("rate", 0)),
-            "purchase_order_item": po_item.name if po_item else "",
-        })
-
-    sco = frappe.get_doc({
-        "doctype": "Subcontracting Order",
-        "purchase_order": po.name,
-        "supplier": supplier,
-        "company": company,
-        "transaction_date": data.get("posting_date") or frappe.utils.today(),
-        "schedule_date": data.get("schedule_date") or frappe.utils.add_days(frappe.utils.today(), 14),
-        "service_items": sco_service_items,
-    })
-
-    sco.run_method("set_missing_values")
-    sco.insert()
-
-    if submit:
+        # PO.on_submit may auto-create a draft SCO if Buying Settings has
+        # auto_create_subcontracting_order enabled — reuse it to avoid duplicates.
+        from erpnext.buying.doctype.purchase_order.purchase_order import make_subcontracting_order
+        existing_sco_name = frappe.db.get_value(
+            "Subcontracting Order",
+            {"purchase_order": po.name, "docstatus": 0},
+            "name",
+        )
+        if existing_sco_name:
+            sco = frappe.get_doc("Subcontracting Order", existing_sco_name)
+        else:
+            sco = make_subcontracting_order(po.name)
+            sco.flags.ignore_mandatory = True
+            sco.insert()
+        # Propagate custom delivery fields from PO to SCO
+        if po.custom_deliver_to_customer:
+            sco.custom_deliver_to_customer = po.custom_deliver_to_customer
+            sco.custom_deliver_to_address = po.custom_deliver_to_address or ""
+            sco.save()
         sco.submit()
+    except Exception:
+        # Roll back the PO so we don't leave an orphaned document
+        frappe.log_error(frappe.get_traceback(), "Job Work Out: SCO creation failed")
+        try:
+            if po.docstatus == 1:
+                po.cancel()
+            frappe.delete_doc("Purchase Order", po.name, force=True, ignore_permissions=True)
+        except Exception:
+            frappe.log_error(frappe.get_traceback(), "Job Work Out: PO rollback failed")
+        frappe.throw(_("Failed to create Subcontracting Order. The Purchase Order has been rolled back. Please try again."))
 
     return {
         "name": sco.name,
@@ -1140,3 +1494,79 @@ def _get_account_for_mode_of_payment(mode_of_payment: str, company: str) -> str:
         "default_account",
     )
     return account or ""
+
+
+def _resolve_subcontracting_bom(service_item: str, fg_item: str) -> dict:
+    """Validate and return Subcontracting BOM details for a service_item + fg_item pair.
+
+    Throws a user-facing error when no active BOM is found.
+    Returns a dict with: service_item_uom, conversion_factor, finished_good_bom,
+    finished_good_qty, service_item_qty.
+    """
+    from erpnext.subcontracting.doctype.subcontracting_bom.subcontracting_bom import (
+        get_subcontracting_boms_for_finished_goods,
+    )
+    boms = get_subcontracting_boms_for_finished_goods([fg_item])
+    sc_bom = boms.get(fg_item) if boms else None
+    if not sc_bom:
+        frappe.throw(
+            _("No active Subcontracting BOM found for Finished Good {0} with Service Item {1}. "
+              "Please create one in BOM Designer before creating a Job Work order.").format(
+                frappe.bold(fg_item), frappe.bold(service_item)
+            )
+        )
+    return {
+        "service_item_uom": sc_bom.get("service_item_uom") or "Kg",
+        "conversion_factor": frappe.utils.flt(sc_bom.get("conversion_factor") or 1),
+        "finished_good_bom": sc_bom.get("finished_good_bom"),
+        "finished_good_qty": frappe.utils.flt(sc_bom.get("finished_good_qty") or 1),
+        "service_item_qty": frappe.utils.flt(sc_bom.get("service_item_qty") or 1),
+    }
+
+
+def _get_or_create_customer_jw_warehouse(customer: str, company: str) -> str:
+    """Find or auto-create the inward warehouse for a customer's raw materials.
+
+    Mirrors the logic in production_wizard.create_subcontracting_inward_order.
+    Requires 'jw_inward_parent_warehouse' to be configured in KnitERP Settings.
+    """
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+
+    # Strategy 1: existing warehouse explicitly linked to this customer
+    customer_warehouse = frappe.db.get_value(
+        "Warehouse",
+        {"customer": customer, "company": company, "is_group": 0},
+        "name",
+    )
+    if customer_warehouse:
+        return customer_warehouse
+
+    # Strategy 2: create under configured parent warehouse
+    settings = KnitERPSettings.get_settings()
+    parent_wh = settings.jw_inward_parent_warehouse
+    if not parent_wh:
+        frappe.throw(
+            _("Please set 'Customer JW Parent Warehouse' in KnitERP Settings before creating a Job Work In order.")
+        )
+
+    company_abbr = frappe.get_cached_value("Company", company, "abbr")
+    customer_name = frappe.db.get_value("Customer", customer, "customer_name") or customer
+    new_wh_name = f"JW-IN - {customer_name} - {company_abbr}"
+
+    existing = frappe.db.exists("Warehouse", new_wh_name)
+    if existing:
+        wh_doc = frappe.get_doc("Warehouse", new_wh_name)
+        if not wh_doc.customer:
+            wh_doc.customer = customer
+            wh_doc.save(ignore_permissions=True)
+        return new_wh_name
+
+    new_wh = frappe.new_doc("Warehouse")
+    new_wh.warehouse_name = new_wh_name
+    new_wh.parent_warehouse = parent_wh
+    new_wh.is_group = 0
+    new_wh.company = company
+    new_wh.customer = customer
+    new_wh.insert(ignore_permissions=True)
+    frappe.msgprint(_("Created warehouse {0} for customer raw materials.").format(new_wh_name))
+    return new_wh_name

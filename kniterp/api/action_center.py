@@ -305,7 +305,7 @@ def get_receive_rm_from_customer_fix_details():
             # The error 'SubcontractingInwardOrderReceivedItem' object has no attribute 'item_code'. Did you mean: 'rm_item_code'?
             # confirms it is likely rm_item_code.
             ic = ri.get('rm_item_code') or ri.get('item_code') 
-            received[ic] = flt(received.get(ic, 0) + flt(ri.qty, 3), 3)
+            received[ic] = flt(received.get(ic, 0) + flt(ri.qty), 3)
 
         # Get FGs to produce
         fgs = frappe.db.get_all('Subcontracting Inward Order Item',
@@ -325,8 +325,8 @@ def get_receive_rm_from_customer_fix_details():
             bom_qty = frappe.db.get_value('BOM', fg.bom, 'quantity') or 1.0
             
             for bom_item in bom_items:
-                required_qty = flt((flt(bom_item.stock_qty, 3) / flt(bom_qty, 3)) * flt(fg.qty, 3), 3)
-                received_qty = flt(received.get(bom_item.item_code, 0), 3)
+                required_qty = flt((flt(bom_item.stock_qty) / flt(bom_qty)) * flt(fg.qty), 3)
+                received_qty = flt(received.get(bom_item.item_code, 0))
                 
                 # Check if we have already counted this received qty for another requirement?
                 # This simple logic assumes 1:1 or pool.
@@ -389,8 +389,8 @@ def get_pending_delivery_fix_details():
         """, o.name, as_dict=1)
         
         for item in items:
-            total_qty = flt(item.qty, 3)
-            delivered_qty = flt(item.delivered_qty, 3)
+            total_qty = flt(item.qty)
+            delivered_qty = flt(item.delivered_qty)
             pending_to_deliver = flt(total_qty - delivered_qty, 3)
             
             # Get manufacturing status from Work Orders
@@ -404,8 +404,8 @@ def get_pending_delivery_fix_details():
                     AND docstatus = 1
             """, (o.name, item.name), as_dict=1)
             
-            total_to_manufacture = flt(wo_data[0].total_wo_qty if wo_data else 0, 3)
-            manufactured_qty = flt(wo_data[0].produced_qty if wo_data else 0, 3)
+            total_to_manufacture = flt(wo_data[0].total_wo_qty if wo_data else 0)
+            manufactured_qty = flt(wo_data[0].produced_qty if wo_data else 0)
             pending_to_manufacture = flt(total_to_manufacture - manufactured_qty, 3)
             
             # Ready to deliver = manufactured qty - already delivered qty
@@ -556,13 +556,13 @@ def check_rm_availability(item_code, required_qty):
         return None # No BOM - cannot determine shortage
         
     bom_no = bom_data.name
-    bom_qty = flt(bom_data.quantity, 3) or 1.0
+    bom_qty = flt(bom_data.quantity) or 1.0
 
     # Get RMs from BOM
     rms = frappe.db.get_all('BOM Item', filters={'parent': bom_no}, fields=['item_code', 'qty', 'uom'])
     
     for rm in rms:
-        needed = flt((flt(rm.qty, 3) / bom_qty) * flt(required_qty, 3), 3)
+        needed = flt((flt(rm.qty) / bom_qty) * flt(required_qty), 3)
         actual = get_stock_balance(rm.item_code)
         if actual < needed:
             return False
@@ -669,8 +669,11 @@ def get_send_to_jw_items():
                 'selected_item': so_item
             }
         else:
-            item_data['link'] = 'Form/Purchase Order/' + po.name
-            
+            item_data['link'] = 'outsourcing-desk'
+            item_data['route_options'] = {
+                'selected_po': po.name
+            }
+
         data.append(item_data)
 
     return {
@@ -683,9 +686,9 @@ def get_send_to_jw_items():
 def get_receive_from_jw_items():
     # Subcontracting Orders where material is sent (partially or full) but FG not received
     # PO Status might be 'Materials Transferred' or 'Partially Received'
-    
+
     pos = frappe.db.sql("""
-        SELECT 
+        SELECT
             po.name, po.supplier_name
         FROM
             `tabPurchase Order` po
@@ -696,24 +699,27 @@ def get_receive_from_jw_items():
             AND po.per_received < 100
         ORDER BY po.transaction_date ASC
     """, as_dict=1)
-    
+
     data = []
     for po in pos:
         # Check for linked Sales Order Item in PO Items
         so_item = frappe.db.get_value('Purchase Order Item', {'parent': po.name}, 'sales_order_item')
-        
+
         item_data = {
             'title': f"{po.supplier_name}",
             'description': f"PO: {po.name}",
         }
-        
+
         if so_item:
             item_data['link'] = 'production-wizard'
             item_data['route_options'] = {
                 'selected_item': so_item
             }
         else:
-            item_data['link'] = 'Form/Purchase Order/' + po.name
+            item_data['link'] = 'outsourcing-desk'
+            item_data['route_options'] = {
+                'selected_po': po.name
+            }
             
         data.append(item_data)
 
@@ -769,45 +775,45 @@ def get_pending_delivery_items():
     
     orders = frappe.db.get_all('Sales Order',
         filters={
-            'docstatus': 1, 
-            'status': ['in', ['To Deliver and Bill', 'To Deliver']],
-            'per_delivered': ['<', 100]
+            'docstatus': 1,
+            'status': ['in', ['To Deliver and Bill', 'To Deliver', 'To Bill']],
         },
         fields=['name', 'customer_name', 'delivery_date'],
         order_by='delivery_date asc'
     )
-    
+
     data = []
     for o in orders:
-        # Get SO Items pending delivery
+        # Get SO Items — include all so partial/over-delivery is caught
         items = frappe.db.sql("""
             SELECT name, item_code, item_name, qty, delivered_qty
             FROM `tabSales Order Item`
-            WHERE parent = %s AND qty > delivered_qty
+            WHERE parent = %s
         """, (o.name,), as_dict=1)
-        
+
         for item in items:
-            delivered_qty = flt(item.delivered_qty, 3)
-            pending_to_deliver = flt(flt(item.qty, 3) - delivered_qty, 3)
-            
-            # Check manufactured qty from Work Orders
+            delivered_qty = flt(item.delivered_qty)
+            pending_to_deliver = flt(flt(item.qty) - delivered_qty, 3)
+
+            # Check manufactured qty and WO existence
             wo_data = frappe.db.sql("""
-                SELECT COALESCE(SUM(produced_qty), 0) as produced
+                SELECT COALESCE(SUM(produced_qty), 0) as produced,
+                       COUNT(*) as wo_count
                 FROM `tabWork Order`
-                WHERE sales_order = %s 
+                WHERE sales_order = %s
                     AND sales_order_item = %s
                     AND docstatus = 1
             """, (o.name, item.name))
-            
+
             manufactured_qty = flt(wo_data[0][0] if wo_data else 0, 3)
-            
-            # Ready to deliver = manufactured - already delivered
-            if manufactured_qty == 0:
-                # No WO - check stock
+            has_wo = (wo_data[0][1] if wo_data else 0) > 0
+
+            # Only fall back to stock check when genuinely no WO exists (e.g. trading items)
+            if has_wo:
+                ready_qty = flt(max(0, manufactured_qty - delivered_qty), 3)
+            else:
                 stock_qty = get_available_stock(item.item_code)
                 ready_qty = flt(min(stock_qty, pending_to_deliver), 3)
-            else:
-                ready_qty = flt(max(0, manufactured_qty - delivered_qty), 3)
             
             # Only add if ready to deliver
             if ready_qty > 0:
