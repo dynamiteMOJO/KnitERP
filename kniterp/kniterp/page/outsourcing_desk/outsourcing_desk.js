@@ -904,6 +904,11 @@ class OutsourcingDesk {
                     </div>`
                 },
                 {
+                    fieldname: 'supplier_delivery_note',
+                    fieldtype: 'Data',
+                    label: __('Supplier Delivery Note'),
+                },
+                {
                     fieldname: 'qty',
                     fieldtype: 'Float',
                     label: __('Quantity to Receive'),
@@ -995,6 +1000,7 @@ class OutsourcingDesk {
                     purchase_order: po_name,
                     items: JSON.stringify([{ item_code, qty: values.qty }]),
                     submit: 1,
+                    supplier_delivery_note: values.supplier_delivery_note || '',
                 };
                 if (received_batches) args.received_batches = JSON.stringify(received_batches);
 
@@ -1019,6 +1025,7 @@ class OutsourcingDesk {
                     args: {
                         purchase_order: po_name,
                         items: JSON.stringify([{ item_code, qty: dlg.get_value('qty') || pending_qty }]),
+                        supplier_delivery_note: dlg.get_value('supplier_delivery_note') || '',
                     },
                     freeze: true,
                     freeze_message: __('Creating Purchase Receipt...'),

@@ -404,8 +404,8 @@ def create_rm_purchase_order(subcontracting_order, items, supplier, schedule_dat
     }
 
 
-@frappe.whitelist()
-def create_rm_purchase_receipt(purchase_order, items=None, received_batches=None, submit=False):
+@frappe.whitelist(methods=["POST"])
+def create_rm_purchase_receipt(purchase_order, items=None, received_batches=None, submit=False, supplier_delivery_note=None):
     """Create Purchase Receipt from an existing PO for RM items.
 
     Args:
@@ -458,63 +458,76 @@ def create_rm_purchase_receipt(purchase_order, items=None, received_batches=None
         frappe.throw(_("No pending items to receive"))
 
     pr.set_missing_values()
+    if supplier_delivery_note:
+        pr.supplier_delivery_note = supplier_delivery_note
     pr.insert()
 
-    if received_batches:
-        batch_tracked_items = [i for i in pr.items if frappe.get_cached_value("Item", i.item_code, "has_batch_no")]
-        if len(batch_tracked_items) > 1:
-            frappe.throw(_("Batch assignment for multi-item Purchase Receipts is not supported via this dialog. Please use the standard form."))
+    created_batches = []
+    try:
+        if received_batches:
+            batch_tracked_items = [i for i in pr.items if frappe.get_cached_value("Item", i.item_code, "has_batch_no")]
+            if len(batch_tracked_items) > 1:
+                frappe.throw(_("Batch assignment for multi-item Purchase Receipts is not supported via this dialog. Please use the standard form."))
 
-        for pr_item in pr.items:
-            has_batch = frappe.get_cached_value("Item", pr_item.item_code, "has_batch_no")
-            if not has_batch:
-                continue
+            for pr_item in pr.items:
+                has_batch = frappe.get_cached_value("Item", pr_item.item_code, "has_batch_no")
+                if not has_batch:
+                    continue
 
-            sabb = frappe.new_doc("Serial and Batch Bundle")
-            sabb.item_code = pr_item.item_code
-            sabb.warehouse = pr_item.warehouse
-            sabb.type_of_transaction = "Inward"
-            sabb.voucher_type = "Purchase Receipt"
-            sabb.has_batch_no = 1
-            sabb.company = pr.company
+                sabb = frappe.new_doc("Serial and Batch Bundle")
+                sabb.item_code = pr_item.item_code
+                sabb.warehouse = pr_item.warehouse
+                sabb.type_of_transaction = "Inward"
+                sabb.voucher_type = "Purchase Receipt"
+                sabb.has_batch_no = 1
+                sabb.company = pr.company
 
-            for batch in received_batches:
-                batch_no = batch.get("batch_no")
-                qty = flt(batch.get("qty"), 3)
-                # Auto-create batch if it doesn't exist yet
-                if not frappe.db.exists("Batch", batch_no):
-                    batch_doc = frappe.new_doc("Batch")
-                    batch_doc.batch_id = batch_no
-                    batch_doc.item = pr_item.item_code
-                    batch_doc.source_type = "Supplier"
-                    batch_doc.flags.ignore_permissions = True
-                    batch_doc.insert(ignore_permissions=True)
-                sabb.append("entries", {
-                    "batch_no": batch_no,
-                    "qty": qty,
-                    "warehouse": pr_item.warehouse,
-                })
+                for batch in received_batches:
+                    batch_no = batch.get("batch_no")
+                    qty = flt(batch.get("qty"), 3)
+                    if not frappe.db.exists("Batch", batch_no):
+                        batch_doc = frappe.new_doc("Batch")
+                        batch_doc.batch_id = batch_no
+                        batch_doc.item = pr_item.item_code
+                        batch_doc.source_type = "Supplier"
+                        batch_doc.flags.ignore_permissions = True
+                        batch_doc.insert(ignore_permissions=True)
+                        created_batches.append(batch_no)
+                    sabb.append("entries", {
+                        "batch_no": batch_no,
+                        "qty": qty,
+                        "warehouse": pr_item.warehouse,
+                    })
 
-            sabb.insert(ignore_permissions=True)
-            pr_item.serial_and_batch_bundle = sabb.name
-            pr_item.use_serial_batch_fields = 0
+                sabb.insert(ignore_permissions=True)
+                pr_item.serial_and_batch_bundle = sabb.name
+                pr_item.use_serial_batch_fields = 0
 
-        pr.save()
+            pr.save()
 
-        for pr_item in pr.items:
-            if pr_item.serial_and_batch_bundle:
-                frappe.db.set_value(
-                    "Serial and Batch Bundle",
-                    pr_item.serial_and_batch_bundle,
-                    {
-                        "voucher_no": pr.name,
-                        "voucher_detail_no": pr_item.name,
-                        "is_cancelled": 0,
-                    },
-                )
+            for pr_item in pr.items:
+                if pr_item.serial_and_batch_bundle:
+                    frappe.db.set_value(
+                        "Serial and Batch Bundle",
+                        pr_item.serial_and_batch_bundle,
+                        {
+                            "voucher_no": pr.name,
+                            "voucher_detail_no": pr_item.name,
+                            "is_cancelled": 0,
+                        },
+                    )
 
-    if submit:
-        pr.submit()
+        if submit:
+            pr.submit()
+
+    except Exception:
+        for batch_name in created_batches:
+            try:
+                frappe.delete_doc("Batch", batch_name, ignore_permissions=True, force=1)
+            except Exception:
+                pass
+        frappe.log_error(frappe.get_traceback(), "create_rm_purchase_receipt failed")
+        raise
 
     return {"name": pr.name, "docstatus": pr.docstatus}
 
