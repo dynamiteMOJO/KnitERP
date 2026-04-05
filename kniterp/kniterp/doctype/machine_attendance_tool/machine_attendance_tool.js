@@ -7,6 +7,9 @@
 // 	},
 // });
 
+const PRESENT_OPERATORS_METHOD =
+	"kniterp.kniterp.doctype.machine_attendance.machine_attendance.get_present_operators";
+
 frappe.ui.form.on("Machine Attendance Tool", {
 
 	prevent_duplicate_machines(frm) {
@@ -35,6 +38,19 @@ frappe.ui.form.on("Machine Attendance Tool", {
 	refresh(frm) {
 		frm.trigger("reset_tool_actions");
 		frm.trigger("prevent_duplicate_machines");
+		frm.trigger("set_employee_queries");
+	},
+
+	set_employee_queries(frm) {
+		const date = frm.doc.date || "";
+		frm.set_query("morning_employee", "entries", () => ({
+			query: PRESENT_OPERATORS_METHOD,
+			filters: { date: date, shift: "" }
+		}));
+		frm.set_query("night_employee", "entries", () => ({
+			query: PRESENT_OPERATORS_METHOD,
+			filters: { date: date, shift: "" }
+		}));
 	},
 
 	onload_post_render(frm) {
@@ -49,6 +65,7 @@ frappe.ui.form.on("Machine Attendance Tool", {
 
 	date(frm) {
 		frm.trigger("reset_tool_actions");
+		frm.trigger("set_employee_queries");
 	},
 	
 	entries_add(frm, cdt, cdn) {
