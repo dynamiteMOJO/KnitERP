@@ -436,3 +436,188 @@
     flex-direction: column;
     justify-content: flex-end;
 }
+
+.bom-designer-container .link-field .link-btn {
+    display: inline-flex;
+    opacity: 0.8;
+    transition: opacity 0.2s;
+    z-index: 15 !important; /* Stand above form-control (z-index: 10) */
+}
+.bom-designer-container .link-field:hover .link-btn,
+.bom-designer-container .link-field:focus-within .link-btn {
+    opacity: 1;
+}
+
+/* Ensure the icon has sufficient size and is distinct */
+.bom-designer-container .link-field .link-btn a {
+    color: var(--text-color) !important;
+    padding: 0 8px;
+    height: 100%;
+    margin-right: 4px; /* Space from Edge */
+    display: flex;
+    align-items: center;
+}
+
+.bom-designer-container .link-field .link-btn svg {
+    width: 14px !important;
+    height: 14px !important;
+    fill: currentColor;
+    stroke: currentColor;
+}
+
+/* ── Cart Layout ──────────────────────────────────────────── */
+
+.bom-designer-with-cart {
+    display: flex;
+    gap: 0;
+    align-items: flex-start;
+}
+
+.bom-designer-with-cart .bom-workspace {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-right: 20px;
+}
+
+/* ── Cart Panel ───────────────────────────────────────────── */
+
+.bom-cart-panel {
+    flex: 0 0 280px;
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--bom-border);
+    padding-left: 20px;
+    position: sticky;
+    top: 20px;
+    height: calc(100vh - 120px);
+    max-height: calc(100vh - 120px);
+}
+
+.bom-cart-header {
+    flex-shrink: 0;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--bom-border);
+    margin-bottom: 12px;
+}
+
+.bom-cart-title {
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-color);
+    letter-spacing: -0.3px;
+}
+
+.bom-cart-items {
+    flex: 1 1 0;
+    overflow-y: auto;
+    min-height: 0;
+}
+
+.bom-cart-empty {
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+    padding: 20px 8px;
+    line-height: 1.6;
+}
+
+.bom-cart-item-card {
+    background: var(--bom-card);
+    border: 1px solid var(--bom-border);
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+}
+
+.bom-cart-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 4px;
+}
+
+.bom-cart-item-name {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-color);
+    word-break: break-word;
+    flex: 1 1 0;
+    line-height: 1.4;
+}
+
+.bom-cart-item-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 4px 0;
+    font-size: 11px;
+}
+
+.bom-cart-sc-badge {
+    background: var(--knit-header);
+    color: var(--knit-accent);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}
+
+.bom-cart-item-ops {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin-bottom: 4px;
+}
+
+.bom-cart-op-badge {
+    background: var(--bom-border);
+    color: var(--text-muted);
+    border-radius: 4px;
+    padding: 2px 6px;
+    font-size: 10px;
+    font-weight: 500;
+}
+
+.bom-cart-item-bom {
+    font-size: 10px;
+    font-family: monospace;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bom-cart-footer {
+    flex-shrink: 0;
+    padding-top: 12px;
+    border-top: 1px solid var(--bom-border);
+    margin-top: 12px;
+}
+
+/* Responsive: stack vertically on small screens */
+@media (max-width: 900px) {
+    .bom-designer-with-cart {
+        flex-direction: column;
+    }
+
+    .bom-designer-with-cart .bom-workspace {
+        padding-right: 0;
+    }
+
+    .bom-cart-panel {
+        flex: 0 0 auto;
+        width: 100%;
+        border-left: none;
+        border-top: 1px solid var(--bom-border);
+        padding-left: 0;
+        padding-top: 20px;
+        position: static;
+        max-height: none;
+    }
+}
+
+[data-theme="dark"] .bom-cart-item-card {
+    background: var(--bom-card);
+    border-color: var(--bom-border);
+}
