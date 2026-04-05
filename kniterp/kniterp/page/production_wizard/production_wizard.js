@@ -62,6 +62,69 @@ class ProductionWizard {
         this.page.add_inner_button(__('Consolidated Procurement'), () => {
             this.show_consolidated_wizard();
         });
+
+        this.page.add_inner_button(__('Consolidated Delivery'), () => {
+            this.show_consolidated_delivery_wizard();
+        });
+
+        this.page.add_inner_button(__('Send Material'), () => {
+            this.show_consolidated_send_rm_wizard();
+        }, __('Subcontracting'));
+
+        this.page.add_inner_button(__('Receive Goods'), () => {
+            this.show_consolidated_receive_goods_wizard();
+        }, __('Subcontracting'));
+
+        this.page.add_inner_button(__('Receive Customer RM'), () => {
+            this.show_consolidated_receive_customer_rm_wizard();
+        }, __('Subcontracting'));
+    }
+
+    // ── Shared: transport field definitions ──────────────────────────────
+    _get_transport_field_definitions() {
+        return [
+            {
+                fieldname: 'transporter',
+                fieldtype: 'Link',
+                options: 'Supplier',
+                label: __('Transporter'),
+                get_query: () => ({ filters: { disabled: 0, is_transporter: 1 } }),
+                change: function () {
+                    const val = this.get_value();
+                    const d = this.layout && this.layout.dialog;
+                    if (!d) return;
+                    if (val) {
+                        frappe.db.get_value('Supplier', val,
+                            ['supplier_name', 'gst_transporter_id'], (r) => {
+                                if (r) {
+                                    d.set_value('transporter_name', r.supplier_name || '');
+                                    d.set_value('gst_transporter_id', r.gst_transporter_id || '');
+                                }
+                            });
+                    } else {
+                        d.set_value('transporter_name', '');
+                        d.set_value('gst_transporter_id', '');
+                    }
+                }
+            },
+            { fieldname: 'vehicle_no', fieldtype: 'Data', label: __('Vehicle No'), length: 15 },
+            { fieldname: 'lr_no', fieldtype: 'Data', label: __('Transport Receipt No'), length: 30 },
+            { fieldtype: 'Column Break' },
+            { fieldname: 'transporter_name', fieldtype: 'Data', label: __('Transporter Name'), read_only: 1 },
+            { fieldname: 'gst_transporter_id', fieldtype: 'Data', label: __('GST Transporter ID'), read_only: 1, hidden: 1 },
+            { fieldname: 'lr_date', fieldtype: 'Date', label: __('Transport Receipt Date'), default: frappe.datetime.nowdate() },
+            { fieldname: 'distance', fieldtype: 'Int', label: __('Distance (km)') }
+        ];
+    }
+
+    _collect_transport_args(dialog) {
+        const transport_args = {};
+        for (const f of ['transporter', 'transporter_name', 'gst_transporter_id',
+            'vehicle_no', 'lr_no', 'lr_date', 'distance']) {
+            const val = dialog.get_value(f);
+            if (val) transport_args[f] = val;
+        }
+        return Object.keys(transport_args).length ? transport_args : null;
     }
 
     make_filters() {
@@ -290,6 +353,19 @@ class ProductionWizard {
         if (!this.$stage_tabs) return;
         this.$stage_tabs.find('.stage-tab').removeClass('active');
         this.$stage_tabs.find(`.stage-tab[data-value="${value}"]`).addClass('active');
+        this.update_panel_header(value);
+    }
+
+    update_panel_header(value) {
+        const label_map = {
+            'Pending Production': __('Pending Production Items'),
+            'Ready to Deliver': __('Ready to Deliver Items'),
+            'Ready to Invoice': __('Ready to Invoice Items'),
+            'All': __('All Active Items'),
+            'Standalone': __('Standalone Work Orders')
+        };
+        const label = label_map[value] || __('Orders');
+        this.page.main.find('.pending-items-panel .panel-header h5').text(label);
     }
 
     render_stage_tabs() {
@@ -297,7 +373,8 @@ class ProductionWizard {
             { label: __('Pending Production'), value: 'Pending Production' },
             { label: __('Ready to Deliver'), value: 'Ready to Deliver' },
             { label: __('Ready to Invoice'), value: 'Ready to Invoice' },
-            { label: __('All Active'), value: 'All' }
+            { label: __('All Active'), value: 'All' },
+            { label: __('Standalone'), value: 'Standalone' }
         ];
 
         const active = this.filters.invoice_status || 'Pending Production';
@@ -316,6 +393,9 @@ class ProductionWizard {
 
         // Prepend tab strip above the panels row inside the main container
         this.page.main.find('.production-wizard-container').prepend(this.$stage_tabs);
+
+        // Sync header with initial active tab
+        this.update_panel_header(active);
     }
 
     sort_pending_items(field) {
@@ -342,6 +422,12 @@ class ProductionWizard {
             if (frappe.route_options.selected_item) {
                 selected_item = frappe.route_options.selected_item;
                 delete frappe.route_options.selected_item; // Remove before merge
+            }
+
+            // Track return-to-outsourcing-desk context
+            if (frappe.route_options._od_return) {
+                this._od_return = frappe.route_options._od_return;
+                delete frappe.route_options._od_return;
             }
 
             // First, reset all mutable filters to defaults to avoid carry-over from previous navigation
@@ -386,6 +472,8 @@ class ProductionWizard {
     refresh_pending_items(item_to_select = null) {
         if (this.suppress_refresh) return;
 
+        this.is_standalone_mode = this.filters.invoice_status === 'Standalone';
+
         this.$pending_list.html(`
 			<div class="text-center p-4">
 				<div class="spinner-border text-primary" role="status">
@@ -394,11 +482,17 @@ class ProductionWizard {
 			</div>
 		`);
 
+        const method = this.is_standalone_mode
+            ? 'kniterp.api.production_wizard.get_standalone_work_orders'
+            : 'kniterp.api.production_wizard.get_pending_production_items';
+
+        const args = this.is_standalone_mode
+            ? { filters: { status: 'Active' } }
+            : { filters: this.filters };
+
         frappe.call({
-            method: 'kniterp.api.production_wizard.get_pending_production_items',
-            args: {
-                filters: this.filters
-            },
+            method: method,
+            args: args,
             callback: (r) => {
                 this.pending_items = r.message || [];
                 if (this.current_sort_field) {
@@ -410,8 +504,8 @@ class ProductionWizard {
                 // Auto-select item if passed in route options (Action Center deep link)
                 const target = item_to_select || this.filters.selected_item;
                 if (target) {
-                    // Check if item exists in the list
-                    const exists = this.pending_items.find(i => i.sales_order_item === target);
+                    const key_field = this.is_standalone_mode ? 'work_order' : 'sales_order_item';
+                    const exists = this.pending_items.find(i => i[key_field] === target);
                     if (exists) {
                         this.select_item(target);
 
@@ -421,9 +515,9 @@ class ProductionWizard {
                             if ($item.length) {
                                 $item[0].scrollIntoView({ behavior: 'smooth', block: 'center' });
                             }
-                        }, 500); // Small delay to render
+                        }, 500);
                     }
-                    if (this.filters.selected_item) delete this.filters.selected_item; // Clear to avoid re-selecting on manual refresh
+                    if (this.filters.selected_item) delete this.filters.selected_item;
                 }
             }
         });
@@ -433,30 +527,81 @@ class ProductionWizard {
         this.$item_count.text(this.pending_items.length);
 
         if (!this.pending_items.length) {
+            const empty_msg = this.is_standalone_mode
+                ? __('No standalone work orders')
+                : __('No pending production items');
             this.$pending_list.html(`
 				<div class="text-center text-muted p-4">
 					<i class="fa fa-check-circle fa-3x mb-3 text-success"></i>
-					<p>${__('No pending production items')}</p>
+					<p>${empty_msg}</p>
 				</div>
+                ${!this.is_standalone_mode ? `<div class="create-new-so-btn mt-3 mb-4 px-2">
+                    <button class="btn btn-default w-100 btn-create-so d-flex align-items-center justify-content-center" style="border: 1px dashed var(--border-color); background: transparent; color: var(--text-muted); box-shadow: none; padding: 10px; transition: all 0.2s ease;">
+                        <i class="fa fa-plus mr-2" style="font-size: 12px;"></i> ${__('Create New SO')}
+                    </button>
+                </div>` : ''}
 			`);
+
+            this.$pending_list.find('.btn-create-so').on('click', () => {
+                frappe.route_options = { type: 'sales-order' };
+                frappe.set_route('transaction-desk');
+            });
+
             return;
         }
 
         let html = '';
-        for (let item of this.pending_items) {
-            const status_class = this.get_status_class(item);
-            const status_label = this.get_status_label(item);
 
-            // Subcontracting UX
-            const is_subcontracted = item.is_subcontracted;
-            const display_item_code = is_subcontracted ? (item.fg_item || item.item_code) : item.item_code;
-            const display_item_name = is_subcontracted ? (item.fg_item || item.item_name) : item.item_name;
-            const service_name = is_subcontracted ? item.item_name : '';
+        if (this.is_standalone_mode) {
+            // ── Standalone Work Order cards ──────────────────────────
+            for (let item of this.pending_items) {
+                const status_class = this.get_status_class(item);
+                const status_label = this.get_status_label(item);
 
-            const badge_html = is_subcontracted ?
-                `<span class="badge badge-warning ml-1" style="font-size: 10px;">${__('Subcontract')}</span>` : '';
+                html += `
+                    <div class="pending-item-card ${this.selected_item === item.work_order ? 'selected' : ''}"
+                         data-item="${item.work_order}">
+                        <div class="d-flex justify-content-between align-items-start mb-1">
+                            <span class="font-weight-bold text-truncate" style="font-size: 14px; max-width: 65%; color: var(--text-color);" title="${item.item_name}">
+                                ${item.item_name}
+                            </span>
+                            <span class="status-badge ${status_class}">${status_label}</span>
+                        </div>
+                        <div class="item-details mb-1">
+                            <div class="item-name text-truncate" title="${item.item_code}" style="font-size: 13px; margin-bottom: 2px;">
+                                <i class="fa fa-industry text-muted mr-1"></i>
+                                ${item.item_code}
+                                <span class="badge badge-info ml-1" style="font-size: 10px;">${__('Standalone')}</span>
+                            </div>
+                            <div class="d-flex justify-content-between align-items-center mt-1">
+                                <span class="text-muted small">${item.work_order}</span>
+                                <span class="badge badge-light" title="${__('Qty')}">${frappe.format(item.pending_qty, { fieldtype: 'Float', precision: 2 })}</span>
+                            </div>
+                        </div>
+                        <div class="item-footer mt-2 pt-2 border-top">
+                            <span class="delivery-date small text-muted">
+                                <i class="fa fa-clock-o"></i> ${frappe.datetime.str_to_user(item.creation)}
+                            </span>
+                        </div>
+                    </div>
+                `;
+            }
+        } else {
+            // ── Standard SO-based cards ──────────────────────────────
+            for (let item of this.pending_items) {
+                const status_class = this.get_status_class(item);
+                const status_label = this.get_status_label(item);
 
-            html += `
+                // Subcontracting UX
+                const is_subcontracted = item.is_subcontracted;
+                const display_item_code = is_subcontracted ? (item.fg_item || item.item_code) : item.item_code;
+                const display_item_name = is_subcontracted ? (item.fg_item || item.item_name) : item.item_name;
+                const service_name = is_subcontracted ? item.item_name : '';
+
+                const badge_html = is_subcontracted ?
+                    `<span class="badge badge-warning ml-1" style="font-size: 10px;">${__('Subcontract')}</span>` : '';
+
+                html += `
 				<div class="pending-item-card ${this.selected_item === item.sales_order_item ? 'selected' : ''}"
 					 data-item="${item.sales_order_item}">
 					<div class="d-flex justify-content-between align-items-start mb-1">
@@ -483,6 +628,15 @@ class ProductionWizard {
 					</div>
 				</div>
 			`;
+            }
+
+            html += `
+                <div class="create-new-so-btn mt-3 mb-4 px-2">
+                    <button class="btn btn-default w-100 btn-create-so d-flex align-items-center justify-content-center" style="border: 1px dashed var(--border-color); background: transparent; color: var(--text-muted); box-shadow: none; padding: 10px; transition: all 0.2s ease;">
+                        <i class="fa fa-plus mr-2" style="font-size: 12px;"></i> ${__('Create New SO')}
+                    </button>
+                </div>
+            `;
         }
 
         this.$pending_list.html(html);
@@ -491,6 +645,11 @@ class ProductionWizard {
         this.$pending_list.find('.pending-item-card').on('click', (e) => {
             const item_id = $(e.currentTarget).data('item');
             this.select_item(item_id);
+        });
+
+        this.$pending_list.find('.btn-create-so').on('click', () => {
+            frappe.route_options = { type: 'sales-order' };
+            frappe.set_route('transaction-desk');
         });
     }
 
@@ -512,18 +671,18 @@ class ProductionWizard {
         return status;
     }
 
-    select_item(sales_order_item) {
-        this.selected_item = sales_order_item;
+    select_item(item_key) {
+        this.selected_item = item_key;
 
         // Update UI selection
         this.$pending_list.find('.pending-item-card').removeClass('selected');
-        this.$pending_list.find(`[data-item="${sales_order_item}"]`).addClass('selected');
+        this.$pending_list.find(`[data-item="${item_key}"]`).addClass('selected');
 
         // Load details
-        this.load_production_details(sales_order_item);
+        this.load_production_details(item_key);
     }
 
-    load_production_details(sales_order_item) {
+    load_production_details(item_key) {
         this.$details_content.html(`
 			<div class="text-center p-4">
 				<div class="spinner-border text-primary" role="status">
@@ -532,11 +691,17 @@ class ProductionWizard {
 			</div>
 		`);
 
+        const method = this.is_standalone_mode
+            ? 'kniterp.api.production_wizard.get_standalone_wo_details'
+            : 'kniterp.api.production_wizard.get_production_details';
+
+        const args = this.is_standalone_mode
+            ? { work_order: item_key }
+            : { sales_order_item: item_key };
+
         frappe.call({
-            method: 'kniterp.api.production_wizard.get_production_details',
-            args: {
-                sales_order_item: sales_order_item
-            },
+            method: method,
+            args: args,
             callback: (r) => {
                 if (r.message) {
                     this.current_details = r.message;
@@ -547,11 +712,22 @@ class ProductionWizard {
     }
 
     render_production_details(details) {
+        // "Return to Outsourcing Desk" banner for standalone mode
+        const return_banner = (details.is_standalone && this._od_return) ? `
+            <div class="alert alert-info d-flex align-items-center justify-content-between mb-3" style="border-radius: 8px;">
+                <span><i class="fa fa-arrow-left mr-2"></i>${__('Manufacturing RM for Outsourcing Order')}: <strong>${this._od_return}</strong></span>
+                <button class="btn btn-sm btn-primary btn-return-od">
+                    <i class="fa fa-reply mr-1"></i> ${__('Return to Outsourcing Desk')}
+                </button>
+            </div>` : '';
+
         let html = `
 			<div class="production-details">
+                ${return_banner}
 				<!-- Header -->
 				<div class="details-header">
 					<div class="item-info">
+                        ${details.is_standalone ? `<div class="mb-1"><span class="badge badge-info">${__('Standalone Work Order')}</span></div>` : ''}
                         ${details.is_subcontracted ? `<div class="mb-1"><span class="badge badge-warning">${__('Subcontracting Inward')}</span></div>` : ''}
 						<h4><a href="/app/item/${encodeURIComponent(details.production_item || details.item_code)}" target="_blank">${details.production_item_name || details.item_name || details.production_item}</a></h4>
 						<span class="text-muted">
@@ -572,13 +748,14 @@ class ProductionWizard {
 
 				<!-- Info Cards -->
 				<div class="info-cards">
+                    ${details.sales_order ? `
 					<div class="info-card">
 						<i class="fa fa-file-text-o"></i>
 						<div>
 							<div class="label">${__('Sales Order')}</div>
 							<a href="/app/sales-order/${details.sales_order}">${details.sales_order}</a>
 						</div>
-					</div>
+					</div>` : ''}
 					<div class="info-card">
 						<i class="fa fa-sitemap"></i>
 						<div>
@@ -598,13 +775,14 @@ class ProductionWizard {
             }
 						</div>
 					</div>
+                    ${details.delivery_date ? `
 					<div class="info-card">
 						<i class="fa fa-calendar"></i>
 						<div>
 							<div class="label">${__('Delivery Date')}</div>
 							<span>${frappe.datetime.str_to_user(details.delivery_date)}</span>
 						</div>
-					</div>
+					</div>` : ''}
                     ${details.subcontracting_inward_order ? `
 					<div class="info-card">
 						<i class="fa fa-share-square-o"></i>
@@ -1199,10 +1377,12 @@ class ProductionWizard {
                                 </div>
                                 <div class="text-right">
                                     ${showSend ? `
-                                    <button class="btn btn-xs btn-default btn-send-sco-material mb-1 ml-1" 
+                                    <button class="btn btn-xs btn-default btn-send-sco-material mb-1 ml-1"
                                         data-sco="${sco.sco_name}" data-po="${sco.po_name}"
                                         data-pending-fg="${flt(sco.qty - (sco.received_qty || 0), 3)}"
-                                        data-sent-rm="${sent_rm}" data-required-rm="${required_rm}">
+                                        data-sent-rm="${sent_rm}" data-required-rm="${required_rm}"
+                                        data-jw-description="${frappe.utils.escape_html(sco.jw_description || '')}"
+                                        data-transaction-params="${frappe.utils.escape_html(sco.transaction_params_json || '[]')}">
                                         <i class="fa fa-truck text-warning"></i> ${__('Send Material')}
                                     </button>` : ''}
                                     
@@ -1452,6 +1632,15 @@ class ProductionWizard {
     bind_action_events(details) {
         const self = this;
 
+        // Return to Outsourcing Desk
+        this.$details_content.find('.btn-return-od').on('click', () => {
+            const po_name = this._od_return;
+            if (po_name) {
+                frappe.route_options = { selected_po: po_name };
+                frappe.set_route('outsourcing-desk');
+            }
+        });
+
         // Create Work Order
         this.$details_content.find('.btn-create-wo').on('click', () => {
             this.create_work_order(details);
@@ -1494,7 +1683,11 @@ class ProductionWizard {
             const pending_fg = flt($(this).data('pending-fg'));
             const sent_rm = flt($(this).data('sent-rm'));
             const required_rm = flt($(this).data('required-rm'));
-            self.send_raw_material_to_supplier(null, sco, { pending_fg, sent_rm, required_rm });
+            const jw_description = $(this).data('jw-description') || details.description || '';
+            let transaction_params = [];
+            try { transaction_params = JSON.parse($(this).data('transaction-params') || '[]'); } catch (e) { }
+            if (!transaction_params.length && details.transaction_parameters) transaction_params = details.transaction_parameters;
+            self.send_raw_material_to_supplier(null, sco, { pending_fg, sent_rm, required_rm, jw_description, transaction_params });
         });
 
         // Receive Goods (New per-SCO button)
@@ -2088,22 +2281,31 @@ class ProductionWizard {
     }
 
     start_work_order(details) {
+        const settings = frappe.boot.kniterp_settings || {};
         const operations_data = (details.operations || []).map(op => {
             let skip = 0;
             let wh = details.work_order?.wip_warehouse || '';
+            let workstation = op.workstation || '';
 
-            // Defaults based on user request
-            if (op.operation.toLowerCase().includes('knitting') && !op.is_subcontracted) {
+            const op_lower = op.operation.toLowerCase();
+
+            if (op_lower.includes('knitting') && !op.is_subcontracted) {
                 skip = 1;
+                if (!workstation) {
+                    workstation = settings.default_knitting_machine || '';
+                }
             }
 
-            if (op.operation.toLowerCase().includes('dyeing')) {
-                wh = frappe.boot.kniterp_settings?.jw_outward_warehouse || wh;
+            if (op_lower.includes('dyeing')) {
+                wh = settings.default_dyeing_warehouse || settings.jw_outward_warehouse || wh;
+                if (!workstation) {
+                    workstation = settings.default_dyeing_machine || '';
+                }
             }
 
             return {
                 operation: op.operation,
-                workstation: op.workstation || '',
+                workstation: workstation,
                 skip_material_transfer: skip,
                 wip_warehouse: wh
             };
@@ -2275,6 +2477,51 @@ class ProductionWizard {
                     default: default_qty,
                     reqd: 1,
                     description: __('Limit: {0} (Available from previous op)', [flt(available_from_prev, 3)])
+                },
+                {
+                    fieldtype: 'Section Break',
+                    label: __('Job Work Instructions'),
+                    collapsible: 1
+                },
+                {
+                    fieldname: 'jw_description',
+                    fieldtype: 'Small Text',
+                    label: __('Job Work Description'),
+                    default: details.description || '',
+                    description: __('Instructions for the subcontractor (shade, pattern, specs)')
+                },
+                {
+                    fieldtype: 'Section Break',
+                    label: __('Transaction Parameters'),
+                    collapsible: 1
+                },
+                {
+                    fieldtype: 'Table',
+                    fieldname: 'transaction_params',
+                    label: __('Parameters'),
+                    cannot_add_rows: false,
+                    in_place_edit: true,
+                    data: (details.transaction_parameters || []).map(p => ({
+                        parameter: p.parameter,
+                        value: p.value
+                    })),
+                    fields: [
+                        {
+                            fieldtype: 'Link',
+                            fieldname: 'parameter',
+                            label: __('Parameter'),
+                            options: 'Transaction Parameter',
+                            in_list_view: 1,
+                            columns: 4
+                        },
+                        {
+                            fieldtype: 'Data',
+                            fieldname: 'value',
+                            label: __('Value'),
+                            in_list_view: 1,
+                            columns: 6
+                        }
+                    ]
                 }
             ],
             primary_action_label: __('Create & Submit'),
@@ -2332,7 +2579,13 @@ class ProductionWizard {
                 operation: operation,
                 supplier: values.supplier,
                 qty: values.qty,
-                rate: values.rate
+                rate: values.rate,
+                jw_description: values.jw_description || '',
+                transaction_params: JSON.stringify(
+                    (values.transaction_params || [])
+                        .filter(p => p.parameter && p.value)
+                        .map(p => ({ parameter: p.parameter, value: p.value }))
+                )
             },
             freeze: true,
             freeze_message: __('Creating and Submitting Subcontracting Order...'),
@@ -2353,9 +2606,10 @@ class ProductionWizard {
     }
 
     send_raw_material_to_supplier(purchase_order, sco_name, ctx) {
-        const create_ste = (sco, fg_qty) => {
+        const create_ste = (sco, fg_qty, extra_args) => {
             const args = { sco_name: sco };
             if (fg_qty) args.fg_qty = fg_qty;
+            if (extra_args) args.extra_args = JSON.stringify(extra_args);
 
             frappe.call({
                 method: 'kniterp.api.production_wizard.auto_split_subcontract_stock_entry',
@@ -2416,6 +2670,138 @@ class ProductionWizard {
                                 const v = flt(d.get_value('rm_qty'), 3);
                                 d.set_value('fg_qty', rm_per_fg > 0 ? flt(v / rm_per_fg, 3) : 0).then(() => _updating = false);
                             }
+                        },
+                        {
+                            fieldtype: 'Section Break',
+                            label: __('Transport Details'),
+                            collapsible: 1
+                        },
+                        {
+                            fieldname: 'transporter',
+                            fieldtype: 'Link',
+                            options: 'Supplier',
+                            label: __('Transporter'),
+                            get_query: () => ({ filters: { disabled: 0, is_transporter: 1 } }),
+                            change: function () {
+                                const val = d.get_value('transporter');
+                                if (val) {
+                                    frappe.db.get_value('Supplier', val,
+                                        ['supplier_name', 'gst_transporter_id'], (r) => {
+                                            if (r) {
+                                                d.set_value('transporter_name', r.supplier_name || '');
+                                                d.set_value('gst_transporter_id', r.gst_transporter_id || '');
+                                            }
+                                        });
+                                } else {
+                                    d.set_value('transporter_name', '');
+                                    d.set_value('gst_transporter_id', '');
+                                }
+                            }
+                        },
+                        {
+                            fieldname: 'vehicle_no',
+                            fieldtype: 'Data',
+                            label: __('Vehicle No'),
+                            length: 15
+                        },
+                        {
+                            fieldname: 'lr_no',
+                            fieldtype: 'Data',
+                            label: __('Transport Receipt No'),
+                            length: 30
+                        },
+                        { fieldtype: 'Column Break' },
+                        {
+                            fieldname: 'transporter_name',
+                            fieldtype: 'Data',
+                            label: __('Transporter Name'),
+                            read_only: 1
+                        },
+                        {
+                            fieldname: 'gst_transporter_id',
+                            fieldtype: 'Data',
+                            label: __('GST Transporter ID'),
+                            read_only: 1,
+                            hidden: 1
+                        },
+                        {
+                            fieldname: 'lr_date',
+                            fieldtype: 'Date',
+                            label: __('Transport Receipt Date'),
+                            default: frappe.datetime.nowdate()
+                        },
+                        {
+                            fieldname: 'distance',
+                            fieldtype: 'Int',
+                            label: __('Distance (km)')
+                        },
+                        {
+                            fieldtype: 'Section Break',
+                            label: __('Job Work Instructions'),
+                            collapsible: 1
+                        },
+                        {
+                            fieldname: 'jw_description',
+                            fieldtype: 'Small Text',
+                            label: __('Job Work Instructions'),
+                            default: ctx.jw_description || '',
+                            description: __('Instructions for the subcontractor — appended to each item description in the Stock Entry')
+                        },
+                        {
+                            fieldtype: 'Section Break',
+                            label: __('Transaction Parameters'),
+                            collapsible: 1
+                        },
+                        {
+                            fieldtype: 'Table',
+                            fieldname: 'transaction_params',
+                            label: __('Parameters'),
+                            cannot_add_rows: false,
+                            in_place_edit: true,
+                            data: (ctx.transaction_params || []).map(p => ({
+                                parameter: p.parameter,
+                                value: p.value
+                            })),
+                            fields: [
+                                {
+                                    fieldtype: 'Link',
+                                    fieldname: 'parameter',
+                                    label: __('Parameter'),
+                                    options: 'Transaction Parameter',
+                                    in_list_view: 1,
+                                    columns: 4
+                                },
+                                {
+                                    fieldtype: 'Data',
+                                    fieldname: 'value',
+                                    label: __('Value'),
+                                    in_list_view: 1,
+                                    columns: 6
+                                }
+                            ]
+                        },
+                        {
+                            fieldtype: 'Section Break',
+                            label: __('Package Details'),
+                            collapsible: 1
+                        },
+                        {
+                            fieldname: 'no_of_pkgs',
+                            fieldtype: 'Int',
+                            label: __('No. of Pkgs'),
+                        },
+                        {
+                            fieldname: 'kind_of_pkgs',
+                            fieldtype: 'Select',
+                            label: __('Kind of Pkgs'),
+                            options: '\nRolls\nBags\nBoxes\nOther',
+                        },
+                        {
+                            fieldname: 'kind_of_pkgs_other',
+                            fieldtype: 'Data',
+                            label: __('Specify Kind'),
+                            depends_on: "eval:doc.kind_of_pkgs=='Other'",
+                            mandatory_depends_on: "eval:doc.kind_of_pkgs=='Other'",
                         }
                     ],
                     primary_action_label: __('Create Stock Entry'),
@@ -2430,7 +2816,24 @@ class ProductionWizard {
                             return;
                         }
                         d.hide();
-                        create_ste(sco_name, qty < pending_fg ? qty : null);
+
+                        const extra_args = {};
+                        for (const f of ['transporter', 'transporter_name', 'gst_transporter_id',
+                            'vehicle_no', 'lr_no', 'lr_date', 'distance', 'jw_description',
+                            'no_of_pkgs', 'kind_of_pkgs', 'kind_of_pkgs_other']) {
+                            if (values[f]) extra_args[f] = values[f];
+                        }
+                        // Add cleaned transaction params
+                        const clean_params = (values.transaction_params || [])
+                            .filter(p => p.parameter && p.value)
+                            .map(p => ({ parameter: p.parameter, value: p.value }));
+                        if (clean_params.length) extra_args.transaction_params = JSON.stringify(clean_params);
+
+                        create_ste(
+                            sco_name,
+                            qty < pending_fg ? qty : null,
+                            Object.keys(extra_args).length ? extra_args : null
+                        );
                     }
                 });
                 d.show();
@@ -2520,6 +2923,29 @@ class ProductionWizard {
                     reqd: 0
                 },
                 {
+                    fieldname: 'sb_pkgs',
+                    fieldtype: 'Section Break',
+                    label: __('Package Details')
+                },
+                {
+                    fieldname: 'no_of_pkgs',
+                    fieldtype: 'Int',
+                    label: __('No. of Pkgs'),
+                },
+                {
+                    fieldname: 'kind_of_pkgs',
+                    fieldtype: 'Select',
+                    label: __('Kind of Pkgs'),
+                    options: '\nRolls\nBags\nBoxes\nOther',
+                },
+                {
+                    fieldname: 'kind_of_pkgs_other',
+                    fieldtype: 'Data',
+                    label: __('Specify Kind'),
+                    depends_on: "eval:doc.kind_of_pkgs=='Other'",
+                    mandatory_depends_on: "eval:doc.kind_of_pkgs=='Other'",
+                },
+                {
                     fieldname: 'sb_lot',
                     fieldtype: 'Section Break',
                     label: __('Lot Traceability')
@@ -2586,7 +3012,10 @@ class ProductionWizard {
                         subcontracting_order: sco_name,
                         rate: values.rate,
                         supplier_delivery_note: values.supplier_delivery_note,
-                        received_batches: JSON.stringify(received_batches)
+                        received_batches: JSON.stringify(received_batches),
+                        no_of_pkgs: cint(values.no_of_pkgs) || 0,
+                        kind_of_pkgs: values.kind_of_pkgs || '',
+                        kind_of_pkgs_other: values.kind_of_pkgs_other || '',
                     },
                     freeze: true,
                     freeze_message: __('Creating Subcontracting Receipt...'),
@@ -3082,6 +3511,45 @@ class ProductionWizard {
                                 default: jc.workstation || op.workstation || '',
                                 reqd: 1
                             },
+                            // Conditionally add date/shift fields BEFORE employee (knitting only)
+                            ...(operation.toLowerCase().includes('knitting') ? [
+                                {
+                                    fieldname: 'attendance_date',
+                                    fieldtype: 'Date',
+                                    label: __('Date'),
+                                    default: frappe.datetime.get_today(),
+                                    reqd: 1,
+                                    onchange: function() {
+                                        if (!d) return;
+                                        d.fields_dict.employee.df.get_query = () => ({
+                                            query: 'kniterp.kniterp.doctype.machine_attendance.machine_attendance.get_present_operators',
+                                            filters: {
+                                                date: d.get_value('attendance_date') || '',
+                                                shift: d.get_value('shift') || ''
+                                            }
+                                        });
+                                        d.set_value('employee', '');
+                                    }
+                                },
+                                {
+                                    fieldname: 'shift',
+                                    fieldtype: 'Link',
+                                    options: 'Shift Type',
+                                    label: __('Shift'),
+                                    reqd: 1,
+                                    onchange: function() {
+                                        if (!d) return;
+                                        d.fields_dict.employee.df.get_query = () => ({
+                                            query: 'kniterp.kniterp.doctype.machine_attendance.machine_attendance.get_present_operators',
+                                            filters: {
+                                                date: d.get_value('attendance_date') || '',
+                                                shift: d.get_value('shift') || ''
+                                            }
+                                        });
+                                        d.set_value('employee', '');
+                                    }
+                                }
+                            ] : []),
                             {
                                 fieldname: 'employee',
                                 fieldtype: 'Link',
@@ -3090,23 +3558,6 @@ class ProductionWizard {
                                 description: __('Person performing the operation'),
                                 reqd: operation.toLowerCase().includes('knitting') ? 1 : 0
                             },
-                            // Conditionally add fields for Knitting Machine Attendance
-                            ...(operation.toLowerCase().includes('knitting') ? [
-                                {
-                                    fieldname: 'attendance_date',
-                                    fieldtype: 'Date',
-                                    label: __('Date'),
-                                    default: frappe.datetime.get_today(),
-                                    reqd: 1
-                                },
-                                {
-                                    fieldname: 'shift',
-                                    fieldtype: 'Link',
-                                    options: 'Shift Type',
-                                    label: __('Shift'),
-                                    reqd: 1
-                                }
-                            ] : []),
                             {
                                 fieldname: 'cb_qty',
                                 fieldtype: 'Column Break'
@@ -3203,6 +3654,21 @@ class ProductionWizard {
                     });
 
                     d.show();
+
+                    // Restrict employee search: present Operators (knitting) or just Operators (other)
+                    if (operation.toLowerCase().includes('knitting')) {
+                        d.fields_dict.employee.df.get_query = () => ({
+                            query: 'kniterp.kniterp.doctype.machine_attendance.machine_attendance.get_present_operators',
+                            filters: {
+                                date: d.get_value('attendance_date') || '',
+                                shift: d.get_value('shift') || ''
+                            }
+                        });
+                    } else {
+                        d.fields_dict.employee.df.get_query = () => ({
+                            filters: { designation: 'Operator' }
+                        });
+                    }
 
                     // Render the lot tables into the HTML field
                     _refresh_all_lot_tables();
@@ -3407,6 +3873,11 @@ class ProductionWizard {
                             }
                         });
                         d_edit.show();
+
+                        // Restrict employee search to Operators only
+                        d_edit.fields_dict.employee.df.get_query = () => ({
+                            filters: { designation: "Operator" }
+                        });
                     });
                 };
 
@@ -3974,20 +4445,203 @@ class ProductionWizard {
         d.fields_dict.calc_info.$wrapper.html(info_html);
     }
 
-    create_delivery_note(details) {
+    show_pkgs_dialog(doctype, doc_name, callback) {
         frappe.call({
-            method: 'kniterp.api.production_wizard.create_delivery_note',
-            args: {
-                sales_order: details.sales_order
-            },
-            freeze: true,
-            freeze_message: __('Creating Delivery Note...'),
+            method: 'frappe.client.get',
+            args: { doctype: doctype, name: doc_name },
             callback: (r) => {
-                if (r.message) {
-                    frappe.set_route('Form', 'Delivery Note', r.message);
-                }
+                if (!r.message) { callback(); return; }
+                const items = r.message.items || [];
+                if (!items.length) { callback(); return; }
+
+                const d = new frappe.ui.Dialog({
+                    title: __('Package Details — {0}', [doc_name]),
+                    fields: [
+                        {
+                            fieldtype: 'HTML', fieldname: 'info',
+                            options: `<p class="text-muted small mb-2">${__('Enter package details for each item. You can also fill these later on the form.')}</p>`
+                        },
+                        {
+                            fieldtype: 'Table', fieldname: 'items_pkgs', label: __('Items'),
+                            cannot_add_rows: true, cannot_delete_rows: true, in_place_edit: true,
+                            fields: [
+                                { fieldname: 'item_code', fieldtype: 'Data', label: __('Item'), read_only: 1, in_list_view: 1, columns: 4 },
+                                { fieldname: 'qty', fieldtype: 'Float', label: __('Qty'), read_only: 1, in_list_view: 1, columns: 2 },
+                                { fieldname: 'no_of_pkgs', fieldtype: 'Int', label: __('No. of Pkgs'), in_list_view: 1, columns: 2 },
+                                { fieldname: 'kind_of_pkgs', fieldtype: 'Select', label: __('Kind'), options: '\nRolls\nBags\nBoxes\nOther', in_list_view: 1, columns: 2 },
+                                { fieldname: 'kind_of_pkgs_other', fieldtype: 'Data', label: __('Other Kind'), in_list_view: 1, columns: 2 },
+                                { fieldname: 'row_name', fieldtype: 'Data', hidden: 1 },
+                            ]
+                        }
+                    ],
+                    size: 'large',
+                    primary_action_label: __('Save & Open'),
+                    primary_action: (values) => {
+                        const items_pkgs = (values.items_pkgs || [])
+                            .filter(row => row.no_of_pkgs)
+                            .map(row => ({
+                                row_name: row.row_name,
+                                custom_no_of_pkgs: cint(row.no_of_pkgs),
+                                custom_kind_of_pkgs: row.kind_of_pkgs || '',
+                                custom_kind_of_pkgs_other: row.kind_of_pkgs_other || '',
+                            }));
+                        if (items_pkgs.length) {
+                            frappe.call({
+                                method: 'kniterp.api.production_wizard.update_document_pkgs',
+                                args: { doctype, name: doc_name, items_pkgs: JSON.stringify(items_pkgs) },
+                                freeze: true,
+                                callback: () => { d.hide(); callback(); }
+                            });
+                        } else {
+                            d.hide(); callback();
+                        }
+                    },
+                    secondary_action_label: __('Skip'),
+                    secondary_action: () => { d.hide(); callback(); }
+                });
+
+                d.fields_dict.items_pkgs.df.data = items.map(item => ({
+                    item_code: item.item_code,
+                    qty: item.qty,
+                    no_of_pkgs: item.custom_no_of_pkgs || '',
+                    kind_of_pkgs: item.custom_kind_of_pkgs || '',
+                    kind_of_pkgs_other: item.custom_kind_of_pkgs_other || '',
+                    row_name: item.name,
+                }));
+                d.show();
+                d.fields_dict.items_pkgs.grid.refresh();
             }
         });
+    }
+
+    create_delivery_note(details) {
+        const produced_qty = details.work_order ? flt(details.work_order.produced_qty) : 0;
+        const delivered_qty = flt(details.delivered_qty);
+        const available_to_deliver = flt(produced_qty - delivered_qty, 3);
+        const delivery_date = details.delivery_date
+            ? frappe.datetime.str_to_user(details.delivery_date) : '-';
+
+        const d = new frappe.ui.Dialog({
+            title: __('Create Delivery Note'),
+            fields: [
+                {
+                    fieldname: 'info_html',
+                    fieldtype: 'HTML',
+                    options: `<div class="mb-3" style="background:var(--control-bg); border:1px solid var(--border-color); border-radius:6px; padding:10px 14px; font-size:13px;">
+                        <div style="font-size:14px; font-weight:600; margin-bottom:6px;">${details.customer_name || ''}</div>
+                        <div class="text-muted mb-2"><strong>${__('Sales Order')}:</strong>
+                            <a href="/app/sales-order/${details.sales_order}">${details.sales_order}</a>
+                        </div>
+                        <hr style="margin:6px 0;">
+                        <div><strong>${__('Item')}:</strong> ${details.production_item_name || details.item_name}</div>
+                        <div class="d-flex flex-wrap mt-1" style="gap:12px;">
+                            <span><strong>${__('Ordered')}:</strong> ${flt(details.qty, 3)} ${details.uom || ''}</span>
+                            <span><strong>${__('Produced')}:</strong> ${flt(produced_qty, 3)} ${details.uom || ''}</span>
+                            <span><strong>${__('Delivered')}:</strong> ${flt(delivered_qty, 3)} ${details.uom || ''}</span>
+                            <span style="color:var(--green-600); font-weight:600;">
+                                <strong>${__('To Deliver')}:</strong> ${flt(available_to_deliver, 3)} ${details.uom || ''}
+                            </span>
+                        </div>
+                        <div class="mt-1 text-muted">
+                            <strong>${__('Delivery Date')}:</strong> ${delivery_date}
+                        </div>
+                    </div>`
+                },
+                {
+                    fieldtype: 'Section Break',
+                    label: __('Transport Details'),
+                    collapsible: 1
+                },
+                {
+                    fieldname: 'transporter',
+                    fieldtype: 'Link',
+                    options: 'Supplier',
+                    label: __('Transporter'),
+                    get_query: () => ({ filters: { disabled: 0, is_transporter: 1 } }),
+                    change: function () {
+                        const val = d.get_value('transporter');
+                        if (val) {
+                            frappe.db.get_value('Supplier', val,
+                                ['supplier_name', 'gst_transporter_id'], (r) => {
+                                    if (r) {
+                                        d.set_value('transporter_name', r.supplier_name || '');
+                                        d.set_value('gst_transporter_id', r.gst_transporter_id || '');
+                                    }
+                                });
+                        } else {
+                            d.set_value('transporter_name', '');
+                            d.set_value('gst_transporter_id', '');
+                        }
+                    }
+                },
+                {
+                    fieldname: 'vehicle_no',
+                    fieldtype: 'Data',
+                    label: __('Vehicle No'),
+                    length: 15
+                },
+                {
+                    fieldname: 'lr_no',
+                    fieldtype: 'Data',
+                    label: __('Transport Receipt No'),
+                    length: 30
+                },
+                { fieldtype: 'Column Break' },
+                {
+                    fieldname: 'transporter_name',
+                    fieldtype: 'Data',
+                    label: __('Transporter Name'),
+                    read_only: 1
+                },
+                {
+                    fieldname: 'gst_transporter_id',
+                    fieldtype: 'Data',
+                    label: __('GST Transporter ID'),
+                    read_only: 1,
+                    hidden: 1
+                },
+                {
+                    fieldname: 'lr_date',
+                    fieldtype: 'Date',
+                    label: __('Transport Receipt Date'),
+                    default: frappe.datetime.nowdate()
+                },
+                {
+                    fieldname: 'distance',
+                    fieldtype: 'Int',
+                    label: __('Distance (km)')
+                }
+            ],
+            primary_action_label: __('Create Delivery Note'),
+            primary_action: (values) => {
+                d.hide();
+
+                const transport_args = {};
+                for (const f of ['transporter', 'transporter_name', 'gst_transporter_id',
+                    'vehicle_no', 'lr_no', 'lr_date', 'distance']) {
+                    if (values[f]) transport_args[f] = values[f];
+                }
+
+                frappe.call({
+                    method: 'kniterp.api.production_wizard.create_delivery_note',
+                    args: {
+                        sales_order: details.sales_order,
+                        transport_args: Object.keys(transport_args).length
+                            ? JSON.stringify(transport_args) : null
+                    },
+                    freeze: true,
+                    freeze_message: __('Creating Delivery Note...'),
+                    callback: (r) => {
+                        if (r.message) {
+                            this.show_pkgs_dialog('Delivery Note', r.message, () => {
+                                frappe.set_route('Form', 'Delivery Note', r.message);
+                            });
+                        }
+                    }
+                });
+            }
+        });
+        d.show();
     }
 
     create_sales_invoice(details) {
@@ -4000,7 +4654,9 @@ class ProductionWizard {
             freeze_message: __('Creating Sales Invoice...'),
             callback: (r) => {
                 if (r.message) {
-                    frappe.set_route('Form', 'Sales Invoice', r.message);
+                    this.show_pkgs_dialog('Sales Invoice', r.message, () => {
+                        frappe.set_route('Form', 'Sales Invoice', r.message);
+                    });
                 }
             }
         });
@@ -4085,7 +4741,13 @@ class ProductionWizard {
                                 : __('Purchase Invoice {0} created as draft', [r.message.purchase_invoice]),
                             indicator: 'green'
                         });
-                        this.load_production_details(this.selected_item);
+                        if (!r.message.submitted) {
+                            this.show_pkgs_dialog('Purchase Invoice', r.message.purchase_invoice, () => {
+                                frappe.set_route('Form', 'Purchase Invoice', r.message.purchase_invoice);
+                            });
+                        } else {
+                            this.load_production_details(this.selected_item);
+                        }
                     }
                 }
             }
@@ -4357,8 +5019,8 @@ class ProductionWizard {
         let html = `
             <div class="consolidated-table-wrapper" style="max-height: 400px; overflow-y: auto;">
                 <table class="table table-bordered table-sm">
-                    <thead>
-                        <tr class="thead-light">
+                    <thead style="position:sticky; top:0; background:var(--bg-color); z-index:1;">
+                        <tr>
                             <th style="width: 40px"><input type="checkbox" class="select-all-shortages"></th>
                             <th>${__('Item')}</th>
                             <th class="text-right">${__('Total Required')}</th>
@@ -4519,5 +5181,1103 @@ class ProductionWizard {
         // Only change label if we are creating PO
         d.set_primary_action(__('Create Purchase Order'), d.primary_action);
         d.show();
+    }
+
+    // ── Consolidated Delivery Wizard ────────────────────────────────────
+
+    show_consolidated_delivery_wizard() {
+        const d = new frappe.ui.Dialog({
+            title: __('Consolidated Delivery Note'),
+            size: 'extra-large',
+            fields: [
+                {
+                    fieldname: 'customer',
+                    fieldtype: 'Link',
+                    options: 'Customer',
+                    label: __('Customer'),
+                    reqd: 1
+                },
+                { fieldtype: 'Column Break' },
+                {
+                    fieldname: 'get_btn',
+                    fieldtype: 'Button',
+                    label: __('Get Deliverables'),
+                    click: () => this._fetch_consolidated_deliverables(d)
+                },
+                {
+                    fieldname: 'results_section',
+                    fieldtype: 'Section Break',
+                    label: __('Items Ready for Delivery'),
+                    hidden: 1
+                },
+                {
+                    fieldname: 'deliverables_html',
+                    fieldtype: 'HTML'
+                },
+                {
+                    fieldname: 'transport_section',
+                    fieldtype: 'Section Break',
+                    label: __('Transport Details'),
+                    collapsible: 1,
+                    hidden: 1
+                },
+                {
+                    fieldname: 'transporter',
+                    fieldtype: 'Link',
+                    options: 'Supplier',
+                    label: __('Transporter'),
+                    get_query: () => ({ filters: { disabled: 0, is_transporter: 1 } }),
+                    change: function () {
+                        const val = d.get_value('transporter');
+                        if (val) {
+                            frappe.db.get_value('Supplier', val,
+                                ['supplier_name', 'gst_transporter_id'], (r) => {
+                                    if (r) {
+                                        d.set_value('transporter_name', r.supplier_name || '');
+                                        d.set_value('gst_transporter_id', r.gst_transporter_id || '');
+                                    }
+                                });
+                        } else {
+                            d.set_value('transporter_name', '');
+                            d.set_value('gst_transporter_id', '');
+                        }
+                    }
+                },
+                {
+                    fieldname: 'vehicle_no',
+                    fieldtype: 'Data',
+                    label: __('Vehicle No'),
+                    length: 15
+                },
+                {
+                    fieldname: 'lr_no',
+                    fieldtype: 'Data',
+                    label: __('Transport Receipt No'),
+                    length: 30
+                },
+                { fieldtype: 'Column Break' },
+                {
+                    fieldname: 'transporter_name',
+                    fieldtype: 'Data',
+                    label: __('Transporter Name'),
+                    read_only: 1
+                },
+                {
+                    fieldname: 'gst_transporter_id',
+                    fieldtype: 'Data',
+                    label: __('GST Transporter ID'),
+                    read_only: 1,
+                    hidden: 1
+                },
+                {
+                    fieldname: 'lr_date',
+                    fieldtype: 'Date',
+                    label: __('Transport Receipt Date'),
+                    default: frappe.datetime.nowdate()
+                },
+                {
+                    fieldname: 'distance',
+                    fieldtype: 'Int',
+                    label: __('Distance (km)')
+                }
+            ]
+        });
+        d.show();
+    }
+
+    _fetch_consolidated_deliverables(dialog) {
+        const customer = dialog.get_value('customer');
+        if (!customer) {
+            frappe.msgprint(__('Please select a Customer'));
+            return;
+        }
+
+        dialog.set_df_property('results_section', 'hidden', 0);
+        dialog.get_field('deliverables_html').$wrapper.html(
+            '<div class="text-center text-muted" style="padding:30px;">' +
+            '<i class="fa fa-spinner fa-spin"></i> ' + __('Loading...') + '</div>'
+        );
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.get_consolidated_deliverables',
+            args: { customer },
+            callback: (r) => {
+                const data = r.message || { items: [], excluded: [], meta: {} };
+                this._render_consolidated_deliverables(dialog, data);
+            }
+        });
+    }
+
+    _render_consolidated_deliverables(dialog, data) {
+        const wrapper = dialog.get_field('deliverables_html').$wrapper;
+        wrapper.empty();
+
+        const { items, excluded, meta } = data;
+
+        // Info banners
+        if (meta.incompatibility_reason) {
+            wrapper.append(
+                `<div class="alert alert-danger" style="margin-bottom:10px;">
+                    <i class="fa fa-exclamation-triangle"></i>
+                    ${frappe.utils.escape_html(__(meta.incompatibility_reason))}
+                </div>`
+            );
+        }
+
+        if (excluded && excluded.length) {
+            const links = excluded.map(e =>
+                `<a href="/app/delivery-note/${encodeURIComponent(e.draft_dn)}">${frappe.utils.escape_html(e.draft_dn)}</a> (${frappe.utils.escape_html(e.item_code)})`
+            ).join(', ');
+            wrapper.append(
+                `<div class="alert alert-info" style="margin-bottom:10px;">
+                    ${__("{0} item(s) excluded — draft Delivery Note(s) already exist: {1}",
+                    [excluded.length, links])}
+                </div>`
+            );
+        }
+
+        if (!items.length) {
+            wrapper.append(
+                `<div class="text-center text-muted" style="padding:30px;">
+                    ${__('No items ready for delivery for this customer')}
+                </div>`
+            );
+            dialog.set_df_property('transport_section', 'hidden', 1);
+            return;
+        }
+
+        // Show transport section
+        dialog.set_df_property('transport_section', 'hidden', 0);
+
+        // Build table
+        let html = `<div class="consolidated-delivery-table" style="max-height:400px; overflow-y:auto;">
+            <table class="table table-bordered table-sm" style="margin-bottom:0;">
+                <thead style="position:sticky; top:0; background:var(--bg-color); z-index:1;">
+                    <tr>
+                        <th style="width:40px; text-align:center;">
+                            <input type="checkbox" class="cd-select-all" checked>
+                        </th>
+                        <th>${__('Item')}</th>
+                        <th>${__('Sales Order')}</th>
+                        <th class="text-right">${__('Ordered')}</th>
+                        <th class="text-right">${__('Delivered')}</th>
+                        <th class="text-right">${__('Ready')}</th>
+                        <th class="text-right" style="width:120px;">${__('Delivery Qty')}</th>
+                        <th class="text-right" style="width:60px;">${__('Pkgs')}</th>
+                        <th style="width:90px;">${__('Kind')}</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+        items.forEach((item, idx) => {
+            html += `<tr data-idx="${idx}">
+                <td style="text-align:center;">
+                    <input type="checkbox" class="cd-item-check" data-idx="${idx}" checked>
+                </td>
+                <td>
+                    <strong>${frappe.utils.escape_html(item.item_code)}</strong><br>
+                    <small class="text-muted">${frappe.utils.escape_html(item.item_name || '')}</small>
+                </td>
+                <td><a href="/app/sales-order/${encodeURIComponent(item.sales_order)}" target="_blank">${frappe.utils.escape_html(item.sales_order)}</a></td>
+                <td class="text-right">${flt(item.ordered_qty, 3)}</td>
+                <td class="text-right">${flt(item.delivered_qty, 3)}</td>
+                <td class="text-right" style="font-weight:bold; color:var(--green-600);">${flt(item.ready_qty, 3)}</td>
+                <td class="text-right">
+                    <input type="number" class="form-control form-control-sm cd-qty-input text-right"
+                        data-idx="${idx}" value="${flt(item.available_to_deliver, 3)}"
+                        min="0" max="${flt(item.available_to_deliver, 3)}" step="0.001"
+                        style="width:100px; display:inline-block;">
+                </td>
+                <td class="text-right">
+                    <input type="number" class="form-control form-control-sm cd-pkgs-input text-right"
+                        data-idx="${idx}" value="" min="0" step="1" placeholder="—"
+                        style="width:55px; display:inline-block;">
+                </td>
+                <td>
+                    <select class="form-control form-control-sm cd-kind-input" data-idx="${idx}" style="width:85px;">
+                        <option value=""></option>
+                        <option>Rolls</option><option>Bags</option><option>Boxes</option>
+                        <option>Cartons</option><option>Other</option>
+                    </select>
+                </td>
+            </tr>`;
+        });
+
+        html += `</tbody></table></div>`;
+
+        // Create button
+        const can_create = meta.compatible !== false;
+        html += `<div style="margin-top:15px; text-align:right;">
+            <button class="btn btn-primary btn-create-consolidated-dn" ${can_create ? '' : 'disabled'}>
+                <i class="fa fa-truck"></i> ${__('Create Delivery Note')}
+            </button>
+        </div>`;
+
+        wrapper.html(html);
+
+        // Select-all toggle
+        wrapper.find('.cd-select-all').on('change', function () {
+            wrapper.find('.cd-item-check').prop('checked', $(this).is(':checked'));
+        });
+
+        // Create button handler
+        wrapper.find('.btn-create-consolidated-dn').on('click', () => {
+            this._create_consolidated_dn(dialog, items);
+        });
+    }
+
+    // ── Consolidated Send RM ────────────────────────────────────────────────
+
+    show_consolidated_send_rm_wizard() {
+        const d = new frappe.ui.Dialog({
+            title: __('Consolidated Send Material to Subcontractor'),
+            size: 'extra-large',
+            fields: [
+                { fieldname: 'supplier', fieldtype: 'Link', options: 'Supplier', label: __('Supplier'), reqd: 1 },
+                { fieldtype: 'Column Break' },
+                {
+                    fieldname: 'get_btn', fieldtype: 'Button', label: __('Get Pending Transfers'),
+                    click: () => this._fetch_consolidated_send_rm(d)
+                },
+                {
+                    fieldname: 'results_section', fieldtype: 'Section Break',
+                    label: __('Pending Raw Material Transfers'), hidden: 1
+                },
+                { fieldname: 'send_rm_html', fieldtype: 'HTML' },
+                {
+                    fieldname: 'transport_section', fieldtype: 'Section Break',
+                    label: __('Transport Details'), collapsible: 1, hidden: 1
+                },
+                ...this._get_transport_field_definitions()
+            ]
+        });
+        d.show();
+    }
+
+    _fetch_consolidated_send_rm(dialog) {
+        const supplier = dialog.get_value('supplier');
+        if (!supplier) { frappe.msgprint(__('Please select a Supplier')); return; }
+
+        dialog.set_df_property('results_section', 'hidden', 0);
+        dialog.get_field('send_rm_html').$wrapper.html(
+            '<div class="text-center text-muted" style="padding:30px;"><i class="fa fa-spinner fa-spin"></i> ' +
+            __('Loading...') + '</div>');
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.get_consolidated_send_rm_items',
+            args: { supplier },
+            callback: (r) => {
+                const data = r.message || { items: [], excluded: [], meta: {} };
+                this._render_consolidated_send_rm(dialog, data);
+            }
+        });
+    }
+
+    _render_consolidated_send_rm(dialog, data) {
+        const wrapper = dialog.get_field('send_rm_html').$wrapper;
+        wrapper.empty();
+        const { items, excluded, meta } = data;
+
+        if (meta.incompatibility_reason) {
+            wrapper.append(`<div class="alert alert-danger" style="margin-bottom:10px;">
+                <i class="fa fa-exclamation-triangle"></i>
+                ${frappe.utils.escape_html(meta.incompatibility_reason)}</div>`);
+        }
+
+        if (excluded && excluded.length) {
+            const links = excluded.map(e =>
+                `<a href="/app/stock-entry/${encodeURIComponent(e.draft_se)}" target="_blank">${frappe.utils.escape_html(e.draft_se)}</a> (${frappe.utils.escape_html(e.rm_item_code)})`
+            ).join(', ');
+            wrapper.append(`<div class="alert alert-info" style="margin-bottom:10px;">
+                ${__("{0} item(s) excluded — draft Stock Entries already exist: {1}", [excluded.length, links])}
+            </div>`);
+        }
+
+        if (!items.length && !(excluded && excluded.length)) {
+            wrapper.append(`<div class="text-center text-muted" style="padding:30px;">
+                ${__('No pending material transfers for this supplier')}</div>`);
+            dialog.set_df_property('transport_section', 'hidden', 1);
+            return;
+        }
+
+        dialog.set_df_property('transport_section', 'hidden', 0);
+
+        let html = `<div class="csrm-table-wrapper" style="max-height:400px; overflow-y:auto;">
+            <table class="table table-bordered table-sm" style="margin-bottom:0;">
+                <thead style="position:sticky; top:0; background:var(--bg-color); z-index:1;">
+                    <tr>
+                        <th style="width:40px; text-align:center;"><input type="checkbox" class="csrm-select-all" checked></th>
+                        <th>${__('RM Item')}</th>
+                        <th>${__('SCO')}</th>
+                        <th>${__('FG Item')}</th>
+                        <th class="text-right">${__('Required')}</th>
+                        <th class="text-right">${__('Sent')}</th>
+                        <th class="text-right">${__('Pending')}</th>
+                        <th class="text-right" style="width:110px;">${__('Send Qty')}</th>
+                        <th class="text-right" style="width:60px;">${__('Pkgs')}</th>
+                        <th style="width:90px;">${__('Kind')}</th>
+                    </tr>
+                </thead>
+                <tbody class="csrm-tbody">`;
+
+        items.forEach((item, idx) => {
+            html += `<tr data-idx="${idx}">
+                <td style="text-align:center;"><input type="checkbox" class="csrm-item-check" data-idx="${idx}" checked></td>
+                <td><strong>${frappe.utils.escape_html(item.rm_item_code)}</strong><br>
+                    <small class="text-muted">${frappe.utils.escape_html(item.rm_item_name || '')}</small></td>
+                <td><a href="/app/subcontracting-order/${encodeURIComponent(item.sco_name)}" target="_blank">${frappe.utils.escape_html(item.sco_name)}</a></td>
+                <td>${frappe.utils.escape_html(item.fg_item_code || '')}
+                    <br><small class="text-muted">${frappe.utils.escape_html(item.fg_item_name || '')}</small></td>
+                <td class="text-right">${flt(item.required_qty, 3)}</td>
+                <td class="text-right">${flt(item.supplied_qty, 3)}</td>
+                <td class="text-right" style="font-weight:bold; color:var(--orange-600);">${flt(item.pending_qty, 3)}</td>
+                <td class="text-right">
+                    <input type="number" class="form-control form-control-sm csrm-qty-input text-right"
+                        data-idx="${idx}" value="${flt(item.pending_qty, 3)}"
+                        min="0" max="${flt(item.pending_qty, 3)}" step="0.001"
+                        style="width:95px; display:inline-block;">
+                </td>
+                <td class="text-right">
+                    <input type="number" class="form-control form-control-sm csrm-pkgs-input text-right"
+                        data-idx="${idx}" value="" min="0" step="1" placeholder="—"
+                        style="width:55px; display:inline-block;">
+                </td>
+                <td>
+                    <select class="form-control form-control-sm csrm-kind-input" data-idx="${idx}" style="width:85px;">
+                        <option value=""></option>
+                        <option>Rolls</option><option>Bags</option><option>Boxes</option>
+                        <option>Cartons</option><option>Other</option>
+                    </select>
+                </td>
+            </tr>`;
+        });
+
+        html += `</tbody></table></div>`;
+
+        html += `<div style="margin-top:8px;">
+            <button class="btn btn-xs btn-default csrm-add-item">
+                <i class="fa fa-plus"></i> ${__('Add Item')}
+            </button>
+        </div>`;
+
+        const can_create = meta.compatible !== false;
+        html += `<div style="margin-top:15px; text-align:right;">
+            <button class="btn btn-primary csrm-create-btn" ${can_create ? '' : 'disabled'}>
+                <i class="fa fa-paper-plane"></i> ${__('Create Stock Entries')}
+            </button>
+        </div>`;
+
+        wrapper.html(html);
+
+        wrapper.find('.csrm-select-all').on('change', function () {
+            wrapper.find('.csrm-item-check').prop('checked', $(this).is(':checked'));
+        });
+
+        wrapper.find('.csrm-add-item').on('click', () => {
+            this._csrm_add_row(wrapper);
+        });
+
+        wrapper.find('.csrm-create-btn').on('click', () => {
+            this._create_consolidated_send_rm(dialog, items);
+        });
+    }
+
+    _csrm_add_row(wrapper) {
+        const idx = 'new_' + Date.now();
+        const tr = $(`<tr data-idx="${idx}" data-added="1">
+            <td style="text-align:center;"><input type="checkbox" class="csrm-item-check" data-idx="${idx}" checked></td>
+            <td><input type="text" class="form-control form-control-sm csrm-add-item-code"
+                    data-idx="${idx}" placeholder="${__('Item Code')}" style="width:130px;"></td>
+            <td><input type="text" class="form-control form-control-sm csrm-add-sco"
+                    data-idx="${idx}" placeholder="${__('SCO')}" style="width:120px;"></td>
+            <td><span class="text-muted">&mdash;</span></td>
+            <td class="text-right">&mdash;</td>
+            <td class="text-right">0</td>
+            <td class="text-right">&mdash;</td>
+            <td class="text-right">
+                <input type="number" class="form-control form-control-sm csrm-qty-input text-right"
+                    data-idx="${idx}" value="0" min="0" step="0.001"
+                    style="width:95px; display:inline-block;">
+            </td>
+            <td class="text-right">
+                <input type="number" class="form-control form-control-sm csrm-pkgs-input text-right"
+                    data-idx="${idx}" value="" min="0" step="1" placeholder="—"
+                    style="width:55px; display:inline-block;">
+            </td>
+            <td>
+                <select class="form-control form-control-sm csrm-kind-input" data-idx="${idx}" style="width:85px;">
+                    <option value=""></option>
+                    <option>Rolls</option><option>Bags</option><option>Boxes</option>
+                    <option>Cartons</option><option>Other</option>
+                </select>
+            </td>
+        </tr>`);
+        wrapper.find('.csrm-tbody').append(tr);
+    }
+
+    _create_consolidated_send_rm(dialog, fetched_items) {
+        const wrapper = dialog.get_field('send_rm_html').$wrapper;
+        const selected = [];
+
+        // Fetched items
+        wrapper.find('.csrm-item-check:checked').each(function () {
+            const idx = $(this).data('idx');
+            const is_added = wrapper.find(`tr[data-idx="${idx}"]`).data('added');
+            const qty = flt(wrapper.find(`.csrm-qty-input[data-idx="${idx}"]`).val(), 3);
+            if (qty <= 0) return;
+
+            const no_of_pkgs = cint(wrapper.find(`.csrm-pkgs-input[data-idx="${idx}"]`).val());
+            const kind_of_pkgs = wrapper.find(`.csrm-kind-input[data-idx="${idx}"]`).val() || '';
+
+            if (is_added) {
+                const item_code = wrapper.find(`.csrm-add-item-code[data-idx="${idx}"]`).val().trim();
+                const sco_name = wrapper.find(`.csrm-add-sco[data-idx="${idx}"]`).val().trim();
+                if (item_code && sco_name) {
+                    selected.push({ rm_item_code: item_code, sco_name, send_qty: qty, no_of_pkgs, kind_of_pkgs });
+                }
+            } else {
+                const item = fetched_items[idx];
+                selected.push({
+                    rm_item_code: item.rm_item_code,
+                    sco_name: item.sco_name,
+                    supplied_item_row: item.supplied_item_row,
+                    send_qty: qty,
+                    no_of_pkgs,
+                    kind_of_pkgs,
+                });
+            }
+        });
+
+        if (!selected.length) {
+            frappe.msgprint(__('Please select at least one item'));
+            return;
+        }
+
+        const transport_args = this._collect_transport_args(dialog);
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_consolidated_send_rm',
+            args: {
+                supplier: dialog.get_value('supplier'),
+                items: JSON.stringify(selected),
+                transport_args: transport_args ? JSON.stringify(transport_args) : null,
+            },
+            freeze: true,
+            freeze_message: __('Creating Stock Entries...'),
+            callback: (r) => {
+                if (r.message) {
+                    dialog.hide();
+                    const links = r.message.map(x =>
+                        `<a href="/app/stock-entry/${encodeURIComponent(x.se_name)}">${frappe.utils.escape_html(x.se_name)}</a>`
+                    ).join(', ');
+                    frappe.msgprint(__('Created {0} Stock Entr{1}: {2}',
+                        [r.message.length, r.message.length === 1 ? 'y' : 'ies', links]));
+                    this.refresh_pending_items();
+                }
+            }
+        });
+    }
+
+    // ── Consolidated Receive Goods ───────────────────────────────────────────
+
+    show_consolidated_receive_goods_wizard() {
+        const d = new frappe.ui.Dialog({
+            title: __('Consolidated Receive from Subcontractor'),
+            size: 'extra-large',
+            fields: [
+                { fieldname: 'supplier', fieldtype: 'Link', options: 'Supplier', label: __('Supplier'), reqd: 1 },
+                { fieldtype: 'Column Break' },
+                {
+                    fieldname: 'get_btn', fieldtype: 'Button', label: __('Get Pending Receipts'),
+                    click: () => this._fetch_consolidated_receive_goods(d)
+                },
+                { fieldname: 'sdn_section', fieldtype: 'Section Break', label: __('Receipt Details'), hidden: 1 },
+                {
+                    fieldname: 'supplier_delivery_note', fieldtype: 'Data',
+                    label: __('Supplier Delivery Note'), reqd: 1
+                },
+                {
+                    fieldname: 'results_section', fieldtype: 'Section Break',
+                    label: __('Pending FG/SFG Receipts'), hidden: 1
+                },
+                { fieldname: 'receive_goods_html', fieldtype: 'HTML' },
+                {
+                    fieldname: 'transport_section', fieldtype: 'Section Break',
+                    label: __('Transport Details'), collapsible: 1, hidden: 1
+                },
+                ...this._get_transport_field_definitions()
+            ]
+        });
+        d.show();
+    }
+
+    _fetch_consolidated_receive_goods(dialog) {
+        const supplier = dialog.get_value('supplier');
+        if (!supplier) { frappe.msgprint(__('Please select a Supplier')); return; }
+
+        dialog.set_df_property('sdn_section', 'hidden', 0);
+        dialog.set_df_property('results_section', 'hidden', 0);
+        dialog.get_field('receive_goods_html').$wrapper.html(
+            '<div class="text-center text-muted" style="padding:30px;"><i class="fa fa-spinner fa-spin"></i> ' +
+            __('Loading...') + '</div>');
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.get_consolidated_receive_items',
+            args: { supplier },
+            callback: (r) => {
+                const data = r.message || { items: [], excluded: [], meta: {} };
+                this._render_consolidated_receive_goods(dialog, data);
+            }
+        });
+    }
+
+    _render_consolidated_receive_goods(dialog, data) {
+        const wrapper = dialog.get_field('receive_goods_html').$wrapper;
+        wrapper.empty();
+        const { items, excluded, meta } = data;
+
+        if (meta.incompatibility_reason) {
+            wrapper.append(`<div class="alert alert-danger" style="margin-bottom:10px;">
+                <i class="fa fa-exclamation-triangle"></i>
+                ${frappe.utils.escape_html(meta.incompatibility_reason)}</div>`);
+        }
+
+        if (excluded && excluded.length) {
+            const links = excluded.map(e =>
+                `<a href="/app/subcontracting-receipt/${encodeURIComponent(e.draft_scr)}" target="_blank">${frappe.utils.escape_html(e.draft_scr)}</a> (${frappe.utils.escape_html(e.fg_item_code)})`
+            ).join(', ');
+            wrapper.append(`<div class="alert alert-info" style="margin-bottom:10px;">
+                ${__("{0} item(s) excluded — draft Subcontracting Receipts already exist: {1}", [excluded.length, links])}
+            </div>`);
+        }
+
+        if (!items.length && !(excluded && excluded.length)) {
+            wrapper.append(`<div class="text-center text-muted" style="padding:30px;">
+                ${__('No pending receipts for this supplier')}</div>`);
+            dialog.set_df_property('transport_section', 'hidden', 1);
+            return;
+        }
+
+        dialog.set_df_property('transport_section', 'hidden', 0);
+
+        let html = `<div class="crg-table-wrapper" style="max-height:500px; overflow-y:auto;">
+            <table class="table table-bordered table-sm" style="margin-bottom:0;">
+                <thead style="position:sticky; top:0; background:var(--bg-color); z-index:1;">
+                    <tr>
+                        <th style="width:40px; text-align:center;"><input type="checkbox" class="crg-select-all" checked></th>
+                        <th>${__('FG Item')}</th>
+                        <th>${__('SCO')}</th>
+                        <th class="text-right">${__('Ordered')}</th>
+                        <th class="text-right">${__('Received')}</th>
+                        <th class="text-right">${__('Pending')}</th>
+                        <th class="text-right" style="width:110px;">${__('Receive Qty')}</th>
+                        <th style="width:180px;">${__('Batches & Lot')}</th>
+                        <th class="text-right" style="width:60px;">${__('Pkgs')}</th>
+                        <th style="width:90px;">${__('Kind')}</th>
+                    </tr>
+                </thead>
+                <tbody class="crg-tbody">`;
+
+        items.forEach((item, idx) => {
+            const consumed_info = item.consumed_batches && item.consumed_batches.length
+                ? `<small class="text-muted">${__('Sent')}: ${item.consumed_batches.map(b => frappe.utils.escape_html(b)).join(', ')}</small>`
+                : '';
+
+            html += `<tr data-idx="${idx}">
+                <td style="text-align:center; vertical-align:top; padding-top:10px;">
+                    <input type="checkbox" class="crg-item-check" data-idx="${idx}" checked></td>
+                <td><strong>${frappe.utils.escape_html(item.fg_item_code)}</strong><br>
+                    <small class="text-muted">${frappe.utils.escape_html(item.fg_item_name || '')}</small></td>
+                <td><a href="/app/subcontracting-order/${encodeURIComponent(item.sco_name)}" target="_blank">${frappe.utils.escape_html(item.sco_name)}</a></td>
+                <td class="text-right">${flt(item.ordered_qty, 3)}</td>
+                <td class="text-right">${flt(item.received_qty, 3)}</td>
+                <td class="text-right" style="font-weight:bold; color:var(--orange-600);">${flt(item.pending_qty, 3)}</td>
+                <td class="text-right" style="vertical-align:top;">
+                    <input type="number" class="form-control form-control-sm crg-qty-input text-right"
+                        data-idx="${idx}" value="${flt(item.pending_qty, 3)}"
+                        min="0" max="${flt(item.pending_qty, 3)}" step="0.001"
+                        style="width:95px; display:inline-block;">
+                </td>
+                <td>
+                    ${consumed_info}
+                    <div class="crg-batch-rows" data-idx="${idx}">
+                        <div class="crg-batch-row" style="display:flex; gap:4px; margin-top:4px; flex-wrap:wrap;">
+                            <input type="text" class="form-control form-control-sm crg-batch-no"
+                                placeholder="${__('Batch / Lot No')}" style="width:105px;" title="${__('Output batch/lot number')}">
+                            <input type="number" class="form-control form-control-sm crg-batch-qty"
+                                placeholder="${__('Qty')}" step="0.001" min="0" style="width:70px;">
+                        </div>
+                    </div>
+                    <button class="btn btn-xs btn-default crg-add-batch-row" data-idx="${idx}" style="margin-top:4px;">
+                        <i class="fa fa-plus"></i> ${__('Batch')}
+                    </button>
+                </td>
+                <td class="text-right" style="vertical-align:top;">
+                    <input type="number" class="form-control form-control-sm crg-pkgs-input text-right"
+                        data-idx="${idx}" value="" min="0" step="1" placeholder="—"
+                        style="width:55px; display:inline-block;">
+                </td>
+                <td style="vertical-align:top;">
+                    <select class="form-control form-control-sm crg-kind-input" data-idx="${idx}" style="width:85px;">
+                        <option value=""></option>
+                        <option>Rolls</option><option>Bags</option><option>Boxes</option>
+                        <option>Cartons</option><option>Other</option>
+                    </select>
+                </td>
+            </tr>`;
+        });
+
+        html += `</tbody></table></div>`;
+
+        html += `<div style="margin-top:8px;">
+            <button class="btn btn-xs btn-default crg-add-item">
+                <i class="fa fa-plus"></i> ${__('Add Item')}
+            </button>
+        </div>`;
+
+        const can_create = meta.compatible !== false;
+        html += `<div style="margin-top:15px; text-align:right;">
+            <button class="btn btn-primary crg-create-btn" ${can_create ? '' : 'disabled'}>
+                <i class="fa fa-inbox"></i> ${__('Create Subcontracting Receipts')}
+            </button>
+        </div>`;
+
+        wrapper.html(html);
+
+        wrapper.find('.crg-select-all').on('change', function () {
+            wrapper.find('.crg-item-check').prop('checked', $(this).is(':checked'));
+        });
+
+        wrapper.find('.crg-add-batch-row').on('click', function () {
+            const idx = $(this).data('idx');
+            const new_row = $(`<div class="crg-batch-row" style="display:flex; gap:4px; margin-top:4px; flex-wrap:wrap;">
+                <input type="text" class="form-control form-control-sm crg-batch-no"
+                    placeholder="${__('Batch / Lot No')}" style="width:105px;">
+                <input type="number" class="form-control form-control-sm crg-batch-qty"
+                    placeholder="${__('Qty')}" step="0.001" min="0" style="width:70px;">
+                <button class="btn btn-xs btn-danger crg-remove-batch" style="padding:2px 6px;">&times;</button>
+            </div>`);
+            wrapper.find(`.crg-batch-rows[data-idx="${idx}"]`).append(new_row);
+        });
+
+        wrapper.on('click', '.crg-remove-batch', function () {
+            $(this).closest('.crg-batch-row').remove();
+        });
+
+        wrapper.find('.crg-add-item').on('click', () => {
+            this._crg_add_row(wrapper);
+        });
+
+        wrapper.find('.crg-create-btn').on('click', () => {
+            this._create_consolidated_receive_goods(dialog, items);
+        });
+    }
+
+    _crg_add_row(wrapper) {
+        const idx = 'new_' + Date.now();
+        const tr = $(`<tr data-idx="${idx}" data-added="1">
+            <td style="text-align:center; vertical-align:top; padding-top:10px;">
+                <input type="checkbox" class="crg-item-check" data-idx="${idx}" checked></td>
+            <td><input type="text" class="form-control form-control-sm crg-add-item-code"
+                    data-idx="${idx}" placeholder="${__('FG Item Code')}" style="width:130px;"></td>
+            <td><input type="text" class="form-control form-control-sm crg-add-sco"
+                    data-idx="${idx}" placeholder="${__('SCO')}" style="width:110px;"></td>
+            <td class="text-right">&mdash;</td>
+            <td class="text-right">0</td>
+            <td class="text-right">&mdash;</td>
+            <td class="text-right" style="vertical-align:top;">
+                <input type="number" class="form-control form-control-sm crg-qty-input text-right"
+                    data-idx="${idx}" value="0" min="0" step="0.001" style="width:95px; display:inline-block;">
+            </td>
+            <td>
+                <div class="crg-batch-rows" data-idx="${idx}">
+                    <div class="crg-batch-row" style="display:flex; gap:4px; margin-top:4px; flex-wrap:wrap;">
+                        <input type="text" class="form-control form-control-sm crg-batch-no"
+                            placeholder="${__('Batch / Lot No')}" style="width:105px;">
+                        <input type="number" class="form-control form-control-sm crg-batch-qty"
+                            placeholder="${__('Qty')}" step="0.001" min="0" style="width:70px;">
+                    </div>
+                </div>
+                <button class="btn btn-xs btn-default crg-add-batch-row" data-idx="${idx}" style="margin-top:4px;">
+                    <i class="fa fa-plus"></i> ${__('Batch')}
+                </button>
+            </td>
+            <td class="text-right" style="vertical-align:top;">
+                <input type="number" class="form-control form-control-sm crg-pkgs-input text-right"
+                    data-idx="${idx}" value="" min="0" step="1" placeholder="—"
+                    style="width:55px; display:inline-block;">
+            </td>
+            <td style="vertical-align:top;">
+                <select class="form-control form-control-sm crg-kind-input" data-idx="${idx}" style="width:85px;">
+                    <option value=""></option>
+                    <option>Rolls</option><option>Bags</option><option>Boxes</option>
+                    <option>Cartons</option><option>Other</option>
+                </select>
+            </td>
+        </tr>`);
+        wrapper.find('.crg-tbody').append(tr);
+    }
+
+    _create_consolidated_receive_goods(dialog, fetched_items) {
+        const wrapper = dialog.get_field('receive_goods_html').$wrapper;
+        const supplier_delivery_note = dialog.get_value('supplier_delivery_note');
+        if (!supplier_delivery_note) {
+            frappe.msgprint(__('Supplier Delivery Note is required'));
+            return;
+        }
+
+        const selected = [];
+        wrapper.find('.crg-item-check:checked').each(function () {
+            const idx = $(this).data('idx');
+            const row_el = wrapper.find(`tr[data-idx="${idx}"]`);
+            const is_added = row_el.data('added');
+            const qty = flt(wrapper.find(`.crg-qty-input[data-idx="${idx}"]`).val(), 3);
+            if (qty <= 0) return;
+
+            const output_batches = [];
+            row_el.find('.crg-batch-rows .crg-batch-row').each(function () {
+                const batch_no = $(this).find('.crg-batch-no').val().trim();
+                const b_qty = flt($(this).find('.crg-batch-qty').val(), 3);
+                if (batch_no && b_qty > 0) output_batches.push({ batch_no, qty: b_qty });
+            });
+
+            const no_of_pkgs = cint(wrapper.find(`.crg-pkgs-input[data-idx="${idx}"]`).val());
+            const kind_of_pkgs = wrapper.find(`.crg-kind-input[data-idx="${idx}"]`).val() || '';
+
+            if (is_added) {
+                const fg_item_code = row_el.find('.crg-add-item-code').val().trim();
+                const sco_name = row_el.find('.crg-add-sco').val().trim();
+                if (fg_item_code && sco_name) {
+                    selected.push({
+                        fg_item_code, sco_name, sco_item_row: null,
+                        receive_qty: qty, output_batches, no_of_pkgs, kind_of_pkgs
+                    });
+                }
+            } else {
+                const item = fetched_items[idx];
+                selected.push({
+                    fg_item_code: item.fg_item_code,
+                    sco_name: item.sco_name,
+                    sco_item_row: item.sco_item_row,
+                    receive_qty: qty,
+                    output_batches,
+                    consumed_batch_no: item.consumed_batches ? item.consumed_batches[0] || '' : '',
+                    no_of_pkgs,
+                    kind_of_pkgs,
+                });
+            }
+        });
+
+        if (!selected.length) {
+            frappe.msgprint(__('Please select at least one item'));
+            return;
+        }
+
+        const transport_args = this._collect_transport_args(dialog);
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_consolidated_receive_goods',
+            args: {
+                supplier: dialog.get_value('supplier'),
+                items: JSON.stringify(selected),
+                supplier_delivery_note,
+                transport_args: transport_args ? JSON.stringify(transport_args) : null,
+            },
+            freeze: true,
+            freeze_message: __('Creating Subcontracting Receipts...'),
+            callback: (r) => {
+                if (r.message) {
+                    dialog.hide();
+                    const links = r.message.map(x =>
+                        `<a href="/app/subcontracting-receipt/${encodeURIComponent(x.scr_name)}">${frappe.utils.escape_html(x.scr_name)}</a>`
+                    ).join(', ');
+                    frappe.msgprint(__('Created {0} Subcontracting Receipt{1}: {2}',
+                        [r.message.length, r.message.length === 1 ? '' : 's', links]));
+                    this.refresh_pending_items();
+                }
+            }
+        });
+    }
+
+    // ── Consolidated Receive Customer RM ────────────────────────────────────
+
+    show_consolidated_receive_customer_rm_wizard() {
+        const d = new frappe.ui.Dialog({
+            title: __('Consolidated Receive RM from Customer'),
+            size: 'extra-large',
+            fields: [
+                { fieldname: 'customer', fieldtype: 'Link', options: 'Customer', label: __('Customer'), reqd: 1 },
+                { fieldtype: 'Column Break' },
+                {
+                    fieldname: 'get_btn', fieldtype: 'Button', label: __('Get Pending RM'),
+                    click: () => this._fetch_consolidated_receive_customer_rm(d)
+                },
+                {
+                    fieldname: 'results_section', fieldtype: 'Section Break',
+                    label: __('Pending Raw Material from Customer'), hidden: 1
+                },
+                { fieldname: 'receive_crm_html', fieldtype: 'HTML' },
+                {
+                    fieldname: 'transport_section', fieldtype: 'Section Break',
+                    label: __('Transport Details'), collapsible: 1, hidden: 1
+                },
+                ...this._get_transport_field_definitions()
+            ]
+        });
+        d.show();
+    }
+
+    _fetch_consolidated_receive_customer_rm(dialog) {
+        const customer = dialog.get_value('customer');
+        if (!customer) { frappe.msgprint(__('Please select a Customer')); return; }
+
+        dialog.set_df_property('results_section', 'hidden', 0);
+        dialog.get_field('receive_crm_html').$wrapper.html(
+            '<div class="text-center text-muted" style="padding:30px;"><i class="fa fa-spinner fa-spin"></i> ' +
+            __('Loading...') + '</div>');
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.get_consolidated_scio_rm_items',
+            args: { customer },
+            callback: (r) => {
+                const data = r.message || { items: [], excluded: [], meta: {} };
+                this._render_consolidated_receive_customer_rm(dialog, data);
+            }
+        });
+    }
+
+    _render_consolidated_receive_customer_rm(dialog, data) {
+        const wrapper = dialog.get_field('receive_crm_html').$wrapper;
+        wrapper.empty();
+        const { items, excluded, meta } = data;
+
+        if (meta.incompatibility_reason) {
+            wrapper.append(`<div class="alert alert-danger" style="margin-bottom:10px;">
+                <i class="fa fa-exclamation-triangle"></i>
+                ${frappe.utils.escape_html(meta.incompatibility_reason)}</div>`);
+        }
+
+        if (excluded && excluded.length) {
+            const links = excluded.map(e =>
+                `<a href="/app/stock-entry/${encodeURIComponent(e.draft_se)}" target="_blank">${frappe.utils.escape_html(e.draft_se)}</a> (${frappe.utils.escape_html(e.rm_item_code)})`
+            ).join(', ');
+            wrapper.append(`<div class="alert alert-info" style="margin-bottom:10px;">
+                ${__("{0} item(s) excluded — draft Stock Entries already exist: {1}", [excluded.length, links])}
+            </div>`);
+        }
+
+        if (!items.length && !(excluded && excluded.length)) {
+            wrapper.append(`<div class="text-center text-muted" style="padding:30px;">
+                ${__('No pending customer RM receipts for this customer')}</div>`);
+            dialog.set_df_property('transport_section', 'hidden', 1);
+            return;
+        }
+
+        dialog.set_df_property('transport_section', 'hidden', 0);
+
+        let html = `<div class="ccrm-table-wrapper" style="max-height:400px; overflow-y:auto;">
+            <table class="table table-bordered table-sm" style="margin-bottom:0;">
+                <thead style="position:sticky; top:0; background:var(--bg-color); z-index:1;">
+                    <tr>
+                        <th style="width:40px; text-align:center;"><input type="checkbox" class="ccrm-select-all" checked></th>
+                        <th>${__('RM Item')}</th>
+                        <th>${__('SIO')}</th>
+                        <th>${__('Sales Order')}</th>
+                        <th class="text-right">${__('Required')}</th>
+                        <th class="text-right">${__('Received')}</th>
+                        <th class="text-right">${__('Pending')}</th>
+                        <th class="text-right" style="width:110px;">${__('Receive Qty')}</th>
+                    </tr>
+                </thead>
+                <tbody class="ccrm-tbody">`;
+
+        items.forEach((item, idx) => {
+            html += `<tr data-idx="${idx}">
+                <td style="text-align:center;"><input type="checkbox" class="ccrm-item-check" data-idx="${idx}" checked></td>
+                <td><strong>${frappe.utils.escape_html(item.rm_item_code)}</strong><br>
+                    <small class="text-muted">${frappe.utils.escape_html(item.rm_item_name || '')}</small></td>
+                <td><a href="/app/subcontracting-inward-order/${encodeURIComponent(item.sio_name)}" target="_blank">${frappe.utils.escape_html(item.sio_name)}</a></td>
+                <td>${item.sales_order ? `<a href="/app/sales-order/${encodeURIComponent(item.sales_order)}" target="_blank">${frappe.utils.escape_html(item.sales_order)}</a>` : '&mdash;'}</td>
+                <td class="text-right">${flt(item.required_qty, 3)}</td>
+                <td class="text-right">${flt(item.received_qty, 3)}</td>
+                <td class="text-right" style="font-weight:bold; color:var(--orange-600);">${flt(item.pending_qty, 3)}</td>
+                <td class="text-right">
+                    <input type="number" class="form-control form-control-sm ccrm-qty-input text-right"
+                        data-idx="${idx}" value="${flt(item.pending_qty, 3)}"
+                        min="0" max="${flt(item.pending_qty, 3)}" step="0.001"
+                        style="width:95px; display:inline-block;">
+                </td>
+            </tr>`;
+        });
+
+        html += `</tbody></table></div>`;
+
+        html += `<div style="margin-top:8px;">
+            <button class="btn btn-xs btn-default ccrm-add-item">
+                <i class="fa fa-plus"></i> ${__('Add Item')}
+            </button>
+        </div>`;
+
+        const can_create = meta.compatible !== false;
+        html += `<div style="margin-top:15px; text-align:right;">
+            <button class="btn btn-primary ccrm-create-btn" ${can_create ? '' : 'disabled'}>
+                <i class="fa fa-download"></i> ${__('Create Stock Entries')}
+            </button>
+        </div>`;
+
+        wrapper.html(html);
+
+        wrapper.find('.ccrm-select-all').on('change', function () {
+            wrapper.find('.ccrm-item-check').prop('checked', $(this).is(':checked'));
+        });
+
+        wrapper.find('.ccrm-add-item').on('click', () => {
+            this._ccrm_add_row(wrapper);
+        });
+
+        wrapper.find('.ccrm-create-btn').on('click', () => {
+            this._create_consolidated_receive_customer_rm(dialog, items);
+        });
+    }
+
+    _ccrm_add_row(wrapper) {
+        const idx = 'new_' + Date.now();
+        const tr = $(`<tr data-idx="${idx}" data-added="1">
+            <td style="text-align:center;"><input type="checkbox" class="ccrm-item-check" data-idx="${idx}" checked></td>
+            <td><input type="text" class="form-control form-control-sm ccrm-add-item-code"
+                    data-idx="${idx}" placeholder="${__('Item Code')}" style="width:130px;"></td>
+            <td><input type="text" class="form-control form-control-sm ccrm-add-sio"
+                    data-idx="${idx}" placeholder="${__('SIO')}" style="width:110px;"></td>
+            <td><span class="text-muted">&mdash;</span></td>
+            <td class="text-right">&mdash;</td>
+            <td class="text-right">0</td>
+            <td class="text-right">&mdash;</td>
+            <td class="text-right">
+                <input type="number" class="form-control form-control-sm ccrm-qty-input text-right"
+                    data-idx="${idx}" value="0" min="0" step="0.001"
+                    style="width:95px; display:inline-block;">
+            </td>
+        </tr>`);
+        wrapper.find('.ccrm-tbody').append(tr);
+    }
+
+    _create_consolidated_receive_customer_rm(dialog, fetched_items) {
+        const wrapper = dialog.get_field('receive_crm_html').$wrapper;
+        const selected = [];
+
+        wrapper.find('.ccrm-item-check:checked').each(function () {
+            const idx = $(this).data('idx');
+            const row_el = wrapper.find(`tr[data-idx="${idx}"]`);
+            const is_added = row_el.data('added');
+            const qty = flt(wrapper.find(`.ccrm-qty-input[data-idx="${idx}"]`).val(), 3);
+            if (qty <= 0) return;
+
+            if (is_added) {
+                const rm_item_code = row_el.find('.ccrm-add-item-code').val().trim();
+                const sio_name = row_el.find('.ccrm-add-sio').val().trim();
+                if (rm_item_code && sio_name) {
+                    selected.push({ rm_item_code, sio_name, scio_detail: null, receive_qty: qty });
+                }
+            } else {
+                const item = fetched_items[idx];
+                selected.push({
+                    rm_item_code: item.rm_item_code,
+                    sio_name: item.sio_name,
+                    scio_detail: item.scio_detail,
+                    receive_qty: qty,
+                });
+            }
+        });
+
+        if (!selected.length) {
+            frappe.msgprint(__('Please select at least one item'));
+            return;
+        }
+
+        const transport_args = this._collect_transport_args(dialog);
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_consolidated_receive_customer_rm',
+            args: {
+                customer: dialog.get_value('customer'),
+                items: JSON.stringify(selected),
+                transport_args: transport_args ? JSON.stringify(transport_args) : null
+            },
+            freeze: true,
+            freeze_message: __('Creating Stock Entries...'),
+            callback: (r) => {
+                if (r.message) {
+                    dialog.hide();
+                    const links = r.message.map(x =>
+                        `<a href="/app/stock-entry/${encodeURIComponent(x.se_name)}">${frappe.utils.escape_html(x.se_name)}</a>`
+                    ).join(', ');
+                    frappe.msgprint(__('Created {0} Stock Entr{1}: {2}',
+                        [r.message.length, r.message.length === 1 ? 'y' : 'ies', links]));
+                    this.refresh_pending_items();
+                }
+            }
+        });
+    }
+
+    // ── Consolidated Delivery Wizard ────────────────────────────────────
+
+    _create_consolidated_dn(dialog, items) {
+        const wrapper = dialog.get_field('deliverables_html').$wrapper;
+        const selected = [];
+
+        wrapper.find('.cd-item-check:checked').each(function () {
+            const idx = $(this).data('idx');
+            const item = items[idx];
+            const qty = flt(wrapper.find(`.cd-qty-input[data-idx="${idx}"]`).val(), 3);
+            if (qty > 0) {
+                selected.push({
+                    item_code: item.item_code,
+                    qty: qty,
+                    sales_order: item.sales_order,
+                    sales_order_item: item.sales_order_item,
+                    warehouse: item.warehouse,
+                    rate: item.rate,
+                    uom: item.uom,
+                    stock_uom: item.stock_uom,
+                    conversion_factor: item.conversion_factor,
+                    no_of_pkgs: cint(wrapper.find(`.cd-pkgs-input[data-idx="${idx}"]`).val()),
+                    kind_of_pkgs: wrapper.find(`.cd-kind-input[data-idx="${idx}"]`).val() || '',
+                });
+            }
+        });
+
+        if (!selected.length) {
+            frappe.msgprint(__('Please select at least one item to deliver'));
+            return;
+        }
+
+        // Collect transport args
+        const transport_args = {};
+        for (const f of ['transporter', 'transporter_name', 'gst_transporter_id',
+            'vehicle_no', 'lr_no', 'lr_date', 'distance']) {
+            const val = dialog.get_value(f);
+            if (val) transport_args[f] = val;
+        }
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_consolidated_delivery_note',
+            args: {
+                customer: dialog.get_value('customer'),
+                items: JSON.stringify(selected),
+                transport_args: Object.keys(transport_args).length
+                    ? JSON.stringify(transport_args) : null,
+            },
+            freeze: true,
+            freeze_message: __('Creating Consolidated Delivery Note...'),
+            callback: (r) => {
+                if (r.message) {
+                    dialog.hide();
+                    this.show_pkgs_dialog('Delivery Note', r.message, () => {
+                        frappe.set_route('Form', 'Delivery Note', r.message);
+                    });
+                    this.refresh_pending_items();
+                }
+            }
+        });
     }
 }
