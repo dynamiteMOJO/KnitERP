@@ -2,7 +2,6 @@ import frappe
 from frappe import _
 from frappe.utils import flt, getdate, add_months, add_days, nowdate, cint
 import json
-from kniterp.api.production_wizard import ensure_batch_exists
 
 
 @frappe.whitelist()
@@ -462,6 +461,10 @@ def create_rm_purchase_receipt(purchase_order, items=None, received_batches=None
     pr.insert()
 
     if received_batches:
+        batch_tracked_items = [i for i in pr.items if frappe.get_cached_value("Item", i.item_code, "has_batch_no")]
+        if len(batch_tracked_items) > 1:
+            frappe.throw(_("Batch assignment for multi-item Purchase Receipts is not supported via this dialog. Please use the standard form."))
+
         for pr_item in pr.items:
             has_batch = frappe.get_cached_value("Item", pr_item.item_code, "has_batch_no")
             if not has_batch:
@@ -478,7 +481,14 @@ def create_rm_purchase_receipt(purchase_order, items=None, received_batches=None
             for batch in received_batches:
                 batch_no = batch.get("batch_no")
                 qty = flt(batch.get("qty"), 3)
-                ensure_batch_exists(batch_no=batch_no, item_code=pr_item.item_code, source_type="Supplier")
+                # Auto-create batch if it doesn't exist yet
+                if not frappe.db.exists("Batch", batch_no):
+                    batch_doc = frappe.new_doc("Batch")
+                    batch_doc.batch_id = batch_no
+                    batch_doc.item = pr_item.item_code
+                    batch_doc.source_type = "Supplier"
+                    batch_doc.flags.ignore_permissions = True
+                    batch_doc.insert(ignore_permissions=True)
                 sabb.append("entries", {
                     "batch_no": batch_no,
                     "qty": qty,

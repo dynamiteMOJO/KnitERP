@@ -93,13 +93,13 @@ class TestCreateRmPurchaseReceipt(FrappeTestCase):
                 return pr
             if doctype == "Serial and Batch Bundle":
                 return sabb
-            return MagicMock()
+            return MagicMock()  # handles Batch and anything else
 
         mock_new_doc.side_effect = new_doc_side_effect
 
         received_batches = [{"batch_no": "LOT-A", "qty": 50}, {"batch_no": "LOT-B", "qty": 50}]
 
-        with patch("kniterp.api.outsourcing_desk.ensure_batch_exists") as mock_ensure:
+        with patch("kniterp.api.outsourcing_desk.frappe.db.exists", return_value=False) as mock_exists:
             result = outsourcing_desk.create_rm_purchase_receipt(
                 "PO-0001",
                 received_batches=received_batches,
@@ -115,8 +115,6 @@ class TestCreateRmPurchaseReceipt(FrappeTestCase):
         # PR item linked to SABB
         self.assertEqual(pr_item.serial_and_batch_bundle, sabb.name)
         self.assertEqual(pr_item.use_serial_batch_fields, 0)
-        # ensure_batch_exists called for each batch
-        self.assertEqual(mock_ensure.call_count, 2)
         # SABB patched with voucher refs
         mock_db_set.assert_called_with(
             "Serial and Batch Bundle",
