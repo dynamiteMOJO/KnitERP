@@ -23,7 +23,9 @@ class TransactionDesk {
         this.account_rows = [];
 
         // Read type from route options
-        const route_type = (frappe.route_options || {}).type || null;
+        const route_opts = frappe.route_options || {};
+        const route_type = route_opts.type || null;
+        this.from_bom_cart = !!(route_opts.from_bom_cart);
         frappe.route_options = null;
 
         if (route_type) {
@@ -126,6 +128,7 @@ class TransactionDesk {
                 has_items: true,
                 has_tax: true,
                 tax_type: 'sales',
+                has_pkgs: true,
             },
             'purchase-invoice': {
                 label: __('Purchase Invoice'),
@@ -139,6 +142,7 @@ class TransactionDesk {
                 has_items: true,
                 has_tax: true,
                 tax_type: 'purchase',
+                has_pkgs: true,
             },
             'delivery-note': {
                 label: __('Delivery Note'),
@@ -152,6 +156,7 @@ class TransactionDesk {
                 has_items: true,
                 has_tax: true,
                 tax_type: 'sales',
+                has_pkgs: true,
             },
             'purchase-receipt': {
                 label: __('Receipt Note'),
@@ -165,6 +170,7 @@ class TransactionDesk {
                 has_items: true,
                 has_tax: true,
                 tax_type: 'purchase',
+                has_pkgs: true,
             },
             'debit-note': {
                 label: __('Debit Note'),
@@ -179,6 +185,7 @@ class TransactionDesk {
                 has_tax: true,
                 tax_type: 'purchase',
                 is_return: true,
+                has_pkgs: true,
             },
             'credit-note': {
                 label: __('Credit Note'),
@@ -193,16 +200,7 @@ class TransactionDesk {
                 has_tax: true,
                 tax_type: 'sales',
                 is_return: true,
-            },
-            'stock-entry': {
-                label: __('Stock Entry'),
-                icon: 'fa-exchange',
-                color: '#9b59b6',
-                group: 'stock',
-                doctype: 'Stock Entry',
-                has_items: true,
-                has_tax: false,
-                is_stock_entry: true,
+                has_pkgs: true,
             },
             'job-work-in': {
                 label: __('Job Work In'),
@@ -213,6 +211,9 @@ class TransactionDesk {
                 party_field: 'customer',
                 party_label: __('Customer'),
                 party_doctype: 'Customer',
+                date_field: 'delivery_date',
+                date_label: __('Delivery Date'),
+                date_default_days: 14,
                 has_items: true,
                 has_tax: true,
                 tax_type: 'sales',
@@ -228,11 +229,25 @@ class TransactionDesk {
                 party_field: 'supplier',
                 party_label: __('Supplier'),
                 party_doctype: 'Supplier',
+                date_field: 'schedule_date',
+                date_label: __('Schedule Date'),
+                date_default_days: 14,
                 has_items: true,
                 has_tax: true,
                 tax_type: 'purchase',
                 is_job_work: true,
                 is_job_work_out: true,
+            },
+            'stock-entry': {
+                label: __('Stock Entry'),
+                icon: 'fa-exchange',
+                color: '#9b59b6',
+                group: 'stock',
+                doctype: 'Stock Entry',
+                has_items: true,
+                has_tax: false,
+                is_stock_entry: true,
+                has_pkgs: true,
             },
         };
     }
@@ -243,6 +258,8 @@ class TransactionDesk {
         this.current_type = null;
         this.page.set_title(__('Transaction Desk'));
         this.page.clear_actions();
+        this.page.clear_inner_toolbar();
+        this.page.clear_menu();
         this.page.main.empty();
 
         const registry = this.get_type_registry();
@@ -251,9 +268,9 @@ class TransactionDesk {
         const categories = [
             { key: 'sales', label: __('Sales'), icon: 'fa-line-chart' },
             { key: 'purchase', label: __('Purchase'), icon: 'fa-shopping-bag' },
+            { key: 'stock', label: __('Stock & Job Work'), icon: 'fa-cubes' },
             { key: 'payments', label: __('Payments'), icon: 'fa-money' },
             { key: 'accounting', label: __('Accounting'), icon: 'fa-calculator' },
-            { key: 'stock', label: __('Stock & Job Work'), icon: 'fa-cubes' },
         ];
 
         // Group registry entries by category
@@ -379,6 +396,8 @@ class TransactionDesk {
 
         this.page.set_title(cfg.label);
         this.page.clear_actions();
+        this.page.clear_inner_toolbar();
+        this.page.clear_menu();
         this.page.main.empty();
 
         // Show loading
@@ -405,16 +424,116 @@ class TransactionDesk {
         this.setup_page_actions();
         this.setup_keyboard_shortcuts();
         this.load_recent_entries();
+
+        if (this.from_bom_cart) {
+            this.from_bom_cart = false; // consume flag so refresh doesn't re-trigger
+            setTimeout(() => this.preload_cart_items(type), 300);
+        }
+    }
+
+    async preload_cart_items(voucher_type) {
+        const CART_KEY = 'kniterp_bom_cart';
+        let cart_items;
+        try {
+            cart_items = JSON.parse(sessionStorage.getItem(CART_KEY) || '[]');
+        } catch (e) {
+            cart_items = [];
+        }
+        if (!cart_items.length) return;
+
+        const cfg = this.current_config;
+        const is_job_work = cfg && cfg.is_job_work;
+
+        try {
+            const rows = await frappe.xcall('kniterp.api.transaction_desk.get_cart_items_for_voucher', {
+                items_json: JSON.stringify(cart_items),
+                voucher_type: voucher_type,
+            });
+
+            if (!rows || !rows.length) return;
+
+            // Clear the default empty row(s) added by render_form
+            this.clear_all_item_rows();
+
+            for (const row_data of rows) {
+                if (is_job_work) {
+                    const cf = (row_data.gross_qty && row_data.fg_item_qty)
+                        ? flt(row_data.gross_qty / row_data.fg_item_qty, 6)
+                        : 1;
+                    this.add_job_work_row({ gross_qty: row_data.gross_qty, net_qty: row_data.fg_item_qty, conversion_factor: cf });
+                    const row = this.item_rows[this.item_rows.length - 1];
+                    if (row) {
+                        // Service item
+                        if (row_data.service_item) {
+                            row.item_ctrl._selected_value = row_data.service_item;
+                            row.item_ctrl.set_value(row_data.service_item);
+                        }
+                        // FG item
+                        if (row_data.fg_item) {
+                            row.fg_item_ctrl._selected_value = row_data.fg_item;
+                            row.fg_item_ctrl.set_value(row_data.fg_item);
+                        }
+                    }
+                } else {
+                    this.add_item_row({ qty: row_data.qty, uom: row_data.uom });
+                    const row = this.item_rows[this.item_rows.length - 1];
+                    if (row) {
+                        row.item_ctrl._selected_value = row_data.item_code;
+                        row.item_ctrl.set_value(row_data.item_code);
+                        row.$row.find('.td-item-name-sub').text(row_data.item_name || '');
+                        // Stash bom_no on row for use during SO creation
+                        row.bom_no = row_data.bom_no || '';
+                        // Fetch item details (UOM, price, description)
+                        if (row_data.item_code) {
+                            frappe.xcall('kniterp.api.transaction_desk.get_item_details', {
+                                item_code: row_data.item_code,
+                                voucher_type: voucher_type,
+                            }).then(details => {
+                                if (!details) return;
+                                if (row.uom_ctrl) row.uom_ctrl.set_value(details.stock_uom || row_data.uom);
+                                if (row.rate_ctrl && details.price_list_rate) row.rate_ctrl.set_value(details.price_list_rate);
+                                if (row.desc_ctrl) row.desc_ctrl.set_value(details.description || '');
+                                row.$row.find('.td-item-name-sub').text(details.item_name || row_data.item_name || '');
+                                this.update_row_amount(row);
+                                this.update_totals();
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Update amounts for job work rows
+            if (is_job_work) {
+                setTimeout(() => {
+                    this.item_rows.forEach(r => { if (r) this._update_jw_row_amount(r); });
+                    this._update_jw_totals();
+                }, 200);
+            }
+
+            // Clear cart from session storage
+            sessionStorage.removeItem(CART_KEY);
+            sessionStorage.removeItem('kniterp_bom_cart_voucher_type');
+
+            frappe.show_alert({
+                message: __(`{0} item(s) pre-loaded from BOM Designer`, [rows.length]),
+                indicator: 'green',
+            });
+
+        } catch (e) {
+            frappe.msgprint({
+                title: __('Cart Pre-load Failed'),
+                message: e.message || __('Could not load items from BOM Designer cart'),
+                indicator: 'red',
+            });
+        }
     }
 
     // ─── Page Actions ───────────────────────────────────────
     setup_page_actions() {
-        const cfg = this.current_config;
-
         this.page.set_primary_action(__('Create'), () => this.submit_form(), 'check');
 
-        this.page.add_menu_item(__('Open Full Form'), () => {
-            frappe.set_route('Form', cfg.doctype, 'new');
+        this.page.add_inner_button(__('Open Full Form'), () => {
+            frappe.set_route('Form', this.current_config.doctype, 'new');
         });
 
         this.page.add_menu_item(__('Back to Type Selection'), () => {
@@ -536,6 +655,10 @@ class TransactionDesk {
                 return;
             }
 
+            if (f.fieldtype === 'Column Break') {
+                return;
+            }
+
             // For Link fields outside a form, skip async validation
             // and manually track selected values
             if (f.fieldtype === 'Link') {
@@ -633,7 +756,7 @@ class TransactionDesk {
                     // Auto fetch addresses
                     setTimeout(async () => {
                         const party = control.get_value();
-                        if (!party || !cfg.tax_type || cfg.is_job_work) return;
+                        if (!party || !cfg.tax_type) return;
 
                         try {
                             const res = await frappe.call({
@@ -699,6 +822,34 @@ class TransactionDesk {
                 });
             }
 
+            // Transporter: auto-fetch supplier_name and gst_transporter_id
+            if (f.fieldname === 'transporter') {
+                control.$input && control.$input.on('awesomplete-selectcomplete', () => {
+                    setTimeout(async () => {
+                        const val = control.get_value();
+                        if (val) {
+                            const r = await frappe.db.get_value('Supplier', val,
+                                ['supplier_name', 'gst_transporter_id']);
+                            if (r && r.message) {
+                                if (this.form_controls['transporter_name']) {
+                                    this.form_controls['transporter_name'].set_value(r.message.supplier_name || '');
+                                }
+                                if (this.form_controls['gst_transporter_id']) {
+                                    this.form_controls['gst_transporter_id'].set_value(r.message.gst_transporter_id || '');
+                                }
+                            }
+                        } else {
+                            if (this.form_controls['transporter_name']) {
+                                this.form_controls['transporter_name'].set_value('');
+                            }
+                            if (this.form_controls['gst_transporter_id']) {
+                                this.form_controls['gst_transporter_id'].set_value('');
+                            }
+                        }
+                    }, 50);
+                });
+            }
+
             // Return Against: auto-populate items from original invoice
             if (f.fieldname === 'return_against' && cfg.is_return) {
                 control.$input && control.$input.on('awesomplete-selectcomplete', () => {
@@ -711,6 +862,92 @@ class TransactionDesk {
                         if (!val) this.on_return_against_clear();
                     }, 100);
                 });
+            }
+
+            // Ship To (Different Customer): re-filter shipping_address_name and auto-fetch address
+            if (f.fieldname === 'custom_shipping_party') {
+                control.$input && control.$input.on('awesomplete-selectcomplete', () => {
+                    setTimeout(async () => {
+                        const ship_party = control.get_value();
+                        const addr_ctrl = this.form_controls['shipping_address_name'];
+                        if (addr_ctrl) {
+                            addr_ctrl.set_value('');
+                            addr_ctrl._selected_value = '';
+                        }
+                        if (ship_party && addr_ctrl) {
+                            try {
+                                const r = await frappe.call({
+                                    method: 'frappe.contacts.doctype.address.address.get_default_address',
+                                    args: { doctype: 'Customer', name: ship_party }
+                                });
+                                if (r && r.message) {
+                                    addr_ctrl.set_value(r.message);
+                                    addr_ctrl._selected_value = r.message;
+                                }
+                            } catch (e) { /* no default address */ }
+                        }
+                    }, 50);
+                });
+                control.$input && control.$input.on('change', () => {
+                    setTimeout(() => {
+                        const val = control.get_input_value ? control.get_input_value() : '';
+                        if (!val) {
+                            control._selected_value = '';
+                            const addr_ctrl = this.form_controls['shipping_address_name'];
+                            if (addr_ctrl) { addr_ctrl.set_value(''); addr_ctrl._selected_value = ''; }
+                        }
+                    }, 100);
+                });
+            }
+
+            // Deliver To (Different Customer): re-filter custom_deliver_to_address and auto-fetch address
+            if (f.fieldname === 'custom_deliver_to_customer') {
+                control.$input && control.$input.on('awesomplete-selectcomplete', () => {
+                    setTimeout(async () => {
+                        const deliver_to = control.get_value();
+                        const addr_ctrl = this.form_controls['custom_deliver_to_address'];
+                        if (addr_ctrl) {
+                            addr_ctrl.set_value('');
+                            addr_ctrl._selected_value = '';
+                        }
+                        if (deliver_to && addr_ctrl) {
+                            try {
+                                const r = await frappe.call({
+                                    method: 'frappe.contacts.doctype.address.address.get_default_address',
+                                    args: { doctype: 'Customer', name: deliver_to }
+                                });
+                                if (r && r.message) {
+                                    addr_ctrl.set_value(r.message);
+                                    addr_ctrl._selected_value = r.message;
+                                }
+                            } catch (e) { /* no default address */ }
+                        }
+                    }, 50);
+                });
+                control.$input && control.$input.on('change', () => {
+                    setTimeout(() => {
+                        const val = control.get_input_value ? control.get_input_value() : '';
+                        if (!val) {
+                            control._selected_value = '';
+                            const addr_ctrl = this.form_controls['custom_deliver_to_address'];
+                            if (addr_ctrl) { addr_ctrl.set_value(''); addr_ctrl._selected_value = ''; }
+                        }
+                    }, 100);
+                });
+            }
+
+            // Stock Entry purpose: show/hide transport and JW fields
+            if (f.fieldname === 'purpose' && cfg.is_stock_entry) {
+                const toggle_transport = () => {
+                    const show = control.get_value() === 'Send to Subcontractor';
+                    const transport_fields = ['transport_section', 'transporter', 'vehicle_no',
+                        'lr_no', 'transporter_name', 'lr_date', 'distance', 'jw_section', 'jw_description'];
+                    transport_fields.forEach(fn => {
+                        const $el = this.page.main.find(`[data-fieldname="${fn}"]`);
+                        if ($el.length) $el.toggle(show);
+                    });
+                };
+                control.$input && control.$input.on('change', () => setTimeout(toggle_transport, 50));
             }
         });
     }
@@ -745,7 +982,7 @@ class TransactionDesk {
             // Auto-fill address fields from original invoice
             const address_fields = cfg.tax_type === 'sales'
                 ? ['customer_address', 'shipping_address_name']
-                : ['supplier_address', 'shipping_address', 'billing_address'];
+                : ['supplier_address', 'custom_deliver_to_address', 'billing_address'];
             for (const af of address_fields) {
                 if (result[af] && this.form_controls[af]) {
                     this.form_controls[af]._selected_value = result[af];
@@ -891,8 +1128,8 @@ class TransactionDesk {
                 reqd: 1,
             });
 
-            // Sales-side address fields (Customer Address + Shipping)
-            if (cfg.tax_type === 'sales' && !cfg.is_job_work) {
+            // Sales-side address fields (Customer Address + Ship To Party + Shipping)
+            if (cfg.tax_type === 'sales') {
                 fields.push({
                     fieldname: 'customer_address',
                     fieldtype: 'Link',
@@ -908,22 +1145,30 @@ class TransactionDesk {
                 });
 
                 fields.push({
+                    fieldname: 'custom_shipping_party',
+                    fieldtype: 'Link',
+                    options: 'Customer',
+                    label: __('Ship To (Different Customer)'),
+                });
+
+                fields.push({
                     fieldname: 'shipping_address_name',
                     fieldtype: 'Link',
                     options: 'Address',
                     label: __('Shipping Address'),
                     get_query: () => {
-                        const party = this.get_field_value(cfg.party_field);
+                        const ship_party = this.get_field_value('custom_shipping_party');
+                        const party = ship_party || this.get_field_value(cfg.party_field);
                         return {
                             query: 'frappe.contacts.doctype.address.address.address_query',
-                            filters: party ? { link_doctype: 'Customer', link_name: party, is_shipping_address: 1 } : {}
+                            filters: party ? { link_doctype: 'Customer', link_name: party } : {}
                         };
                     }
                 });
             }
 
-            // Purchase-side address fields (Supplier + Shipping + Billing)
-            if (cfg.tax_type === 'purchase' && !cfg.is_job_work) {
+            // Purchase-side address fields (Supplier + Deliver To Customer + Shipping + Billing)
+            if (cfg.tax_type === 'purchase') {
                 fields.push({
                     fieldname: 'supplier_address',
                     fieldtype: 'Link',
@@ -939,16 +1184,27 @@ class TransactionDesk {
                 });
 
                 fields.push({
-                    fieldname: 'shipping_address',
+                    fieldname: 'custom_deliver_to_customer',
+                    fieldtype: 'Link',
+                    options: 'Customer',
+                    label: __('Deliver To (Different Customer)'),
+                });
+
+                fields.push({
+                    fieldname: 'custom_deliver_to_address',
                     fieldtype: 'Link',
                     options: 'Address',
-                    label: __('Shipping Address'),
+                    label: __('Deliver To Address'),
+                    depends_on: 'custom_deliver_to_customer',
                     get_query: () => {
-                        const company = this.get_field_value('company') || this.defaults.company;
-                        return {
-                            query: 'frappe.contacts.doctype.address.address.address_query',
-                            filters: company ? { link_doctype: 'Company', link_name: company, is_shipping_address: 1 } : {}
-                        };
+                        const deliver_to = this.get_field_value('custom_deliver_to_customer');
+                        if (deliver_to) {
+                            return {
+                                query: 'frappe.contacts.doctype.address.address.address_query',
+                                filters: { link_doctype: 'Customer', link_name: deliver_to }
+                            };
+                        }
+                        return { filters: { name: '' } };
                     }
                 });
 
@@ -1145,6 +1401,77 @@ class TransactionDesk {
             });
         }
 
+        // Transport / e-Way Bill fields for dispatch and receipt types
+        // For stock-entry, initially hidden — shown only when purpose = "Send to Subcontractor"
+        if (['delivery-note', 'purchase-receipt'].includes(this.current_type) || cfg.is_stock_entry) {
+            const hide_for_se = cfg.is_stock_entry;
+            fields.push({ fieldtype: 'Section Break', label: __('Transport Details'), collapsible: 1,
+                fieldname: 'transport_section', td_initially_hidden: hide_for_se });
+            fields.push({
+                fieldname: 'transporter',
+                fieldtype: 'Link',
+                options: 'Supplier',
+                label: __('Transporter'),
+                get_query: () => ({ filters: { disabled: 0, is_transporter: 1 } }),
+                td_initially_hidden: hide_for_se,
+            });
+            fields.push({
+                fieldname: 'vehicle_no',
+                fieldtype: 'Data',
+                label: __('Vehicle No'),
+                length: 15,
+                td_initially_hidden: hide_for_se,
+            });
+            fields.push({
+                fieldname: 'lr_no',
+                fieldtype: 'Data',
+                label: __('Transport Receipt No'),
+                length: 30,
+                td_initially_hidden: hide_for_se,
+            });
+            fields.push({ fieldtype: 'Column Break' });
+            fields.push({
+                fieldname: 'transporter_name',
+                fieldtype: 'Data',
+                label: __('Transporter Name'),
+                read_only: 1,
+                td_initially_hidden: hide_for_se,
+            });
+            fields.push({
+                fieldname: 'gst_transporter_id',
+                fieldtype: 'Data',
+                label: __('GST Transporter ID'),
+                read_only: 1,
+                hidden: 1,
+            });
+            fields.push({
+                fieldname: 'lr_date',
+                fieldtype: 'Date',
+                label: __('Transport Receipt Date'),
+                default: frappe.datetime.nowdate(),
+                td_initially_hidden: hide_for_se,
+            });
+            fields.push({
+                fieldname: 'distance',
+                fieldtype: 'Int',
+                label: __('Distance (km)'),
+                td_initially_hidden: hide_for_se,
+            });
+
+            // JW description for Send to Subcontractor stock entries
+            if (cfg.is_stock_entry) {
+                fields.push({ fieldtype: 'Section Break', label: __('Job Work Instructions'), collapsible: 1,
+                    fieldname: 'jw_section', td_initially_hidden: true });
+                fields.push({
+                    fieldname: 'jw_description',
+                    fieldtype: 'Small Text',
+                    label: __('Job Work Instructions'),
+                    description: __('Instructions for the subcontractor — appended to each item description'),
+                    td_initially_hidden: true,
+                });
+            }
+        }
+
         if (cfg.has_tax) {
             const template_doctype = cfg.tax_type === 'sales'
                 ? 'Sales Taxes and Charges Template'
@@ -1233,6 +1560,8 @@ class TransactionDesk {
 
     // ─── Item Table ─────────────────────────────────────────
     render_item_table_html() {
+        const is_so = this.current_type === 'sales-order';
+        const col_count = is_so ? 8 : 7;
         return `
             <div class="td-item-table mt-4">
                 <div class="d-flex justify-content-between align-items-center mb-2">
@@ -1245,18 +1574,19 @@ class TransactionDesk {
                     <thead>
                         <tr>
                             <th style="width: 4%">#</th>
-                            <th style="width: 30%">${__('Item')}</th>
+                            <th style="width: ${is_so ? '26%' : '30%'}">${__('Item')}</th>
                             <th style="width: 10%">${__('Qty')}</th>
-                            <th style="width: 12%">${__('UOM')}</th>
-                            <th style="width: 14%">${__('Rate')}</th>
-                            <th style="width: 18%">${__('Amount')}</th>
+                            <th style="width: ${is_so ? '10%' : '12%'}">${__('UOM')}</th>
+                            <th style="width: ${is_so ? '12%' : '14%'}">${__('Rate')}</th>
+                            ${is_so ? `<th style="width: 12%">${__('Knitting Charges')}</th>` : ''}
+                            <th style="width: ${is_so ? '14%' : '18%'}">${__('Amount')}</th>
                             <th style="width: 12%"></th>
                         </tr>
                     </thead>
                     <tbody id="td-item-rows"></tbody>
                     <tfoot>
                         <tr class="td-items-total-row">
-                            <td colspan="5" class="text-right font-weight-bold">${__('Net Total')}</td>
+                            <td colspan="${col_count - 2}" class="text-right font-weight-bold">${__('Net Total')}</td>
                             <td class="font-weight-bold" id="td-net-total">0.00</td>
                             <td></td>
                         </tr>
@@ -1309,8 +1639,15 @@ class TransactionDesk {
 
         const row_data = {
             id: row_id, idx,
-            $row: null,
-            item_ctrl: null, gross_qty_ctrl: null, fg_item_ctrl: null, net_qty_ctrl: null, rate_ctrl: null,
+            $row: null, $detail_row: null,
+            item_ctrl: null, gross_qty_ctrl: null, rate_ctrl: null,
+            fg_item_ctrl: null, net_qty_ctrl: null,
+            desc_ctrl: null,
+            item_name: '',
+            description: data.description || '',
+            transaction_params: data.transaction_params || [],
+            conversion_factor: data.conversion_factor || 1,
+            _qty_updating: false,
         };
 
         const $tbody = this.page.main.find('#td-jw-rows');
@@ -1318,23 +1655,65 @@ class TransactionDesk {
         const $row = $(`
             <tr data-row-id="${row_id}" data-idx="${idx}">
                 <td class="text-center align-middle">${idx + 1}</td>
-                <td class="td-cell-item"><div class="td-item-link-wrap"></div></td>
+                <td class="td-cell-item">
+                    <div class="td-item-name-stack">
+                        <div class="td-item-link-wrap"></div>
+                        <div class="td-item-name-sub"></div>
+                    </div>
+                </td>
                 <td class="td-cell-gross-qty"></td>
                 <td class="td-cell-fg-item"><div class="td-fg-item-wrap"></div></td>
                 <td class="td-cell-net-qty"></td>
                 <td class="td-cell-rate"></td>
                 <td class="td-cell-amount text-right align-middle">0.00</td>
-                <td class="text-center align-middle">
+                <td class="text-center align-middle" style="white-space:nowrap;">
+                    <button class="td-btn-expand" title="${__('Details')}"><i class="fa fa-chevron-down"></i></button>
                     <button class="btn btn-xs btn-link text-danger btn-remove-jw" data-idx="${idx}">
                         <i class="fa fa-times"></i>
                     </button>
                 </td>
             </tr>
         `);
-        $tbody.append($row);
-        row_data.$row = $row;
 
-        // Service Item
+        // Detail row (expandable, hidden by default)
+        const $detail_row = $(`
+            <tr class="td-detail-row" data-detail-for="${row_id}">
+                <td colspan="8">
+                    <div class="td-detail-panel">
+                        <div class="td-item-description-wrap"></div>
+                        <div class="td-params-section">
+                            <span class="td-params-label"><i class="fa fa-sliders"></i> ${__('Parameters')}:</span>
+                            <span class="td-params-badges"></span>
+                            <button class="td-btn-add-param">
+                                <i class="fa fa-plus"></i> ${__('Add')}
+                            </button>
+                        </div>
+                    </div>
+                </td>
+            </tr>
+        `);
+
+        $tbody.append($row);
+        $tbody.append($detail_row);
+        row_data.$row = $row;
+        row_data.$detail_row = $detail_row;
+        $detail_row.hide();
+
+        // ── Description control ──
+        const desc_ctrl = frappe.ui.form.make_control({
+            df: {
+                fieldname: `jw_desc_${idx}`,
+                fieldtype: 'Small Text',
+                label: __('Description'),
+                placeholder: __('Item description...'),
+            },
+            parent: $detail_row.find('.td-item-description-wrap'),
+            render_input: true,
+        });
+        if (row_data.description) desc_ctrl.set_value(row_data.description);
+        row_data.desc_ctrl = desc_ctrl;
+
+        // ── Service Item ──
         const item_ctrl = frappe.ui.form.make_control({
             df: {
                 fieldname: `jw_item_${idx}`, fieldtype: 'Link', options: 'Item',
@@ -1345,11 +1724,70 @@ class TransactionDesk {
         item_ctrl._selected_value = '';
         const orig_get = item_ctrl.get_value.bind(item_ctrl);
         item_ctrl.get_value = function () { return this._selected_value || orig_get() || ''; };
-        item_ctrl.$input.on('awesomplete-selectcomplete', function () { item_ctrl._selected_value = item_ctrl.get_input_value(); });
+        item_ctrl.get_query = () => ({
+            query: 'kniterp.api.item_search.smart_search',
+            filters: { is_stock_item: 0 },
+        });
+        item_ctrl.$input.on('awesomplete-selectcomplete', function () {
+            item_ctrl._selected_value = item_ctrl.get_input_value();
+            const service_item = item_ctrl.get_input_value();
+            if (!service_item) return;
+            frappe.xcall('kniterp.api.transaction_desk.get_subcontracting_bom_details', {
+                service_item: service_item,
+            }).then(result => {
+                if (result && result.conversion_factor) {
+                    row_data.conversion_factor = result.conversion_factor;
+                }
+                // Auto-fill FG item if unique match and FG is currently empty
+                if (result && result.fg_item && !row_data.fg_item_ctrl.get_value()) {
+                    row_data.fg_item_ctrl._selected_value = result.fg_item;
+                    row_data.fg_item_ctrl.set_value(result.fg_item);
+                    // Auto-link qtys from BOM ratios
+                    if (result.service_item_qty && result.finished_good_qty) {
+                        const gqty = flt(self._get_raw_value(row_data.gross_qty_ctrl));
+                        if (gqty && gqty !== 1) {
+                            // User already set gross qty — derive net
+                            self._link_jw_qtys(row_data, 'gross');
+                        } else {
+                            // Default: set gross = service_item_qty, net = finished_good_qty
+                            row_data._qty_updating = true;
+                            row_data.gross_qty_ctrl.set_value(flt(result.service_item_qty, 3));
+                            row_data.net_qty_ctrl.set_value(flt(result.finished_good_qty, 3));
+                            row_data._qty_updating = false;
+                            self._update_jw_row_amount(row_data);
+                        }
+                    }
+                    // Fetch FG item description
+                    frappe.xcall('kniterp.api.transaction_desk.get_item_details', {
+                        item_code: result.fg_item,
+                        voucher_type: self.current_type,
+                    }).then(details => {
+                        if (details) {
+                            row_data.item_name = details.item_name || result.fg_item;
+                            const desc = (details.description || '').replace(/<[^>]*>/g, '').trim();
+                            row_data.description = desc;
+                            if (!row_data.desc_ctrl.get_value()) row_data.desc_ctrl.set_value(desc);
+                        }
+                    });
+                }
+                // Auto-fill rate from price list if not yet set
+                if (!flt(self._get_raw_value(row_data.rate_ctrl))) {
+                    frappe.xcall('kniterp.api.transaction_desk.get_item_details', {
+                        item_code: service_item,
+                        voucher_type: self.current_type,
+                    }).then(details => {
+                        if (details && details.price_list_rate) {
+                            row_data.rate_ctrl.set_value(details.price_list_rate);
+                            self._update_jw_row_amount(row_data);
+                        }
+                    });
+                }
+            }).catch(() => {});
+        });
         item_ctrl.$input.on('blur', function () { const v = item_ctrl.get_input_value(); if (v) item_ctrl._selected_value = v; });
         row_data.item_ctrl = item_ctrl;
 
-        // Gross Qty
+        // ── Gross Qty ──
         const gross_qty_ctrl = frappe.ui.form.make_control({
             df: { fieldname: `jw_gqty_${idx}`, fieldtype: 'Float', default: data.gross_qty || 1, placeholder: '1' },
             parent: $row.find('.td-cell-gross-qty'), only_input: true, render_input: true,
@@ -1357,10 +1795,10 @@ class TransactionDesk {
         gross_qty_ctrl.set_value(data.gross_qty || 1);
         row_data.gross_qty_ctrl = gross_qty_ctrl;
         if (gross_qty_ctrl.$input) {
-            gross_qty_ctrl.$input.on('change input', () => setTimeout(() => self._update_jw_row_amount(row_data), 50));
+            gross_qty_ctrl.$input.on('change input', () => setTimeout(() => self._link_jw_qtys(row_data, 'gross'), 50));
         }
 
-        // FG Item
+        // ── FG Item ──
         const fg_item_ctrl = frappe.ui.form.make_control({
             df: {
                 fieldname: `jw_fg_${idx}`, fieldtype: 'Link', options: 'Item',
@@ -1371,19 +1809,57 @@ class TransactionDesk {
         fg_item_ctrl._selected_value = '';
         const orig_fg_get = fg_item_ctrl.get_value.bind(fg_item_ctrl);
         fg_item_ctrl.get_value = function () { return this._selected_value || orig_fg_get() || ''; };
-        fg_item_ctrl.$input.on('awesomplete-selectcomplete', function () { fg_item_ctrl._selected_value = fg_item_ctrl.get_input_value(); });
+        fg_item_ctrl.get_query = () => {
+            const service_item = row_data.item_ctrl.get_value();
+            if (service_item) {
+                return {
+                    query: 'kniterp.api.transaction_desk.search_fg_items_for_service',
+                    filters: { service_item },
+                };
+            }
+            return { query: 'kniterp.api.item_search.smart_search', filters: { is_stock_item: 1 } };
+        };
+        fg_item_ctrl.$input.on('awesomplete-selectcomplete', function () {
+            const fg_item = fg_item_ctrl.get_input_value();
+            fg_item_ctrl._selected_value = fg_item;
+            if (!fg_item) return;
+            // Update conversion_factor from SC BOM and re-link qtys
+            frappe.xcall('kniterp.api.transaction_desk.get_subcontracting_bom_details', {
+                fg_item: fg_item,
+            }).then(result => {
+                if (result && result.conversion_factor) {
+                    row_data.conversion_factor = result.conversion_factor;
+                    self._link_jw_qtys(row_data, 'gross');
+                }
+            }).catch(() => {});
+            // Fetch FG item description
+            frappe.xcall('kniterp.api.transaction_desk.get_item_details', {
+                item_code: fg_item,
+                voucher_type: self.current_type,
+            }).then(details => {
+                if (details) {
+                    row_data.item_name = details.item_name || fg_item;
+                    const desc = (details.description || '').replace(/<[^>]*>/g, '').trim();
+                    row_data.description = desc;
+                    if (!row_data.desc_ctrl.get_value()) row_data.desc_ctrl.set_value(desc);
+                }
+            }).catch(() => {});
+        });
         fg_item_ctrl.$input.on('blur', function () { const v = fg_item_ctrl.get_input_value(); if (v) fg_item_ctrl._selected_value = v; });
         row_data.fg_item_ctrl = fg_item_ctrl;
 
-        // Net Qty (FG qty)
+        // ── Net Qty ──
         const net_qty_ctrl = frappe.ui.form.make_control({
             df: { fieldname: `jw_nqty_${idx}`, fieldtype: 'Float', default: data.net_qty || 1, placeholder: '1' },
             parent: $row.find('.td-cell-net-qty'), only_input: true, render_input: true,
         });
         net_qty_ctrl.set_value(data.net_qty || 1);
         row_data.net_qty_ctrl = net_qty_ctrl;
+        if (net_qty_ctrl.$input) {
+            net_qty_ctrl.$input.on('change input', () => setTimeout(() => self._link_jw_qtys(row_data, 'net'), 50));
+        }
 
-        // Rate (service charge)
+        // ── Rate (service charge on gross qty) ──
         const rate_ctrl = frappe.ui.form.make_control({
             df: { fieldname: `jw_rate_${idx}`, fieldtype: 'Currency', default: data.rate || 0, placeholder: '0.00' },
             parent: $row.find('.td-cell-rate'), only_input: true, render_input: true,
@@ -1396,24 +1872,66 @@ class TransactionDesk {
 
         this.item_rows.push(row_data);
 
-        // Remove row
+        // ── Expand/collapse toggle ──
+        const $expand_btn = $row.find('.td-btn-expand');
+        $expand_btn.on('click', (e) => {
+            e.stopPropagation();
+            $detail_row.slideToggle(200);
+            $expand_btn.toggleClass('expanded');
+        });
+
+        // ── Param badge click → expand ──
+        $row.find('.td-item-name-sub').on('click', '.td-param-count-badge', () => {
+            $expand_btn.trigger('click');
+        });
+
+        // ── Add Parameter button ──
+        $detail_row.find('.td-btn-add-param').on('click', () => {
+            self.open_param_dialog(row_data);
+        });
+
+        // ── Render existing param badges ──
+        this.render_row_param_badges(row_data);
+
+        // ── Remove row ──
         $row.find('.btn-remove-jw').on('click', () => {
-            if (this.item_rows.length <= 1) {
+            if (this.item_rows.filter(r => r !== null).length <= 1) {
                 frappe.show_alert({ message: __('At least one row is required'), indicator: 'orange' });
                 return;
             }
             this.item_rows[idx] = null;
             $row.remove();
+            $detail_row.remove();
             this.reindex_items();
             this._update_jw_totals();
         });
 
-        // Bind add button (once)
+        // ── Bind add button (once) ──
         if (idx === 0) {
             this.page.main.find('.btn-add-jw-item').off('click').on('click', () => this.add_job_work_row());
         }
 
         setTimeout(() => item_ctrl.$input && item_ctrl.$input.focus(), 100);
+    }
+
+    // Links gross_qty ↔ net_qty via conversion_factor from SC BOM.
+    // CF = service_item_qty / finished_good_qty → gross = net * CF, net = gross / CF
+    _link_jw_qtys(row_data, source) {
+        if (row_data._qty_updating) return;
+        row_data._qty_updating = true;
+        try {
+            const cf = row_data.conversion_factor || 1;
+            if (source === 'gross') {
+                const gross = this._get_raw_value(row_data.gross_qty_ctrl);
+                row_data.net_qty_ctrl.set_value(cf ? flt(gross / cf, 3) : gross);
+            } else if (source === 'net') {
+                const net = this._get_raw_value(row_data.net_qty_ctrl);
+                row_data.gross_qty_ctrl.set_value(flt(net * cf, 3));
+            }
+        } finally {
+            row_data._qty_updating = false;
+        }
+        this._update_jw_row_amount(row_data);
     }
 
     _update_jw_row_amount(row_data) {
@@ -1443,7 +1961,7 @@ class TransactionDesk {
         const row_data = {
             id: row_id, idx,
             $row: null, $detail_row: null, // Will be assigned after creation
-            item_ctrl: null, qty_ctrl: null, uom_ctrl: null, rate_ctrl: null, desc_ctrl: null, // Will be assigned after creation
+            item_ctrl: null, qty_ctrl: null, uom_ctrl: null, rate_ctrl: null, desc_ctrl: null, knitting_charges_ctrl: null, // Will be assigned after creation
             item_name: '',
             description: '',
             uom: data.uom || '',
@@ -1453,6 +1971,8 @@ class TransactionDesk {
         const $tbody = this.page.main.find('#td-item-rows');
 
         // ── Main row ──
+        const is_sales_order = self.current_type === 'sales-order';
+        const col_count = is_sales_order ? 8 : 7;
         const $row = $(`
             <tr data-row-id="${row_id}" data-idx="${idx}">
                 <td class="text-center align-middle">${idx + 1}</td>
@@ -1465,6 +1985,7 @@ class TransactionDesk {
                 <td class="td-cell-qty"></td>
                 <td class="td-cell-uom"></td>
                 <td class="td-cell-rate"></td>
+                ${is_sales_order ? '<td class="td-cell-knitting-charges"></td>' : ''}
                 <td class="td-cell-amount text-right align-middle">
                     <div class="td-amount-value">0.00</div>
                     <div class="td-item-tax-info text-muted small"></div>
@@ -1484,9 +2005,16 @@ class TransactionDesk {
         // ── Detail row (expandable, hidden by default) ──
         const $detail_row = $(`
             <tr class="td-detail-row" data-detail-for="${row_id}">
-                <td colspan="7">
+                <td colspan="${col_count}">
                     <div class="td-detail-panel">
                         <div class="td-item-description-wrap"></div>
+                        <div class="td-pkgs-section" style="display:none;">
+                            <div class="d-flex gap-2 align-items-end">
+                                <div class="td-pkgs-no-wrap" style="flex: 0 0 120px;"></div>
+                                <div class="td-pkgs-kind-wrap" style="flex: 0 0 140px;"></div>
+                                <div class="td-pkgs-other-wrap" style="flex: 0 0 160px;"></div>
+                            </div>
+                        </div>
                         <div class="td-params-section">
                             <span class="td-params-label"><i class="fa fa-sliders"></i> ${__('Parameters')}:</span>
                             <span class="td-params-badges"></span>
@@ -1518,6 +2046,55 @@ class TransactionDesk {
             render_input: true,
         });
         row_data.desc_ctrl = desc_ctrl;
+
+        // ── Package controls (has_pkgs types: SI, PI, DN, PR, Debit Note, Credit Note) ──
+        if (self.current_config.has_pkgs) {
+            $detail_row.find('.td-pkgs-section').show();
+
+            const pkgs_no_ctrl = frappe.ui.form.make_control({
+                df: { fieldname: `no_of_pkgs_${idx}`, fieldtype: 'Int', label: __('No. of Pkgs') },
+                parent: $detail_row.find('.td-pkgs-no-wrap'),
+                render_input: true,
+            });
+
+            const pkgs_kind_ctrl = frappe.ui.form.make_control({
+                df: { fieldname: `kind_of_pkgs_${idx}`, fieldtype: 'Select', label: __('Kind of Pkgs'),
+                    options: '\nRolls\nBags\nBoxes\nOther' },
+                parent: $detail_row.find('.td-pkgs-kind-wrap'),
+                render_input: true,
+            });
+
+            const pkgs_other_ctrl = frappe.ui.form.make_control({
+                df: { fieldname: `kind_of_pkgs_other_${idx}`, fieldtype: 'Data', label: __('Specify Kind') },
+                parent: $detail_row.find('.td-pkgs-other-wrap'),
+                render_input: true,
+            });
+            pkgs_other_ctrl.$wrapper.hide();
+
+            pkgs_kind_ctrl.$input.on('change', () => {
+                pkgs_other_ctrl.$wrapper.toggle(pkgs_kind_ctrl.get_value() === 'Other');
+            });
+
+            row_data.pkgs_no_ctrl = pkgs_no_ctrl;
+            row_data.pkgs_kind_ctrl = pkgs_kind_ctrl;
+            row_data.pkgs_other_ctrl = pkgs_other_ctrl;
+        }
+
+        // ── Knitting Charges control (SO only, in main row) ──
+        if (is_sales_order) {
+            const knitting_charges_ctrl = frappe.ui.form.make_control({
+                df: {
+                    fieldname: `knitting_charges_${idx}`,
+                    fieldtype: 'Currency',
+                    placeholder: '0.00',
+                },
+                parent: $row.find('.td-cell-knitting-charges'),
+                only_input: true,
+                render_input: true,
+            });
+            knitting_charges_ctrl.set_value(data.knitting_charges || 0);
+            row_data.knitting_charges_ctrl = knitting_charges_ctrl;
+        }
 
         // ── Item Link control (with smart/convoluted search) ──
         const item_ctrl = frappe.ui.form.make_control({
@@ -2255,6 +2832,13 @@ class TransactionDesk {
             if (!valid_items.length) {
                 errors.push(__('At least one item is required'));
             }
+            // JW-specific: every service item row must also have a Finished Good item
+            if (cfg.is_job_work) {
+                const missing_fg = valid_items.filter(r => !r.fg_item_ctrl.get_value());
+                if (missing_fg.length) {
+                    errors.push(__('Each service item row must have a Finished Good item'));
+                }
+            }
         }
 
         // Accounts validation
@@ -2331,11 +2915,8 @@ class TransactionDesk {
 
             this.show_success(result, submit);
         } catch (e) {
-            frappe.msgprint({
-                title: __('Error'),
-                message: e.message || __('Failed to create transaction'),
-                indicator: 'red',
-            });
+            // frappe already shows _server_messages from the 417 response
+        } finally {
             this.page.main.find('.td-form-body, .td-item-table, .td-accounts-table').css('opacity', '1');
             this.page.btn_primary.prop('disabled', false);
         }
@@ -2364,6 +2945,8 @@ class TransactionDesk {
                     net_qty: flt(row.net_qty_ctrl.get_value()) || 1,
                     rate: flt(row.rate_ctrl.get_value()),
                     warehouse: data.warehouse || '',
+                    description: row.desc_ctrl ? row.desc_ctrl.get_value() : '',
+                    transaction_params: row.transaction_params || [],
                 });
             });
         } else if (cfg.has_items) {
@@ -2381,8 +2964,23 @@ class TransactionDesk {
                     warehouse: data.warehouse || '',
                     transaction_params: row.transaction_params || [],
                 };
+                if (row.knitting_charges_ctrl) {
+                    item_data.custom_knitting_charges = flt(row.knitting_charges_ctrl.get_value());
+                }
+                if (row.pkgs_no_ctrl) {
+                    item_data.custom_no_of_pkgs = cint(row.pkgs_no_ctrl.get_value());
+                }
+                if (row.pkgs_kind_ctrl) {
+                    item_data.custom_kind_of_pkgs = row.pkgs_kind_ctrl.get_value() || '';
+                }
+                if (row.pkgs_other_ctrl) {
+                    item_data.custom_kind_of_pkgs_other = row.pkgs_other_ctrl.get_value() || '';
+                }
                 if (row.reference_row) {
                     item_data.reference_row = row.reference_row;
+                }
+                if (row.bom_no) {
+                    item_data.bom_no = row.bom_no;
                 }
                 data.items.push(item_data);
             });
@@ -2413,7 +3011,8 @@ class TransactionDesk {
         const amount = result.grand_total || result.paid_amount || result.total_debit || result.total || 0;
 
         // For Job Work, the result may contain references to multiple documents
-        let doc_route = `/app/${frappe.router.slug(cfg.doctype)}/${result.name}`;
+        const result_doctype = result.doctype || cfg.doctype;
+        let doc_route = `/app/${frappe.router.slug(result_doctype)}/${result.name}`;
         let extra_info = '';
         if (result.sales_order) {
             extra_info += `<p class="mt-2"><a href="/app/sales-order/${result.sales_order}" target="_blank"><i class="fa fa-external-link mr-1"></i>${__('Sales Order')}: ${result.sales_order}</a></p>`;
@@ -2465,10 +3064,14 @@ class TransactionDesk {
                 e.preventDefault();
                 this.submit_form();
             }
-            // Escape → back to type selector
-            if (e.key === 'Escape' && !$('.modal.show').length) {
-                e.preventDefault();
-                this.render_type_selector();
+            // Escape → blur focused input first, then back to type selector
+            if (e.key === 'Escape' && this.current_type && !$('.modal.show').length) {
+                var ae = document.activeElement;
+                if (ae && ['INPUT', 'TEXTAREA', 'SELECT'].indexOf(ae.tagName) !== -1) {
+                    ae.blur();
+                } else {
+                    this.render_type_selector();
+                }
             }
         });
     }
