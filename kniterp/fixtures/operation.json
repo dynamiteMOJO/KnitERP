@@ -1,0 +1,44 @@
+[
+ {
+  "batch_size": 1,
+  "create_job_card_based_on_batch_size": 0,
+  "description": "Yarn Processing",
+  "docstatus": 0,
+  "doctype": "Operation",
+  "is_corrective_operation": 0,
+  "modified": "2026-01-30 19:16:34.923960",
+  "name": "Yarn Processing",
+  "quality_inspection_template": null,
+  "sub_operations": [],
+  "total_operation_time": 0.0,
+  "workstation": null
+ },
+ {
+  "batch_size": 1,
+  "create_job_card_based_on_batch_size": 0,
+  "description": "Dyeing",
+  "docstatus": 0,
+  "doctype": "Operation",
+  "is_corrective_operation": 0,
+  "modified": "2026-01-29 11:49:07.444790",
+  "name": "Dyeing",
+  "quality_inspection_template": null,
+  "sub_operations": [],
+  "total_operation_time": 0.0,
+  "workstation": "Dyeing Job Work"
+ },
+ {
+  "batch_size": 1,
+  "create_job_card_based_on_batch_size": 0,
+  "description": "Knitting",
+  "docstatus": 0,
+  "doctype": "Operation",
+  "is_corrective_operation": 0,
+  "modified": "2026-01-13 14:13:38.577369",
+  "name": "Knitting",
+  "quality_inspection_template": null,
+  "sub_operations": [],
+  "total_operation_time": 0.0,
+  "workstation": null
+ }
+]
