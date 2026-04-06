@@ -2804,6 +2804,8 @@ def create_direct_sales_invoice(job_card):
     require_production_write_access("create direct delivery sales invoice")
 
     jc = frappe.get_doc("Job Card", job_card)
+    if jc.docstatus == 2:
+        frappe.throw(_("Cannot create Sales Invoice for cancelled Job Card {0}").format(job_card))
     if not jc.work_order:
         frappe.throw(_("Job Card {0} has no linked Work Order").format(job_card))
 
@@ -2840,7 +2842,7 @@ def create_direct_sales_invoice(job_card):
         FROM `tabSales Invoice Item` sii
         JOIN `tabSales Invoice` si ON si.name = sii.parent
         WHERE sii.sales_order = %s
-        AND sii.dn_detail IS NULL
+        AND (sii.dn_detail IS NULL OR sii.dn_detail = '')
         AND si.docstatus = 1
     """, wo.sales_order)[0][0] or 0
 
@@ -2849,10 +2851,13 @@ def create_direct_sales_invoice(job_card):
         frappe.throw(_("This Sales Order is already fully billed via direct invoices"))
 
     for item in si.items:
-        item.qty = pending_qty
-        item.warehouse = fg_warehouse
-        item.dn_detail = None
-        item.delivery_note = None
+        if item.so_detail == wo.sales_order_item:
+            item.qty = pending_qty
+            item.warehouse = fg_warehouse
+            item.dn_detail = None
+            item.delivery_note = None
+        else:
+            item.qty = 0
 
     si.items = [d for d in si.items if flt(d.qty) > 0]
     if not si.items:
