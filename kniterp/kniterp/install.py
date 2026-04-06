@@ -71,7 +71,23 @@ def setup_property_setters():
 
     frappe.db.commit()
 
+def _ensure_prerequisites():
+    if not frappe.db.exists("Item Group", "Services"):
+        ig = frappe.new_doc("Item Group")
+        ig.item_group_name = "Services"
+        ig.parent_item_group = frappe.db.get_value("Item Group", {"is_group": 1, "parent_item_group": ""}, "name") or "All Item Groups"
+        ig.insert(ignore_permissions=True)
+
+    if not frappe.db.exists("UOM", "Kg"):
+        uom = frappe.new_doc("UOM")
+        uom.uom_name = "Kg"
+        uom.insert(ignore_permissions=True)
+
+    frappe.db.commit()
+
+
 def setup_service_items():
+    _ensure_prerequisites()
     service_items = [
         {"item_code": "Knitting Jobwork", "item_name": "Knitting Jobwork", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
         {"item_code": "Dyeing Jobwork", "item_name": "Dyeing Jobwork", "item_group": "Services", "stock_uom": "Kg", "gst_hsn_code": "998821"},
