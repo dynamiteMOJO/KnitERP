@@ -2795,6 +2795,77 @@ def create_direct_purchase_invoice(purchase_order, received_batches, rate=None, 
 
 
 @frappe.whitelist()
+def create_direct_sales_invoice(job_card):
+    """
+    Direct delivery path: create Sales Invoice with update_stock=1.
+    Used when supplier has already shipped FG to customer (PI already created).
+    Stocks are adjusted on the SI itself — no Delivery Note required.
+    """
+    require_production_write_access("create direct delivery sales invoice")
+
+    jc = frappe.get_doc("Job Card", job_card)
+    if not jc.work_order:
+        frappe.throw(_("Job Card {0} has no linked Work Order").format(job_card))
+
+    wo = frappe.get_doc("Work Order", jc.work_order)
+    if not wo.sales_order:
+        frappe.throw(_("Work Order {0} has no linked Sales Order").format(wo.name))
+
+    # manufactured_qty set by create_direct_purchase_invoice
+    billed_qty = flt(jc.manufactured_qty, 3)
+    if billed_qty <= 0:
+        frappe.throw(_("No received quantity on Job Card {0}. Create Purchase Invoice first.").format(job_card))
+
+    fg_warehouse = wo.fg_warehouse
+    if not fg_warehouse:
+        frappe.throw(_("FG Warehouse not set on Work Order {0}").format(wo.name))
+
+    # Check for existing draft SI (direct path — no dn_detail)
+    existing_draft = frappe.db.get_value(
+        "Sales Invoice Item",
+        {"sales_order": wo.sales_order, "dn_detail": ["is", "not set"], "docstatus": 0},
+        "parent"
+    )
+    if existing_draft:
+        frappe.msgprint(_("Opening existing Draft Sales Invoice {0}").format(existing_draft))
+        return existing_draft
+
+    from erpnext.selling.doctype.sales_order.sales_order import make_sales_invoice
+    si = make_sales_invoice(wo.sales_order)
+    si.update_stock = 1
+
+    # Already-billed qty against this SO (direct SIs only — no dn_detail)
+    already_billed = frappe.db.sql("""
+        SELECT COALESCE(SUM(sii.qty), 0)
+        FROM `tabSales Invoice Item` sii
+        JOIN `tabSales Invoice` si ON si.name = sii.parent
+        WHERE sii.sales_order = %s
+        AND sii.dn_detail IS NULL
+        AND si.docstatus = 1
+    """, wo.sales_order)[0][0] or 0
+
+    pending_qty = flt(billed_qty - flt(already_billed, 3), 3)
+    if pending_qty <= 0:
+        frappe.throw(_("This Sales Order is already fully billed via direct invoices"))
+
+    for item in si.items:
+        item.qty = pending_qty
+        item.warehouse = fg_warehouse
+        item.dn_detail = None
+        item.delivery_note = None
+
+    si.items = [d for d in si.items if flt(d.qty) > 0]
+    if not si.items:
+        frappe.throw(_("No items to invoice"))
+
+    si.set_missing_values()
+    si.insert()
+
+    frappe.msgprint(_("Sales Invoice {0} created (direct delivery)").format(si.name))
+    return si.name
+
+
+@frappe.whitelist()
 def get_po_items_for_receipt(purchase_order):
     require_production_write_access("create purchase receipts")
 
@@ -3767,7 +3838,7 @@ def create_consolidated_delivery_note(customer, items, transport_args=None):
         filters={"name": ["in", so_names], "docstatus": 1},
         fields=["name", "customer", "company", "currency", "taxes_and_charges",
                 "project", "shipping_address_name", "customer_address",
-                "company_address", "selling_price_list"]
+                "company_address", "selling_price_list", "custom_shipping_party"]
     )
 
     if len(so_data) != len(so_names):
@@ -3778,6 +3849,7 @@ def create_consolidated_delivery_note(customer, items, transport_args=None):
     companies = set(so.company for so in so_data)
     currencies = set(so.currency for so in so_data)
     tax_templates = set(so.taxes_and_charges for so in so_data if so.taxes_and_charges)
+    shipping_parties = set(so.get("custom_shipping_party") for so in so_data if so.get("custom_shipping_party"))
 
     for so in so_data:
         if so.customer != customer:
@@ -3791,6 +3863,8 @@ def create_consolidated_delivery_note(customer, items, transport_args=None):
     if len(tax_templates) > 1:
         frappe.throw(_("Cannot consolidate: Sales Orders have different tax templates: {0}").format(
             ", ".join(tax_templates)))
+    if len(shipping_parties) > 1:
+        frappe.throw(_("Cannot consolidate: Sales Orders have different shipping parties"))
 
     # Check for existing draft DNs referencing these SO items
     so_details = [item["sales_order_item"] for item in items]
