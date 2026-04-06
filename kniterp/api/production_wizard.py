@@ -2692,7 +2692,6 @@ def create_direct_purchase_invoice(purchase_order, received_batches, rate=None, 
     require_production_write_access("create direct delivery purchase invoice")
 
     if isinstance(received_batches, str):
-        import json
         received_batches = json.loads(received_batches)
 
     if not received_batches:
@@ -2733,54 +2732,55 @@ def create_direct_purchase_invoice(purchase_order, received_batches, rate=None, 
 
     created_batches = []
     try:
-        for item in pi.items:
-            if item.is_fixed_asset:
-                continue
+        fg_items = [item for item in pi.items if not getattr(item, 'is_fixed_asset', False)]
+        if len(fg_items) != 1:
+            frappe.throw(_("Expected exactly one item in Purchase Invoice for subcontracting PO {0}, got {1}").format(
+                purchase_order, len(fg_items)))
+        item = fg_items[0]
 
-            total_qty = 0
-            sabb = frappe.new_doc("Serial and Batch Bundle")
-            sabb.item_code = item.item_code
-            sabb.warehouse = fg_warehouse
-            sabb.type_of_transaction = "Inward"
-            sabb.voucher_type = "Purchase Invoice"
-            sabb.has_batch_no = 1
-            sabb.company = pi.company
+        total_qty = 0
+        sabb = frappe.new_doc("Serial and Batch Bundle")
+        sabb.item_code = item.item_code
+        sabb.warehouse = fg_warehouse
+        sabb.type_of_transaction = "Inward"
+        sabb.voucher_type = "Purchase Invoice"
+        sabb.has_batch_no = 1
+        sabb.company = pi.company
 
-            for batch in received_batches:
-                batch_no = batch.get("batch_no")
-                qty = flt(batch.get("qty"), 3)
-                if ensure_batch_exists(batch_no=batch_no, item_code=item.item_code, source_type="Supplier"):
-                    created_batches.append(batch_no)
-                sabb.append("entries", {"batch_no": batch_no, "qty": qty, "warehouse": fg_warehouse})
-                total_qty += qty
+        for batch in received_batches:
+            batch_no = batch.get("batch_no")
+            qty = flt(batch.get("qty"), 3)
+            if ensure_batch_exists(batch_no=batch_no, item_code=item.item_code, source_type="Supplier"):
+                created_batches.append(batch_no)
+            sabb.append("entries", {"batch_no": batch_no, "qty": qty, "warehouse": fg_warehouse})
+            total_qty += qty
 
-            sabb.insert(ignore_permissions=True)
+        sabb.insert(ignore_permissions=True)
 
-            item.qty = total_qty
-            item.warehouse = fg_warehouse
-            item.use_serial_batch_fields = 0
-            item.serial_and_batch_bundle = sabb.name
-            if rate and flt(rate) > 0:
-                item.rate = flt(rate, 2)
+        item.qty = total_qty
+        item.warehouse = fg_warehouse
+        item.use_serial_batch_fields = 0
+        item.serial_and_batch_bundle = sabb.name
+        if rate and flt(rate) > 0:
+            item.rate = flt(rate, 2)
 
         pi.set_missing_values()
         pi.insert()
 
         # Update SABB with assigned voucher references
-        for item in pi.items:
-            if item.serial_and_batch_bundle:
+        for pi_item in pi.items:
+            if pi_item.serial_and_batch_bundle:
                 frappe.db.set_value(
                     "Serial and Batch Bundle",
-                    item.serial_and_batch_bundle,
-                    {"voucher_no": pi.name, "voucher_detail_no": item.name}
+                    pi_item.serial_and_batch_bundle,
+                    {"voucher_no": pi.name, "voucher_detail_no": pi_item.name}
                 )
 
         # Update Job Card manufactured_qty to mirror what SCR doc_event would do
         if job_card:
             total_received = sum(flt(b.get("qty"), 3) for b in received_batches)
-            existing_mfg = frappe.db.get_value("Job Card", job_card, "manufactured_qty") or 0
-            frappe.db.set_value("Job Card", job_card, "manufactured_qty",
-                                flt(existing_mfg, 3) + flt(total_received, 3))
+            jc_doc = frappe.get_doc("Job Card", job_card)
+            jc_doc.db_set("manufactured_qty", flt(total_received, 3), update_modified=False)
 
     except Exception:
         for b in created_batches:
