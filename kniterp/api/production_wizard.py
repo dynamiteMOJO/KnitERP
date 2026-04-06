@@ -4781,17 +4781,22 @@ def _complete_job_card_subcontracted(job_card):
     # For draft job cards (likely subcontracted), we need to submit them
     try:
         if jc.is_subcontracted:
-            # Get total received qty for this job card
+            # Get total received qty from SCR (normal path)
             total_received = frappe.db.sql("""
-                SELECT SUM(sri.qty) 
+                SELECT SUM(sri.qty)
                 FROM `tabSubcontracting Receipt Item` sri
                 JOIN `tabSubcontracting Receipt` scr ON scr.name = sri.parent
                 WHERE sri.job_card = %s AND scr.docstatus = 1
             """, job_card)
             received_qty = flt(total_received[0][0], 3) if total_received and total_received[0][0] else 0
-            
+
             if received_qty <= 0:
-                frappe.throw(_("Cannot complete Job Card with no received quantity"))
+                # Direct delivery path: PI sets manufactured_qty directly (no SCR)
+                received_qty = flt(jc.manufactured_qty, 3)
+
+            if received_qty <= 0:
+                frappe.throw(_("Cannot complete Job Card with no received quantity. "
+                               "Either receive goods via Subcontracting Receipt or create a Purchase Invoice first."))
         
             # Add time log with total received qty
             jc.append("time_logs", {
