@@ -170,7 +170,7 @@ def hide_unwanted_workspaces():
             has_admin_role = any(row.role == "Administrator" for row in workspace_doc.roles)
             if not has_admin_role:
                 workspace_doc.append("roles", {"role": "Administrator"})
-                workspace_doc.save(ignore_permissions=True)
+                workspace_doc.save(ignore_permissions=True, ignore_links=True)
 
     # 2. Update Workspace Sidebars — doctype may not exist in all versions
     try:
@@ -193,7 +193,7 @@ def hide_unwanted_workspaces():
                 has_admin_role = any(row.role == "Administrator" for row in icon_doc.roles)
                 if not has_admin_role:
                     icon_doc.append("roles", {"role": "Administrator"})
-                    icon_doc.save(ignore_permissions=True)
+                    icon_doc.save(ignore_permissions=True, ignore_links=True)
     except Exception:
         pass
 
