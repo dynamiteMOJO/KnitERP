@@ -34,7 +34,9 @@ def setup_custom_fields():
         if not frappe.db.exists("Custom Field", {"dt": cf["dt"], "fieldname": cf["fieldname"]}):
             doc = frappe.new_doc("Custom Field")
             doc.update(cf)
-            doc.insert(ignore_permissions=True)
+            # insert_after may reference a field that doesn't exist on a fresh install;
+            # ignore_links prevents a LinkValidationError in that case.
+            doc.insert(ignore_permissions=True, ignore_links=True)
 
     frappe.db.commit()
 
@@ -52,6 +54,14 @@ def setup_property_setters():
     ]
 
     for ps in property_setters:
+        # The target field is auto-generated and may not exist on other installations.
+        field_exists = frappe.db.exists(
+            "DocField",
+            {"parent": ps["doctype"], "fieldname": ps["fieldname"]},
+        )
+        if not field_exists:
+            continue
+
         if not frappe.db.exists("Property Setter", {
             "doc_type": ps["doctype"],
             "field_name": ps["fieldname"],
@@ -72,10 +82,21 @@ def setup_property_setters():
     frappe.db.commit()
 
 def _ensure_prerequisites():
+    # Ensure a root Item Group exists that can act as parent.
+    root_group = frappe.db.get_value(
+        "Item Group", {"is_group": 1, "parent_item_group": ""}, "name"
+    )
+    if not root_group:
+        ig = frappe.new_doc("Item Group")
+        ig.item_group_name = "All Item Groups"
+        ig.is_group = 1
+        ig.insert(ignore_permissions=True)
+        root_group = ig.name
+
     if not frappe.db.exists("Item Group", "Services"):
         ig = frappe.new_doc("Item Group")
         ig.item_group_name = "Services"
-        ig.parent_item_group = frappe.db.get_value("Item Group", {"is_group": 1, "parent_item_group": ""}, "name") or "All Item Groups"
+        ig.parent_item_group = root_group
         ig.insert(ignore_permissions=True)
 
     if not frappe.db.exists("UOM", "Kg"):
@@ -110,12 +131,12 @@ def setup_service_items():
 
 def setup_salary_components():
     components = [
-        {"salary_component": "Sunday Pay", "type": "Earning"},
-        {"salary_component": "Dual Shift Pay", "type": "Earning"},
-        {"salary_component": "Machine Extra Pay", "type": "Earning"},
-        {"salary_component": "Conveyance Allowance", "type": "Earning"},
-        {"salary_component": "Tea Allowance", "type": "Earning"},
-        {"salary_component": "Rejected Holiday Deduction", "type": "Deduction"},
+        {"salary_component": "Sunday Pay", "salary_component_abbr": "SP", "type": "Earning"},
+        {"salary_component": "Dual Shift Pay", "salary_component_abbr": "DSP", "type": "Earning"},
+        {"salary_component": "Machine Extra Pay", "salary_component_abbr": "MEP", "type": "Earning"},
+        {"salary_component": "Conveyance Allowance", "salary_component_abbr": "CA", "type": "Earning"},
+        {"salary_component": "Tea Allowance", "salary_component_abbr": "TA", "type": "Earning"},
+        {"salary_component": "Rejected Holiday Deduction", "salary_component_abbr": "RHD", "type": "Deduction"},
     ]
 
     for comp_data in components:
@@ -151,32 +172,41 @@ def hide_unwanted_workspaces():
                 workspace_doc.append("roles", {"role": "Administrator"})
                 workspace_doc.save(ignore_permissions=True)
 
-    # 2. Update Workspace Sidebars (Uncheck Standard, set for_user = Administrator)
-    frappe.db.set_value("Workspace Sidebar", {"name": ("in", modules_to_hide)}, {
-        "standard": 0,
-        "for_user": "Administrator"
-    })
+    # 2. Update Workspace Sidebars — doctype may not exist in all versions
+    try:
+        frappe.db.set_value("Workspace Sidebar", {"name": ("in", modules_to_hide)}, {
+            "standard": 0,
+            "for_user": "Administrator"
+        })
+    except Exception:
+        pass
 
-    # 3. Hide the Desktop Icons and add Administrator role
-    frappe.db.set_value("Desktop Icon", {"name": ("in", modules_to_hide)}, {
-        "hidden": 1,
-        "standard": 0
-    })
-    
-    for icon_name in modules_to_hide:
-        if frappe.db.exists("Desktop Icon", icon_name):
-            icon_doc = frappe.get_doc("Desktop Icon", icon_name)
-            has_admin_role = any(row.role == "Administrator" for row in icon_doc.roles)
-            if not has_admin_role:
-                icon_doc.append("roles", {"role": "Administrator"})
-                icon_doc.save(ignore_permissions=True)
+    # 3. Hide the Desktop Icons — doctype may not exist in all framework versions
+    try:
+        frappe.db.set_value("Desktop Icon", {"name": ("in", modules_to_hide)}, {
+            "hidden": 1,
+            "standard": 0
+        })
+        for icon_name in modules_to_hide:
+            if frappe.db.exists("Desktop Icon", icon_name):
+                icon_doc = frappe.get_doc("Desktop Icon", icon_name)
+                has_admin_role = any(row.role == "Administrator" for row in icon_doc.roles)
+                if not has_admin_role:
+                    icon_doc.append("roles", {"role": "Administrator"})
+                    icon_doc.save(ignore_permissions=True)
+    except Exception:
+        pass
 
     # 4. Push all non-KnitERP Desktop Icons & Workspaces to the bottom
-    frappe.db.sql("""
-        UPDATE `tabDesktop Icon`
-        SET idx = idx + 100
-        WHERE app != 'kniterp' AND idx < 100
-    """)
+    try:
+        frappe.db.sql("""
+            UPDATE `tabDesktop Icon`
+            SET idx = idx + 100
+            WHERE app != 'kniterp' AND idx < 100
+        """)
+    except Exception:
+        pass
+
     frappe.db.sql("""
         UPDATE `tabWorkspace`
         SET sequence_id = sequence_id + 100
