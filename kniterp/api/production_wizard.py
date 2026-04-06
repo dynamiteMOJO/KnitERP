@@ -2812,8 +2812,8 @@ def create_direct_sales_invoice(job_card):
         frappe.throw(_("Work Order {0} has no linked Sales Order").format(wo.name))
 
     # manufactured_qty set by create_direct_purchase_invoice
-    billed_qty = flt(jc.manufactured_qty, 3)
-    if billed_qty <= 0:
+    received_qty = flt(jc.manufactured_qty, 3)
+    if received_qty <= 0:
         frappe.throw(_("No received quantity on Job Card {0}. Create Purchase Invoice first.").format(job_card))
 
     fg_warehouse = wo.fg_warehouse
@@ -2844,7 +2844,7 @@ def create_direct_sales_invoice(job_card):
         AND si.docstatus = 1
     """, wo.sales_order)[0][0] or 0
 
-    pending_qty = flt(billed_qty - flt(already_billed, 3), 3)
+    pending_qty = flt(received_qty - flt(already_billed, 3), 3)
     if pending_qty <= 0:
         frappe.throw(_("This Sales Order is already fully billed via direct invoices"))
 
