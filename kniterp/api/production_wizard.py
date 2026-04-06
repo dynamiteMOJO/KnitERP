@@ -2678,8 +2678,120 @@ def receive_subcontracted_goods(purchase_order, rate=None, supplier_delivery_not
         raise e
     
     frappe.msgprint(_("Subcontracting Receipt {0} created and submitted").format(scr.name))
-    
+
     return scr.name
+
+
+@frappe.whitelist()
+def create_direct_purchase_invoice(purchase_order, received_batches, rate=None, supplier_delivery_note=None):
+    """
+    Direct delivery path: create Purchase Invoice with update_stock=1.
+    Used when supplier ships FG directly to customer — no Subcontracting Receipt.
+    Mirrors batch/SABB logic from receive_subcontracted_goods.
+    """
+    require_production_write_access("create direct delivery purchase invoice")
+
+    if isinstance(received_batches, str):
+        import json
+        received_batches = json.loads(received_batches)
+
+    if not received_batches:
+        frappe.throw(_("No received batches provided"))
+
+    po = frappe.get_doc("Purchase Order", purchase_order)
+    if po.docstatus != 1:
+        frappe.throw(_("Purchase Order must be submitted"))
+    if not po.is_subcontracted:
+        frappe.throw(_("Purchase Order is not a subcontracting order"))
+
+    # Check for existing draft PI for this PO
+    existing_draft = frappe.db.get_value(
+        "Purchase Invoice Item",
+        {"purchase_order": purchase_order, "docstatus": 0},
+        "parent"
+    )
+    if existing_draft:
+        frappe.msgprint(_("Opening existing Draft Purchase Invoice {0}").format(existing_draft))
+        return existing_draft
+
+    # Get FG warehouse from Job Card → Work Order
+    job_card = frappe.db.get_value("Purchase Order Item", {"parent": purchase_order}, "job_card")
+    fg_warehouse = None
+    if job_card:
+        wo_name = frappe.db.get_value("Job Card", job_card, "work_order")
+        if wo_name:
+            fg_warehouse = frappe.db.get_value("Work Order", wo_name, "fg_warehouse")
+    if not fg_warehouse:
+        frappe.throw(_("Could not determine FG warehouse from Job Card / Work Order"))
+
+    from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_invoice
+    pi = make_purchase_invoice(purchase_order)
+    pi.update_stock = 1
+    pi.is_return = 0
+    if supplier_delivery_note:
+        pi.supplier_delivery_note = supplier_delivery_note
+
+    created_batches = []
+    try:
+        for item in pi.items:
+            if item.is_fixed_asset:
+                continue
+
+            total_qty = 0
+            sabb = frappe.new_doc("Serial and Batch Bundle")
+            sabb.item_code = item.item_code
+            sabb.warehouse = fg_warehouse
+            sabb.type_of_transaction = "Inward"
+            sabb.voucher_type = "Purchase Invoice"
+            sabb.has_batch_no = 1
+            sabb.company = pi.company
+
+            for batch in received_batches:
+                batch_no = batch.get("batch_no")
+                qty = flt(batch.get("qty"), 3)
+                if ensure_batch_exists(batch_no=batch_no, item_code=item.item_code, source_type="Supplier"):
+                    created_batches.append(batch_no)
+                sabb.append("entries", {"batch_no": batch_no, "qty": qty, "warehouse": fg_warehouse})
+                total_qty += qty
+
+            sabb.insert(ignore_permissions=True)
+
+            item.qty = total_qty
+            item.warehouse = fg_warehouse
+            item.use_serial_batch_fields = 0
+            item.serial_and_batch_bundle = sabb.name
+            if rate and flt(rate) > 0:
+                item.rate = flt(rate, 2)
+
+        pi.set_missing_values()
+        pi.insert()
+
+        # Update SABB with assigned voucher references
+        for item in pi.items:
+            if item.serial_and_batch_bundle:
+                frappe.db.set_value(
+                    "Serial and Batch Bundle",
+                    item.serial_and_batch_bundle,
+                    {"voucher_no": pi.name, "voucher_detail_no": item.name}
+                )
+
+        # Update Job Card manufactured_qty to mirror what SCR doc_event would do
+        if job_card:
+            total_received = sum(flt(b.get("qty"), 3) for b in received_batches)
+            existing_mfg = frappe.db.get_value("Job Card", job_card, "manufactured_qty") or 0
+            frappe.db.set_value("Job Card", job_card, "manufactured_qty",
+                                flt(existing_mfg, 3) + flt(total_received, 3))
+
+    except Exception:
+        for b in created_batches:
+            try:
+                frappe.delete_doc("Batch", b, ignore_permissions=True, force=1)
+            except Exception:
+                pass
+        raise
+
+    frappe.msgprint(_("Purchase Invoice {0} created (direct delivery)").format(pi.name))
+    return pi.name
 
 
 @frappe.whitelist()
