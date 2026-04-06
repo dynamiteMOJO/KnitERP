@@ -1387,9 +1387,16 @@ class ProductionWizard {
                                     </button>` : ''}
                                     
                                     ${showReceive ? `
-                                    <button class="btn btn-xs btn-default btn-receive-sco-goods mb-1 ml-1" 
+                                    <button class="btn btn-xs btn-default btn-receive-sco-goods mb-1 ml-1"
                                         data-sco="${sco.sco_name}" data-po="${sco.po_name}">
                                         <i class="fa fa-download text-success"></i> ${__('Receive Goods')}
+                                    </button>` : ''}
+
+                                    ${(showReceive && !sco.draft_pi && !sco.submitted_pi && sco.received_qty <= 0) ? `
+                                    <button class="btn btn-xs btn-default btn-direct-pi mb-1 ml-1"
+                                        data-po="${sco.po_name}" data-sco="${sco.sco_name}"
+                                        data-job-card="${op.job_card || ''}">
+                                        <i class="fa fa-file-text-o text-primary"></i> ${__('Create PI (Direct)')}
                                     </button>` : ''}
 
                                     ${(sco.received_qty >= sco.qty && flt(sco.billed_amt || 0) < flt(sco.po_amount || 0)) ? (
@@ -1431,7 +1438,20 @@ class ProductionWizard {
 					</button>`;
             }
 
-            if (op.job_card && op.received_qty > 0 && op.status !== 'Completed') {
+            // Direct delivery: show Create SI (Direct) if any SCO has a PI but no SCR goods received
+            const hasDirectPI = op.subcontracting_orders &&
+                op.subcontracting_orders.some(s => (s.draft_pi || s.submitted_pi) && s.received_qty <= 0);
+
+            if (hasDirectPI && op.job_card && op.status !== 'Completed') {
+                bottomButtons += `
+                    <button class="btn btn-sm btn-primary btn-direct-si"
+                            data-job-card="${op.job_card}"
+                            data-sales-order="${details.sales_order || ''}">
+                        <i class="fa fa-file-text"></i> ${__('Create SI (Direct)')}
+                    </button>`;
+            }
+
+            if (op.job_card && (op.received_qty > 0 || op.manufactured_qty > 0) && op.status !== 'Completed') {
                 bottomButtons += `
                     <button class="btn btn-sm btn-success btn-complete-jc"
                             data-job-card="${op.job_card}"

@@ -931,6 +931,7 @@ def get_production_details(sales_order_item):
                             # User will manually complete via "Complete Job Card" button when ready
                             # Track received qty for progress display
                             operation_data["completed_qty"] = total_received_qty
+                            operation_data["manufactured_qty"] = flt(jc.manufactured_qty, 3) if jc else 0
                             # status remains from jc.status (from DB) - no auto-completion
                     break
             
