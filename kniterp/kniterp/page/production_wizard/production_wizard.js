@@ -1733,6 +1733,80 @@ class ProductionWizard {
             self.receive_subcontracted_goods(po_name, sco_name, sco_ctx);
         });
 
+        // Create Purchase Invoice (Direct Delivery — no SCR)
+        this.$details_content.find('.btn-direct-pi').on('click', (e) => {
+            const btn = $(e.currentTarget);
+            const po = btn.data('po');
+            const jobCard = btn.data('job-card');
+
+            const d = new frappe.ui.Dialog({
+                title: __('Create PI \u2013 Direct Delivery'),
+                fields: [
+                    {
+                        fieldname: 'received_batches',
+                        fieldtype: 'Table',
+                        label: __('Received Batches'),
+                        fields: [
+                            { fieldname: 'batch_no', fieldtype: 'Data', label: __('Batch No'), in_list_view: 1, reqd: 1 },
+                            { fieldname: 'qty', fieldtype: 'Float', label: __('Qty'), in_list_view: 1, reqd: 1 },
+                        ]
+                    },
+                    { fieldname: 'rate', fieldtype: 'Currency', label: __('Rate (optional)') },
+                    { fieldname: 'supplier_delivery_note', fieldtype: 'Data', label: __('Supplier Delivery Note (optional)') },
+                ],
+                primary_action_label: __('Create PI'),
+                primary_action: (values) => {
+                    if (!values.received_batches || !values.received_batches.length) {
+                        frappe.msgprint(__('Add at least one batch'));
+                        return;
+                    }
+                    d.hide();
+                    frappe.call({
+                        method: 'kniterp.api.production_wizard.create_direct_purchase_invoice',
+                        freeze: true,
+                        freeze_message: __('Creating Purchase Invoice\u2026'),
+                        args: {
+                            purchase_order: po,
+                            received_batches: JSON.stringify(values.received_batches),
+                            rate: values.rate || null,
+                            supplier_delivery_note: values.supplier_delivery_note || null,
+                        },
+                        callback: (r) => {
+                            if (r.message) {
+                                frappe.set_route('Form', 'Purchase Invoice', r.message);
+                                this.refresh();
+                            }
+                        }
+                    });
+                }
+            });
+            d.show();
+        });
+
+        // Create Sales Invoice (Direct Delivery — no Delivery Note)
+        this.$details_content.find('.btn-direct-si').on('click', (e) => {
+            const btn = $(e.currentTarget);
+            const jobCard = btn.data('job-card');
+
+            frappe.confirm(
+                __('Create Sales Invoice with stock update (direct delivery)? No Delivery Note will be created.'),
+                () => {
+                    frappe.call({
+                        method: 'kniterp.api.production_wizard.create_direct_sales_invoice',
+                        freeze: true,
+                        freeze_message: __('Creating Sales Invoice\u2026'),
+                        args: { job_card: jobCard },
+                        callback: (r) => {
+                            if (r.message) {
+                                frappe.set_route('Form', 'Sales Invoice', r.message);
+                                this.refresh();
+                            }
+                        }
+                    });
+                }
+            );
+        });
+
         // Create Purchase Invoice for SCO PO
         this.$details_content.find('.btn-create-sco-pi').on('click', function () {
             const po_name = $(this).data('po');
