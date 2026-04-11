@@ -84,15 +84,20 @@ def setup_property_setters():
 
 def _ensure_prerequisites():
     # Ensure a root Item Group exists that can act as parent.
-    root_group = frappe.db.get_value(
-        "Item Group", {"is_group": 1, "parent_item_group": ""}, "name"
-    )
-    if not root_group:
-        ig = frappe.new_doc("Item Group")
-        ig.item_group_name = "All Item Groups"
-        ig.is_group = 1
-        ig.insert(ignore_permissions=True)
-        root_group = ig.name
+    # ERPNext stores root group's parent_item_group as NULL (not ""), so filter
+    # by name directly to avoid a false-negative that triggers a duplicate insert.
+    if frappe.db.exists("Item Group", "All Item Groups"):
+        root_group = "All Item Groups"
+    else:
+        root_group = frappe.db.get_value(
+            "Item Group", {"is_group": 1, "parent_item_group": ("is", "not set")}, "name"
+        )
+        if not root_group:
+            ig = frappe.new_doc("Item Group")
+            ig.item_group_name = "All Item Groups"
+            ig.is_group = 1
+            ig.insert(ignore_permissions=True)
+            root_group = ig.name
 
     if not frappe.db.exists("Item Group", "Services"):
         ig = frappe.new_doc("Item Group")
