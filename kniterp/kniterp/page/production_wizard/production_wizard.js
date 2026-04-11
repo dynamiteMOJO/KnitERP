@@ -793,6 +793,16 @@ class ProductionWizard {
 						</div>
 					</div>
 					` : ''}
+                    ${(details.scio_delivery_notes && details.scio_delivery_notes.length) ? details.scio_delivery_notes.map(dn => `
+					<div class="info-card">
+						<i class="fa fa-truck"></i>
+						<div>
+							<div class="label">${__('Delivery Note')}</div>
+							<a href="/app/delivery-note/${dn.name}">${dn.name}</a>
+							<span class="badge ${dn.docstatus === 0 ? 'badge-warning' : 'badge-success'} ml-1">${dn.docstatus === 0 ? __('Draft') : __('Submitted')}</span>
+						</div>
+					</div>
+					`).join('') : ''}
 					${details.work_order ? `
 					<div class="info-card">
 						<i class="fa fa-cogs"></i>
@@ -815,9 +825,7 @@ class ProductionWizard {
 					<h5><i class="fa fa-cube"></i> ${__('Raw Materials')}</h5>
 					<div>
 						${this.has_rm_orders(details.raw_materials) ? `<button class="btn btn-sm btn-default btn-view-rm-orders mr-1"><i class="fa fa-list"></i> ${__('View Orders')}</button>` : ''}
-						<button class="btn btn-sm ${this.has_shortages(details.raw_materials) ? 'btn-warning' : 'btn-default'} create-shortage-po">
-							<i class="fa fa-shopping-cart"></i> ${this.has_shortages(details.raw_materials) ? __('Create PO for Shortages') : __('Create PO')}
-						</button>
+						${!(details.is_subcontracted && !details.subcontracting_inward_order) ? `<button class="btn btn-sm ${this.has_shortages(details.raw_materials) ? 'btn-warning' : 'btn-default'} create-shortage-po"><i class="fa fa-shopping-cart"></i> ${this.has_shortages(details.raw_materials) ? __('Create PO for Shortages') : __('Create PO')}</button>` : ''}
 					</div>
 				</div>
 				<div class="materials-list">
@@ -1122,6 +1130,24 @@ class ProductionWizard {
             }
         }
 
+        // Direct delivery: show Create SI (Direct) when SCR received FG into Virtual Goods
+        // warehouse (received_qty > 0) and PI exists, but no DN created (delivered_qty == 0
+        // distinguishes direct flow from normal subcontracting flow)
+        const directPIop = details.operations && details.operations.find(op =>
+            op.subcontracting_orders &&
+            op.subcontracting_orders.some(s => s.submitted_pi && s.received_qty > 0)
+        );
+        const noDeliveryNote = flt(details.delivered_qty || 0) === 0;
+        if (directPIop && directPIop.job_card && noDeliveryNote && flt(details.billed_amt || 0) < flt(details.amount || 0)) {
+            buttons.push(`
+                <button class="btn btn-primary btn-direct-si"
+                        data-job-card="${directPIop.job_card}"
+                        data-sales-order="${details.sales_order || ''}">
+                    <i class="fa fa-file-text"></i> ${__('Create SI (Direct)')}
+                </button>
+            `);
+        }
+
         return buttons.join('');
     }
 
@@ -1387,9 +1413,23 @@ class ProductionWizard {
                                     </button>` : ''}
                                     
                                     ${showReceive ? `
-                                    <button class="btn btn-xs btn-default btn-receive-sco-goods mb-1 ml-1" 
+                                    <button class="btn btn-xs btn-default btn-receive-sco-goods mb-1 ml-1"
                                         data-sco="${sco.sco_name}" data-po="${sco.po_name}">
                                         <i class="fa fa-download text-success"></i> ${__('Receive Goods')}
+                                    </button>` : ''}
+
+                                    ${(showReceive && !sco.draft_pi && !sco.submitted_pi && sco.received_qty <= 0) ? `
+                                    <button class="btn btn-xs btn-default btn-direct-pi mb-1 ml-1"
+                                        data-po="${sco.po_name}" data-sco="${sco.sco_name}"
+                                        data-job-card="${op.job_card || ''}"
+                                        data-supplier="${frappe.utils.escape_html(sco.supplier || '')}"
+                                        data-fg-qty="${sco.qty || 0}"
+                                        data-sent-qty="${sco.sent_qty || 0}"
+                                        data-required-rm-qty="${sco.required_rm_qty || 0}"
+                                        data-rate="${sco.po_rate || 0}"
+                                        data-amount="${sco.po_amount || 0}"
+                                        data-uom="${frappe.utils.escape_html(details.uom || 'Units')}">
+                                        <i class="fa fa-file-text-o text-primary"></i> ${__('Create PI (Direct)')}
                                     </button>` : ''}
 
                                     ${(sco.received_qty >= sco.qty && flt(sco.billed_amt || 0) < flt(sco.po_amount || 0)) ? (
@@ -1431,7 +1471,8 @@ class ProductionWizard {
 					</button>`;
             }
 
-            if (op.job_card && op.received_qty > 0 && op.status !== 'Completed') {
+
+            if (op.job_card && (op.received_qty > 0 || op.manufactured_qty > 0) && op.status !== 'Completed') {
                 bottomButtons += `
                     <button class="btn btn-sm btn-success btn-complete-jc"
                             data-job-card="${op.job_card}"
@@ -1557,7 +1598,7 @@ class ProductionWizard {
                         <i class="fa fa-download"></i> ${__('Create PR')}
                     </button>`;
                 }
-            } else if (m.shortage > 0) {
+            } else if (m.shortage > 0 && !(details.is_subcontracted && !details.subcontracting_inward_order)) {
                 actions_html = `<button class="btn btn-xs btn-primary create-item-po-btn" data-item="${m.item_code}">
                     <i class="fa fa-shopping-cart"></i> ${__('Create PO')}
                 </button>`;
@@ -1713,6 +1754,121 @@ class ProductionWizard {
             self.receive_subcontracted_goods(po_name, sco_name, sco_ctx);
         });
 
+        // Create Purchase Invoice (Direct Delivery — SCR + PI)
+        // SCR consumes RM from JW Out and receives FG into Virtual Goods warehouse
+        // PI bills the job worker for service charge
+        this.$details_content.find('.btn-direct-pi').on('click', (e) => {
+            const btn = $(e.currentTarget);
+            const po = btn.data('po');
+            const supplier = btn.data('supplier') || '';
+            const fgQty = flt(btn.data('fg-qty') || 0, 3);
+            const sentQty = flt(btn.data('sent-qty') || 0, 3);
+            const requiredRmQty = flt(btn.data('required-rm-qty') || 0, 3);
+            // FG receivable = RM sent ÷ (RM required per FG unit from BOM)
+            const receivableFgQty = (requiredRmQty > 0 && fgQty > 0)
+                ? flt(sentQty * fgQty / requiredRmQty, 3)
+                : sentQty;
+            const poRate = flt(btn.data('rate') || 0, 2);
+            const poAmount = flt(btn.data('amount') || 0, 2);
+            const uom = btn.data('uom') || 'Units';
+
+            const d = new frappe.ui.Dialog({
+                title: __('Create PI \u2013 Direct Delivery'),
+                fields: [
+                    {
+                        fieldtype: 'HTML',
+                        fieldname: 'context_info',
+                        options: `<div class="mb-3 p-2 rounded" style="background: var(--control-bg); border: 1px solid var(--border-color);">
+                            <div class="small">
+                                <strong>${__('Purchase Order')}:</strong> <a href="/app/purchase-order/${po}">${po}</a><br>
+                                <strong>${__('Supplier')}:</strong> ${frappe.utils.escape_html(supplier)}<br>
+                                <strong>${__('Amount')}:</strong> ${frappe.format(poAmount, { fieldtype: 'Currency' })}&emsp;
+                                <strong>${__('FG Qty')}:</strong> ${fgQty} ${frappe.utils.escape_html(uom)}&emsp;
+                                <strong>${__('RM Sent')}:</strong> ${sentQty} ${frappe.utils.escape_html(uom)}
+                            </div>
+                        </div>`
+                    },
+                    {
+                        label: __('Qty'),
+                        fieldname: 'qty',
+                        fieldtype: 'Float',
+                        reqd: 1,
+                        default: receivableFgQty,
+                        description: __('FG quantity receivable based on RM sent (adjust if needed)')
+                    },
+                    {
+                        label: __('Rate (optional)'),
+                        fieldname: 'rate',
+                        fieldtype: 'Currency',
+                        default: poRate || null
+                    },
+                    {
+                        label: __('JW Delivery Note / Challan No'),
+                        fieldname: 'supplier_delivery_note',
+                        fieldtype: 'Data',
+                        description: __('Job worker delivery challan or invoice number (for ITC-04)')
+                    },
+                    {
+                        label: __('Bill No (Supplier Invoice)'),
+                        fieldname: 'bill_no',
+                        fieldtype: 'Data'
+                    },
+                    {
+                        label: __('Bill Date'),
+                        fieldname: 'bill_date',
+                        fieldtype: 'Date',
+                        default: frappe.datetime.nowdate()
+                    },
+                    {
+                        fieldtype: 'Column Break'
+                    },
+                    {
+                        label: __('Posting Date'),
+                        fieldname: 'posting_date',
+                        fieldtype: 'Date',
+                        default: frappe.datetime.nowdate()
+                    }
+                ],
+                primary_action_label: __('Submit'),
+                primary_action: (values) => {
+                    d.hide();
+                    this._call_create_direct_pi(po, values, 1);
+                },
+                secondary_action_label: __('Save as Draft'),
+                secondary_action: () => {
+                    const values = d.get_values();
+                    if (!values) return;
+                    d.hide();
+                    this._call_create_direct_pi(po, values, 0);
+                }
+            });
+            d.show();
+        });
+
+        // Create Sales Invoice (Direct Delivery — no Delivery Note)
+        this.$details_content.find('.btn-direct-si').on('click', (e) => {
+            const btn = $(e.currentTarget);
+            const jobCard = btn.data('job-card');
+
+            frappe.confirm(
+                __('Create Sales Invoice with stock update (direct delivery)? No Delivery Note will be created.'),
+                () => {
+                    frappe.call({
+                        method: 'kniterp.api.production_wizard.create_direct_sales_invoice',
+                        freeze: true,
+                        freeze_message: __('Creating Sales Invoice\u2026'),
+                        args: { job_card: jobCard },
+                        callback: (r) => {
+                            if (r.message) {
+                                frappe.set_route('Form', 'Sales Invoice', r.message);
+                                this.refresh();
+                            }
+                        }
+                    });
+                }
+            );
+        });
+
         // Create Purchase Invoice for SCO PO
         this.$details_content.find('.btn-create-sco-pi').on('click', function () {
             const po_name = $(this).data('po');
@@ -1777,23 +1933,54 @@ class ProductionWizard {
 
         // Create SIO
         this.$details_content.find('.btn-create-sio').on('click', () => {
-            frappe.confirm(__('Create Subcontracting Inward Order for {0}?', [details.production_item || details.item_code]), () => {
-                frappe.call({
-                    method: 'kniterp.api.production_wizard.create_subcontracting_inward_order',
-                    args: {
-                        sales_order: details.sales_order,
-                        sales_order_item: details.sales_order_item
-                    },
-                    freeze: true,
-                    callback: (r) => {
-                        if (r.message) {
-                            frappe.show_alert({ message: __('Subcontracting Inward Order Created'), indicator: 'green' });
-                            // Reload details
-                            this.load_production_details(this.selected_item);
-                        }
+            const d = new frappe.ui.Dialog({
+                title: __('Create Subcontracting Inward Order'),
+                fields: [
+                    {
+                        fieldtype: 'HTML',
+                        options: `<p class="text-muted mb-0">${__('Create Subcontracting Inward Order for <strong>{0}</strong>?', [details.production_item || details.item_code])}</p>`
                     }
-                });
+                ],
+                primary_action_label: __('Submit'),
+                primary_action: () => {
+                    d.hide();
+                    frappe.call({
+                        method: 'kniterp.api.production_wizard.create_subcontracting_inward_order',
+                        args: {
+                            sales_order: details.sales_order,
+                            sales_order_item: details.sales_order_item,
+                            submit: 1
+                        },
+                        freeze: true,
+                        callback: (r) => {
+                            if (r.message) {
+                                frappe.show_alert({ message: __('Subcontracting Inward Order Submitted'), indicator: 'green' });
+                                frappe.set_route('Form', 'Subcontracting Inward Order', r.message);
+                            }
+                        }
+                    });
+                },
+                secondary_action_label: __('Save as Draft'),
+                secondary_action: () => {
+                    d.hide();
+                    frappe.call({
+                        method: 'kniterp.api.production_wizard.create_subcontracting_inward_order',
+                        args: {
+                            sales_order: details.sales_order,
+                            sales_order_item: details.sales_order_item,
+                            submit: 0
+                        },
+                        freeze: true,
+                        callback: (r) => {
+                            if (r.message) {
+                                frappe.show_alert({ message: __('Subcontracting Inward Order Created as Draft'), indicator: 'blue' });
+                                frappe.set_route('Form', 'Subcontracting Inward Order', r.message);
+                            }
+                        }
+                    });
+                }
             });
+            d.show();
         });
 
         // Create PO for Shortages
@@ -1821,7 +2008,8 @@ class ProductionWizard {
         // Receive Customer RM
         this.$details_content.find('.btn-receive-customer-rm').on('click', function () {
             const sio_name = $(this).data('sio');
-            self.receive_customer_rm(sio_name);
+            const rm_item_code = $(this).data('item');
+            self.prompt_receive_customer_rm(sio_name, rm_item_code);
         });
 
         // Send Delivery
@@ -1878,23 +2066,426 @@ class ProductionWizard {
         });
     }
 
-    send_subcontracting_delivery(sio_name) {
-        frappe.call({
-            method: "run_doc_method",
-            args: {
-                dt: "Subcontracting Inward Order",
-                dn: sio_name,
-                method: "make_subcontracting_delivery"
+    prompt_receive_customer_rm(sio_name, rm_item_code) {
+        const self = this;
+        const d = new frappe.ui.Dialog({
+            title: __('Receive Customer RM'),
+            fields: [{
+                fieldtype: 'HTML',
+                options: `<p>${__('How would you like to receive RM for this order?')}</p>
+                    <ul>
+                        <li><b>${__('This item only')}:</b> ${frappe.utils.escape_html(rm_item_code)}</li>
+                        <li><b>${__('All pending RM')}:</b> ${__('All unreceived RM items for this order')}</li>
+                    </ul>`
+            }],
+            primary_action_label: __('This Item Only'),
+            primary_action() {
+                d.hide();
+                self.show_receive_customer_rm_dialog(sio_name, rm_item_code);
             },
-            freeze: true,
-            callback: function (r) {
-                if (r.message) {
-                    var doc = frappe.model.sync(r.message);
-                    frappe.set_route("Form", doc[0].doctype, doc[0].name);
+            secondary_action_label: __('All Pending RM'),
+            secondary_action() {
+                d.hide();
+                self.show_receive_customer_rm_dialog(sio_name, null);
+            }
+        });
+        d.show();
+    }
+
+    show_receive_customer_rm_dialog(sio_name, rm_item_code) {
+        const self = this;
+        frappe.call({
+            method: 'kniterp.api.production_wizard.get_receive_customer_rm_items',
+            args: { sio_name, rm_item_code: rm_item_code || null },
+            callback: (r) => {
+                if (r.message && r.message.length) {
+                    self._open_receive_rm_dialog(sio_name, r.message);
                 }
             }
         });
     }
+
+    _open_receive_rm_dialog(sio_name, items) {
+        const self = this;
+        const has_batch = items.some(i => i.has_batch_no);
+        const has_serial = items.some(i => i.has_serial_no);
+
+        let th = `<th>${__('Item')}</th><th style="width:100px">${__('Qty')}</th><th>${__('Warehouse')}</th>`;
+        if (has_batch) th += `<th>${__('Batch No')}</th>`;
+        if (has_serial) th += `<th>${__('Serial No')}</th>`;
+
+        const rows_html = items.map((item, idx) => {
+            let td = `
+                <td>
+                    <div class="font-weight-bold">${frappe.utils.escape_html(item.item_name || item.item_code)}</div>
+                    <div class="small text-muted">${frappe.utils.escape_html(item.item_code)}</div>
+                </td>
+                <td><input type="number" class="form-control form-control-sm rm-qty" data-idx="${idx}"
+                    min="0" step="any" value="${flt(item.qty, 3)}"></td>
+                <td><small>${frappe.utils.escape_html(item.t_warehouse || '')}</small></td>`;
+            if (has_batch) {
+                const req = item.has_batch_no;
+                td += `<td><input type="text" class="form-control form-control-sm rm-batch" data-idx="${idx}"
+                    placeholder="${req ? __('Required') : '—'}" ${req ? '' : 'disabled'}></td>`;
+            }
+            if (has_serial) {
+                const req = item.has_serial_no;
+                td += `<td><input type="text" class="form-control form-control-sm rm-serial" data-idx="${idx}"
+                    placeholder="${req ? __('Required') : '—'}" ${req ? '' : 'disabled'}></td>`;
+            }
+            return `<tr data-idx="${idx}">${td}</tr>`;
+        }).join('');
+
+        const table_html = `
+            <div class="table-responsive mt-2">
+                <table class="table table-bordered table-condensed mb-0">
+                    <thead class="thead-light"><tr>${th}</tr></thead>
+                    <tbody>${rows_html}</tbody>
+                </table>
+            </div>`;
+
+        const d = new frappe.ui.Dialog({
+            title: __('Receive Customer RM — {0}', [sio_name]),
+            fields: [
+                {
+                    fieldname: 'posting_date', fieldtype: 'Date',
+                    label: __('Posting Date'), reqd: 1,
+                    default: frappe.datetime.get_today()
+                },
+                { fieldname: 'sb_items', fieldtype: 'Section Break', label: __('Items to Receive') },
+                { fieldname: 'items_html', fieldtype: 'HTML', options: table_html }
+            ],
+            primary_action_label: __('Create & Submit'),
+            primary_action(values) {
+                self._submit_receive_rm(d, sio_name, items, values, true);
+            },
+            secondary_action_label: __('Save as Draft'),
+            secondary_action() {
+                const values = d.get_values();
+                if (values) self._submit_receive_rm(d, sio_name, items, values, false);
+            }
+        });
+        d.show();
+    }
+
+    _submit_receive_rm(d, sio_name, items_meta, values, submit) {
+        const items_data = items_meta.map((item, idx) => {
+            const row = d.$wrapper.find(`tr[data-idx="${idx}"]`);
+            return {
+                scio_detail: item.scio_detail,
+                item_code: item.item_code,
+                qty: flt(row.find('.rm-qty').val()),
+                batch_no: row.find('.rm-batch').val() || '',
+                serial_no: row.find('.rm-serial').val() || ''
+            };
+        });
+
+        for (const item of items_data) {
+            if (!item.qty || item.qty <= 0) {
+                frappe.msgprint(__('Please enter a valid quantity for all items'));
+                return;
+            }
+            const meta = items_meta.find(m => m.scio_detail === item.scio_detail);
+            if (meta && meta.has_batch_no && !item.batch_no) {
+                frappe.msgprint(__('Batch No is required for {0}', [meta.item_name || meta.item_code]));
+                return;
+            }
+            if (meta && meta.has_serial_no && !item.serial_no) {
+                frappe.msgprint(__('Serial No is required for {0}', [meta.item_name || meta.item_code]));
+                return;
+            }
+        }
+
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_receive_customer_rm_se',
+            args: {
+                sio_name,
+                items_data: JSON.stringify(items_data),
+                posting_date: values.posting_date,
+                submit: submit ? 1 : 0
+            },
+            freeze: true,
+            freeze_message: submit ? __('Creating and submitting Stock Entry...') : __('Saving Stock Entry as draft...'),
+            callback: (r) => {
+                if (r.message) {
+                    d.hide();
+                    frappe.show_alert({
+                        message: submit ? __('Stock Entry created and submitted') : __('Stock Entry saved as draft'),
+                        indicator: submit ? 'green' : 'blue'
+                    });
+                    frappe.set_route('Form', 'Stock Entry', r.message);
+                }
+            }
+        });
+    }
+
+    send_subcontracting_delivery(sio_name) {
+        const self = this;
+        frappe.call({
+            method: "kniterp.api.production_wizard.get_scio_delivery_preview",
+            args: { scio_name: sio_name },
+            freeze: true,
+            freeze_message: __("Loading delivery details…"),
+            callback: (r) => {
+                if (!r.message) return;
+                const preview = r.message;
+                if (preview.has_batch_items) {
+                    self._show_scio_delivery_dialog(preview);
+                } else {
+                    // Non-batch items — create directly (old behaviour)
+                    frappe.call({
+                        method: "kniterp.api.production_wizard.create_scio_delivery_note",
+                        args: { scio_name: sio_name },
+                        freeze: true,
+                        freeze_message: __("Creating Delivery Note…"),
+                        callback: (r2) => {
+                            if (r2.message) {
+                                frappe.set_route("Form", "Delivery Note", r2.message);
+                            }
+                        }
+                    });
+                }
+            }
+        });
+    }
+
+    _show_scio_delivery_dialog(preview) {
+        const self = this;
+
+        // ── Build per-item HTML with batch tables + package fields ──
+        let items_html = '';
+        preview.items.forEach((item, idx) => {
+            const badge_color = item.has_batch_no ? 'orange' : 'blue';
+            const badge_text = item.has_batch_no ? __('Batch Tracked') : __('No Batch');
+            items_html += `
+                <div class="scio-del-item mb-3" data-idx="${idx}" data-scio-detail="${item.scio_detail}"
+                     style="border:1px solid var(--border-color); border-radius:6px; padding:12px;">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <div>
+                            <strong>${frappe.utils.escape_html(item.item_code)}</strong>
+                            <div class="text-muted small">${frappe.utils.escape_html(item.item_name)}</div>
+                        </div>
+                        <span class="badge" style="background:var(--${badge_color}-100); color:var(--${badge_color}-600); font-size:10px;">${badge_text}</span>
+                    </div>
+                    <div class="d-flex flex-wrap mb-2" style="gap:12px; font-size:12px; color:var(--text-muted);">
+                        <span><strong>${__('Produced')}:</strong> ${flt(item.produced_qty, 3)} ${item.uom}</span>
+                        <span><strong>${__('Delivered')}:</strong> ${flt(item.delivered_qty, 3)} ${item.uom}</span>
+                        <span style="color:var(--green-600); font-weight:600;">
+                            <strong>${__('To Deliver')}:</strong> ${flt(item.qty, 3)} ${item.uom}
+                        </span>
+                    </div>`;
+
+            if (item.has_batch_no && item.batches && item.batches.length) {
+                items_html += `
+                    <table class="table table-bordered table-sm mb-2">
+                        <thead class="thead-light">
+                            <tr>
+                                <th>${__('Batch')}</th>
+                                <th style="width:100px">${__('Available')}</th>
+                                <th style="width:120px">${__('Deliver Qty')}</th>
+                            </tr>
+                        </thead>
+                        <tbody>`;
+                let remaining_to_fill = flt(item.qty, 3);
+                let initial_total = 0;
+                item.batches.forEach((b, bidx) => {
+                    let prefill_qty = 0;
+                    if (remaining_to_fill > 0) {
+                        prefill_qty = Math.min(remaining_to_fill, flt(b.qty, 3));
+                        remaining_to_fill -= prefill_qty;
+                        initial_total += prefill_qty;
+                    }
+                    items_html += `
+                            <tr data-batch="${frappe.utils.escape_html(b.batch_no)}">
+                                <td><strong>${frappe.utils.escape_html(b.batch_no)}</strong></td>
+                                <td class="text-muted">${flt(b.qty, 3)} ${item.uom}</td>
+                                <td><input type="number" class="form-control form-control-sm scio-batch-qty"
+                                    data-idx="${idx}" data-bidx="${bidx}"
+                                    min="0" max="${flt(b.qty, 3)}" step="any" value="${prefill_qty}"></td>
+                            </tr>`;
+                });
+                items_html += `
+                        </tbody>
+                    </table>
+                    <div class="scio-batch-total text-right text-muted small" data-idx="${idx}">
+                        ${__('Selected')}: <strong class="scio-batch-total-qty">${flt(initial_total, 3)}</strong> / ${flt(item.qty, 3)} ${item.uom}
+                    </div>`;
+            } else if (item.has_batch_no) {
+                items_html += `<div class="text-muted small">${__('No batches available in warehouse.')}</div>`;
+            }
+
+            // Package fields
+            items_html += `
+                    <hr class="my-2">
+                    <div class="d-flex align-items-center flex-wrap" style="gap:10px;">
+                        <div>
+                            <label class="small mb-0">${__('No. of Pkgs')}</label>
+                            <input type="number" class="form-control form-control-sm scio-pkgs-no" data-idx="${idx}"
+                                min="0" step="1" style="width:80px;">
+                        </div>
+                        <div>
+                            <label class="small mb-0">${__('Kind')}</label>
+                            <select class="form-control form-control-sm scio-pkgs-kind" data-idx="${idx}" style="width:110px;">
+                                <option value=""></option>
+                                <option value="Rolls">${__('Rolls')}</option>
+                                <option value="Bags">${__('Bags')}</option>
+                                <option value="Boxes">${__('Boxes')}</option>
+                                <option value="Other">${__('Other')}</option>
+                            </select>
+                        </div>
+                        <div class="scio-pkgs-other-wrap" data-idx="${idx}" style="display:none;">
+                            <label class="small mb-0">${__('Other Kind')}</label>
+                            <input type="text" class="form-control form-control-sm scio-pkgs-other" data-idx="${idx}" style="width:120px;">
+                        </div>
+                    </div>`;
+
+            items_html += `</div>`;
+        });
+
+        // ── Context info banner ──
+        const context_html = `
+            <div class="mb-3" style="background:var(--control-bg); border:1px solid var(--border-color); border-radius:6px; padding:10px 14px;">
+                <div style="font-size:14px; font-weight:600; margin-bottom:4px;">${frappe.utils.escape_html(preview.customer_name)}</div>
+                <div class="text-muted small">
+                    <strong>${__('SCIO')}:</strong> <a href="/app/subcontracting-inward-order/${preview.scio_name}">${preview.scio_name}</a>&emsp;
+                    <strong>${__('SO')}:</strong> <a href="/app/sales-order/${preview.sales_order}">${preview.sales_order}</a>
+                </div>
+                ${preview.shipping_address_name
+                    ? `<div class="text-muted small mt-1"><strong>${__('Ship To')}:</strong> ${frappe.utils.escape_html(preview.shipping_address_name)}</div>`
+                    : ''}
+            </div>`;
+
+        const d = new frappe.ui.Dialog({
+            title: __('SCIO Delivery — {0}', [preview.scio_name]),
+            size: 'large',
+            fields: [
+                { fieldtype: 'HTML', fieldname: 'context_html', options: context_html },
+                { fieldtype: 'Section Break', label: __('Items & Batches') },
+                { fieldtype: 'HTML', fieldname: 'items_html', options: items_html },
+                {
+                    fieldtype: 'Section Break',
+                    label: __('Transport Details'),
+                    collapsible: 1
+                },
+                {
+                    fieldname: 'transporter', fieldtype: 'Link', options: 'Supplier',
+                    label: __('Transporter'),
+                    get_query: () => ({ filters: { disabled: 0, is_transporter: 1 } }),
+                    change: function () {
+                        const val = d.get_value('transporter');
+                        if (val) {
+                            frappe.db.get_value('Supplier', val,
+                                ['supplier_name', 'gst_transporter_id'], (r) => {
+                                    if (r) {
+                                        d.set_value('transporter_name', r.supplier_name || '');
+                                        d.set_value('gst_transporter_id', r.gst_transporter_id || '');
+                                    }
+                                });
+                        }
+                    }
+                },
+                { fieldname: 'vehicle_no', fieldtype: 'Data', label: __('Vehicle No'), length: 15 },
+                { fieldname: 'lr_no', fieldtype: 'Data', label: __('Transport Receipt No'), length: 30 },
+                { fieldtype: 'Column Break' },
+                { fieldname: 'transporter_name', fieldtype: 'Data', label: __('Transporter Name'), read_only: 1 },
+                { fieldname: 'gst_transporter_id', fieldtype: 'Data', label: __('GST Transporter ID'), read_only: 1, hidden: 1 },
+                { fieldname: 'lr_date', fieldtype: 'Date', label: __('Transport Receipt Date'), default: frappe.datetime.nowdate() },
+                { fieldname: 'distance', fieldtype: 'Int', label: __('Distance (km)') },
+            ],
+            primary_action_label: __('Create Delivery Note'),
+            primary_action: () => {
+                // Collect batch selections and package details
+                const delivery_items = [];
+                let has_error = false;
+
+                preview.items.forEach((item, idx) => {
+                    const entry = {
+                        scio_detail: item.scio_detail,
+                        item_code: item.item_code,
+                        batches: [],
+                        no_of_pkgs: cint(d.$wrapper.find(`.scio-pkgs-no[data-idx="${idx}"]`).val()),
+                        kind_of_pkgs: d.$wrapper.find(`.scio-pkgs-kind[data-idx="${idx}"]`).val() || '',
+                        kind_of_pkgs_other: d.$wrapper.find(`.scio-pkgs-other[data-idx="${idx}"]`).val() || '',
+                    };
+
+                    if (item.has_batch_no && item.batches && item.batches.length) {
+                        let total = 0;
+                        item.batches.forEach((b, bidx) => {
+                            const qty = flt(d.$wrapper.find(`.scio-batch-qty[data-idx="${idx}"][data-bidx="${bidx}"]`).val());
+                            if (qty > 0) {
+                                if (qty > flt(b.qty, 3) + 0.001) {
+                                    frappe.msgprint(__('Batch {0}: qty {1} exceeds available {2}', [b.batch_no, qty, flt(b.qty, 3)]));
+                                    has_error = true;
+                                }
+                                entry.batches.push({ batch_no: b.batch_no, qty: qty });
+                                total += qty;
+                            }
+                        });
+                        if (total <= 0 && !has_error) {
+                            frappe.msgprint(__('Please select at least one batch for {0}', [item.item_code]));
+                            has_error = true;
+                        }
+                        if (total > flt(item.qty, 3) + 0.001 && !has_error) {
+                            frappe.msgprint(__('Item {0}: total batch qty {1} exceeds deliverable {2}', [item.item_code, total, item.qty]));
+                            has_error = true;
+                        }
+                    }
+
+                    delivery_items.push(entry);
+                });
+
+                if (has_error) return;
+
+                // Collect transport args
+                const transport_args = {};
+                for (const f of ['transporter', 'transporter_name', 'gst_transporter_id',
+                    'vehicle_no', 'lr_no', 'lr_date', 'distance']) {
+                    const val = d.get_value(f);
+                    if (val) transport_args[f] = val;
+                }
+
+                d.hide();
+
+                frappe.call({
+                    method: "kniterp.api.production_wizard.create_scio_delivery_note",
+                    args: {
+                        scio_name: preview.scio_name,
+                        delivery_items: JSON.stringify(delivery_items),
+                        transport_args: Object.keys(transport_args).length
+                            ? JSON.stringify(transport_args) : null,
+                    },
+                    freeze: true,
+                    freeze_message: __("Creating Delivery Note…"),
+                    callback: (r) => {
+                        if (r.message) {
+                            frappe.set_route("Form", "Delivery Note", r.message);
+                            self.refresh();
+                        }
+                    }
+                });
+            }
+        });
+
+        d.show();
+
+        // Live total update for batch qty inputs
+        d.$wrapper.on('input', '.scio-batch-qty', function () {
+            const idx = $(this).data('idx');
+            let total = 0;
+            d.$wrapper.find(`.scio-batch-qty[data-idx="${idx}"]`).each(function () {
+                total += flt($(this).val());
+            });
+            d.$wrapper.find(`.scio-batch-total[data-idx="${idx}"] .scio-batch-total-qty`).text(flt(total, 3));
+        });
+
+        // Show/hide "Other Kind" input
+        d.$wrapper.on('change', '.scio-pkgs-kind', function () {
+            const idx = $(this).data('idx');
+            d.$wrapper.find(`.scio-pkgs-other-wrap[data-idx="${idx}"]`)
+                .toggle($(this).val() === 'Other');
+        });
+    }
+
 
     show_rm_orders_dialog(details) {
         const self = this;
@@ -4754,6 +5345,36 @@ class ProductionWizard {
         });
     }
 
+
+    _call_create_direct_pi(po_name, values, submit) {
+        frappe.call({
+            method: 'kniterp.api.production_wizard.create_direct_purchase_invoice',
+            args: {
+                purchase_order: po_name,
+                qty: values.qty,
+                rate: values.rate || null,
+                bill_no: values.bill_no || '',
+                bill_date: values.bill_date || '',
+                posting_date: values.posting_date || '',
+                supplier_delivery_note: values.supplier_delivery_note || '',
+                submit: submit
+            },
+            freeze: true,
+            freeze_message: submit ? __('Creating and Submitting SCR + Purchase Invoice...') : __('Creating SCR + Purchase Invoice as draft...'),
+            callback: (r) => {
+                if (r.message) {
+                    frappe.show_alert({
+                        message: submit
+                            ? __('Purchase Invoice {0} created and submitted', [r.message])
+                            : __('Purchase Invoice {0} created as draft', [r.message]),
+                        indicator: 'green'
+                    });
+                    frappe.set_route('Form', 'Purchase Invoice', r.message);
+                    this.refresh();
+                }
+            }
+        });
+    }
 
     create_scio_sales_invoice(details) {
         frappe.call({

@@ -197,3 +197,135 @@ def update_job_card_transferred_qty(job_card_name):
         "sent_qty": total_header_sent,
         "for_quantity": jc.for_quantity
     })
+
+
+def on_dn_submit_update_scio_delivered(doc, method):
+    _update_scio_delivered_qty(doc, is_cancel=False)
+
+
+def on_dn_cancel_update_scio_delivered(doc, method):
+    _update_scio_delivered_qty(doc, is_cancel=True)
+    on_dn_cancel_clear_scio_sre(doc, method)
+
+
+def _update_scio_delivered_qty(doc, is_cancel=False):
+    scio_name = doc.get("custom_subcontracting_inward_order")
+    if not scio_name:
+        return
+
+    for item in doc.items:
+        scio_detail = item.get("custom_scio_detail")
+        if not scio_detail:
+            continue
+
+        current_qty = flt(frappe.db.get_value(
+            "Subcontracting Inward Order Item", scio_detail, "delivered_qty"
+        ))
+        delta = flt(item.stock_qty or item.qty)
+        new_qty = current_qty - delta if is_cancel else current_qty + delta
+
+        frappe.db.set_value(
+            "Subcontracting Inward Order Item",
+            scio_detail,
+            "delivered_qty",
+            max(new_qty, 0),
+        )
+
+    scio = frappe.get_doc("Subcontracting Inward Order", scio_name)
+    scio.update_status()
+
+
+def on_dn_before_submit_clear_scio_sre(doc, method):
+    """
+    Consume SCIO SREs before Delivery Note is submitted by incrementing delivered_qty.
+    Mirrors how stock_controller.py handles Subcontracting Delivery Stock Entries.
+    """
+    _update_scio_sres(doc, is_cancel=False)
+
+def on_dn_cancel_clear_scio_sre(doc, method):
+    """
+    Revert the consumed SCIO SREs when the Delivery Note is cancelled.
+    """
+    _update_scio_sres(doc, is_cancel=True)
+
+def _update_scio_sres(doc, is_cancel=False):
+    scio_name = doc.get("custom_subcontracting_inward_order")
+    if not scio_name:
+        return
+
+    for item in doc.items:
+        if not item.get("custom_scio_detail"):
+            continue
+
+        qty = flt(item.stock_qty or item.qty)
+        if qty <= 0:
+            continue
+
+        blocking_sres = frappe.get_all(
+            "Stock Reservation Entry",
+            filters={
+                "voucher_type": "Subcontracting Inward Order",
+                "voucher_no": scio_name,
+                "item_code": item.item_code,
+                "warehouse": item.warehouse,
+                "docstatus": 1,
+            },
+            order_by="creation desc"
+        )
+
+        for sre in blocking_sres:
+            if qty <= 0:
+                break
+
+            sre_doc = frappe.get_doc("Stock Reservation Entry", sre.name)
+            working_qty = 0
+
+            if sre_doc.reservation_based_on == "Serial and Batch":
+                sbb = frappe.get_doc("Serial and Batch Bundle", item.serial_and_batch_bundle)
+                if sre_doc.has_serial_no:
+                    serial_nos = [d.serial_no for d in sbb.entries if d.qty < 0] # outward
+                    for entry in sre_doc.sb_entries:
+                        if entry.serial_no in serial_nos:
+                            if is_cancel:
+                                entry.delivered_qty = 0
+                            else:
+                                entry.delivered_qty = 1
+                            entry.db_update()
+                            working_qty += 1
+                            serial_nos.remove(entry.serial_no)
+                else:
+                    batch_qty = {d.batch_no: -1 * d.qty for d in sbb.entries if d.qty < 0}
+                    for entry in sre_doc.sb_entries:
+                        if entry.batch_no in batch_qty:
+                            if is_cancel:
+                                delivered_qty = min(entry.delivered_qty, batch_qty[entry.batch_no])
+                                entry.delivered_qty -= delivered_qty
+                                working_qty += delivered_qty
+                            else:
+                                delivered_qty = min(
+                                    (entry.qty - entry.delivered_qty),
+                                    batch_qty[entry.batch_no],
+                                )
+                                entry.delivered_qty += delivered_qty
+                                working_qty += delivered_qty
+                            
+                            entry.db_update()
+                            batch_qty[entry.batch_no] -= delivered_qty
+
+            else:
+                if is_cancel:
+                    working_qty = min(sre_doc.delivered_qty, qty)
+                else:
+                    working_qty = min(sre_doc.reserved_qty - sre_doc.delivered_qty, qty)
+
+            if working_qty > 0:
+                if is_cancel:
+                    sre_doc.db_set("delivered_qty", sre_doc.delivered_qty - working_qty)
+                else:
+                    sre_doc.db_set("delivered_qty", sre_doc.delivered_qty + working_qty)
+                
+                sre_doc.update_reserved_qty_in_voucher()
+                sre_doc.update_status()
+                sre_doc.update_reserved_stock_in_bin()
+
+            qty -= working_qty

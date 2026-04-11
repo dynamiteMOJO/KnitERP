@@ -11,6 +11,7 @@
   "jw_outward_warehouse",
   "jw_inward_parent_warehouse",
   "jw_completed_warehouse",
+  "virtual_goods_warehouse",
   "manufacturing_settings_section",
   "machine_extra_rate",
   "column_break_mfg1",
@@ -67,6 +68,13 @@
    "label": "Customer JW Completed Warehouse",
    "options": "Warehouse",
    "description": "Warehouse for completed customer job work goods awaiting delivery"
+  },
+  {
+   "fieldname": "virtual_goods_warehouse",
+   "fieldtype": "Link",
+   "label": "Virtual Goods Warehouse (Direct Delivery)",
+   "options": "Warehouse",
+   "description": "Warehouse for goods that pass through our books virtually — job worker ships directly to customer"
   },
   {
    "fieldname": "manufacturing_settings_section",

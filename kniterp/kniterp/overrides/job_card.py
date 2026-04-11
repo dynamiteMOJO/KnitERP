@@ -432,6 +432,12 @@ class CustomJobCard(JobCard):
         wo_doc = frappe.get_doc("Work Order", self.work_order)
         add_additional_cost(ste.stock_entry, wo_doc, self)
 
+        # Propagate SCIO link so ERPNext's on_submit_subcontracting_inward()
+        # fires update_inward_order_received_items_for_manufacture() and
+        # writes consumed_qty back to SCIO received_items.
+        if wo_doc.subcontracting_inward_order:
+            ste.stock_entry.subcontracting_inward_order = wo_doc.subcontracting_inward_order
+
         ste.stock_entry.set_scrap_items()
         for row in ste.stock_entry.items:
             if row.is_scrap_item and not row.t_warehouse:

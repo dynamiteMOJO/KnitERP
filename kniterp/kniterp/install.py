@@ -5,6 +5,7 @@ def after_migrate():
     setup_property_setters()
     setup_service_items()
     setup_salary_components()
+    setup_virtual_goods_warehouse()
     hide_unwanted_workspaces()
 
 
@@ -148,6 +149,33 @@ def setup_salary_components():
     frappe.db.commit()
 
 
+def setup_virtual_goods_warehouse():
+    """Create Virtual Goods warehouse for direct delivery flows if not already configured."""
+    settings = frappe.get_single("KnitERP Settings")
+    if settings.virtual_goods_warehouse:
+        return
+
+    company = frappe.db.get_single_value("Global Defaults", "default_company")
+    if not company:
+        return
+
+    abbr = frappe.db.get_value("Company", company, "abbr")
+    wh_name = f"Virtual Goods - {abbr}"
+
+    if not frappe.db.exists("Warehouse", wh_name):
+        parent_wh = frappe.db.get_value("Warehouse", {"company": company, "is_group": 1, "parent_warehouse": ""}, "name")
+        wh = frappe.new_doc("Warehouse")
+        wh.warehouse_name = "Virtual Goods"
+        wh.company = company
+        wh.parent_warehouse = parent_wh
+        wh.insert(ignore_permissions=True)
+        wh_name = wh.name
+
+    settings.virtual_goods_warehouse = wh_name
+    settings.save(ignore_permissions=True)
+    frappe.db.commit()
+
+
 def hide_unwanted_workspaces():
     modules_to_hide = [
         "Subscription", "Share Management", "Budget", "Home", "CRM", "Selling", 
@@ -170,7 +198,7 @@ def hide_unwanted_workspaces():
             has_admin_role = any(row.role == "Administrator" for row in workspace_doc.roles)
             if not has_admin_role:
                 workspace_doc.append("roles", {"role": "Administrator"})
-                workspace_doc.save(ignore_permissions=True)
+                workspace_doc.save(ignore_permissions=True, ignore_links=True)
 
     # 2. Update Workspace Sidebars — doctype may not exist in all versions
     try:
@@ -193,7 +221,7 @@ def hide_unwanted_workspaces():
                 has_admin_role = any(row.role == "Administrator" for row in icon_doc.roles)
                 if not has_admin_role:
                     icon_doc.append("roles", {"role": "Administrator"})
-                    icon_doc.save(ignore_permissions=True)
+                    icon_doc.save(ignore_permissions=True, ignore_links=True)
     except Exception:
         pass
 

@@ -1,7 +1,6 @@
 
 import frappe
 from frappe.utils import flt
-from frappe.model.mapper import get_mapped_doc
 from erpnext.subcontracting.doctype.subcontracting_inward_order.subcontracting_inward_order import SubcontractingInwardOrder
 
 class CustomSubcontractingInwardOrder(SubcontractingInwardOrder):
@@ -120,81 +119,16 @@ class CustomSubcontractingInwardOrder(SubcontractingInwardOrder):
 
     @frappe.whitelist()
     def make_subcontracting_delivery(self, target_doc=None):
-        if target_doc and target_doc.get("items"):
-            target_doc.items = []
+        """Create a Delivery Note to dispatch FG back to the customer.
 
-        stock_entry = get_mapped_doc(
-            "Subcontracting Inward Order",
-            self.name,
-            {
-                "Subcontracting Inward Order": {
-                    "doctype": "Stock Entry",
-                    "validation": {
-                        "docstatus": ["=", 1],
-                    },
-                },
-            },
-            target_doc,
-            ignore_child_tables=True,
-        )
+        Uses the Production Wizard API so the logic stays in one place.
+        Returns the DN name (or as_dict for form sync when called via run_doc_method).
+        """
+        from kniterp.api.production_wizard import create_scio_delivery_note
 
-        stock_entry.purpose = "Subcontracting Delivery"
-        stock_entry.set_stock_entry_type()
-        stock_entry.subcontracting_inward_order = self.name
-        scio_details = []
+        dn_name = create_scio_delivery_note(self.name)
+        dn = frappe.get_doc("Delivery Note", dn_name)
 
-        allow_over = frappe.get_single_value("Selling Settings", "allow_delivery_of_overproduced_qty")
-        for fg_item in self.items:
-            # FIX: Always subtract delivered_qty!
-            produced_limit = flt(fg_item.produced_qty)
-            if not allow_over:
-                produced_limit = flt(min(flt(fg_item.qty, 3), flt(fg_item.produced_qty, 3)), 3)
-            
-            qty = flt(produced_limit - flt(fg_item.delivered_qty, 3), 3)
-
-            # Only add if there is pending quantity or if negative (return?)
-            # Usually only positive qty is delivered here. 
-            if qty <= 0:
-                continue
-
-            scio_details.append(fg_item.name)
-            items_dict = {
-                fg_item.item_code: {
-                    "qty": qty,
-                    "from_warehouse": fg_item.delivery_warehouse,
-                    "stock_uom": fg_item.stock_uom,
-                    "scio_detail": fg_item.name,
-                    "is_finished_item": 1,
-                }
-            }
-
-            stock_entry.add_to_stock_entry_detail(items_dict)
-
-        # Copied logic for scrap items
-        if (
-            frappe.get_single_value("Selling Settings", "deliver_scrap_items")
-            and self.scrap_items
-            and scio_details
-        ):
-            scrap_items = [
-                scrap_item for scrap_item in self.scrap_items if scrap_item.reference_name in scio_details
-            ]
-            for scrap_item in scrap_items:
-                qty = flt(flt(scrap_item.produced_qty, 3) - flt(scrap_item.delivered_qty, 3), 3)
-                if qty > 0:
-                    items_dict = {
-                        scrap_item.item_code: {
-                            "qty": flt(flt(scrap_item.produced_qty, 3) - flt(scrap_item.delivered_qty, 3), 3),
-                            "from_warehouse": scrap_item.warehouse,
-                            "stock_uom": scrap_item.stock_uom,
-                            "scio_detail": scrap_item.name,
-                            "is_scrap_item": 1,
-                        }
-                    }
-
-                    stock_entry.add_to_stock_entry_detail(items_dict)
-
-        if target_doc:
-            return stock_entry
-        else:
-            return stock_entry.as_dict()
+        if target_doc is not None:
+            return dn
+        return dn.as_dict()
