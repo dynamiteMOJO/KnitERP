@@ -220,6 +220,16 @@ class TransactionDesk {
                 is_job_work: true,
                 is_job_work_in: true,
             },
+            'scio-delivery': {
+                label: __('SCIO Delivery'),
+                icon: 'fa-truck',
+                color: '#00897b',
+                group: 'stock',
+                doctype: 'Delivery Note',
+                has_items: false,
+                has_tax: false,
+                is_scio_delivery: true,
+            },
             'job-work-out': {
                 label: __('Job Work Out'),
                 icon: 'fa-sign-out',
@@ -582,7 +592,9 @@ class TransactionDesk {
             `;
         }
 
-        if (cfg.has_items && cfg.is_job_work) {
+        if (cfg.is_scio_delivery) {
+            html += this.render_scio_delivery_table_html();
+        } else if (cfg.has_items && cfg.is_job_work) {
             html += this.render_job_work_table_html();
         } else if (cfg.has_items) {
             html += this.render_item_table_html();
@@ -936,6 +948,18 @@ class TransactionDesk {
                 });
             }
 
+            // SCIO Delivery: fetch deliverable items when SCIO is selected
+            if (f.fieldname === 'scio_name' && cfg.is_scio_delivery) {
+                control.$input && control.$input.on('awesomplete-selectcomplete', () => {
+                    setTimeout(() => this.on_scio_selected(), 50);
+                });
+                control.$input && control.$input.on('change', () => {
+                    setTimeout(() => {
+                        if (!control.get_value()) this.on_scio_cleared();
+                    }, 100);
+                });
+            }
+
             // Stock Entry purpose: show/hide transport and JW fields
             if (f.fieldname === 'purpose' && cfg.is_stock_entry) {
                 const toggle_transport = () => {
@@ -950,6 +974,71 @@ class TransactionDesk {
                 control.$input && control.$input.on('change', () => setTimeout(toggle_transport, 50));
             }
         });
+    }
+
+    async on_scio_selected() {
+        const scio_name = this.get_field_value('scio_name');
+        if (!scio_name) return;
+
+        try {
+            const preview = await frappe.xcall(
+                'kniterp.api.production_wizard.get_scio_delivery_preview',
+                { scio_name }
+            );
+
+            const $table = this.page.main.find('#td-scio-items-table');
+            const $hint = this.page.main.find('#td-scio-hint');
+            const $rows = this.page.main.find('#td-scio-item-rows');
+            $rows.empty();
+
+            const items = preview.items || [];
+            if (!items.length) {
+                $table.hide();
+                $hint.text(__('No items ready for delivery in this SCIO.')).show();
+                this._scio_delivery_preview = null;
+                this._scio_deliverable_items = null;
+                return;
+            }
+
+            $hint.hide();
+            items.forEach((item, idx) => {
+                const batch_info = item.has_batch_no
+                    ? `<div class="text-muted small">${(item.batches || []).length} ${__('batches available')}</div>`
+                    : '';
+                $rows.append(`
+                    <tr>
+                        <td>${idx + 1}</td>
+                        <td>
+                            <a href="/app/item/${encodeURIComponent(item.item_code)}" target="_blank">
+                                ${frappe.utils.escape_html(item.item_code)}
+                            </a>
+                            <div class="text-muted small">${frappe.utils.escape_html(item.item_name)}</div>
+                            ${batch_info}
+                        </td>
+                        <td class="font-weight-bold">${flt(item.qty, 3)} ${frappe.utils.escape_html(item.uom)}</td>
+                        <td>${flt(item.produced_qty, 3)}</td>
+                        <td>${flt(item.delivered_qty, 3)}</td>
+                        <td class="text-muted small">${frappe.utils.escape_html(item.warehouse || '')}</td>
+                    </tr>
+                `);
+            });
+            $table.show();
+
+            this._scio_delivery_preview = preview;
+            this._scio_deliverable_items = items;
+        } catch (e) {
+            frappe.msgprint(__('Failed to fetch SCIO items: ') + e.message);
+        }
+    }
+
+    on_scio_cleared() {
+        this.page.main.find('#td-scio-items-table').hide();
+        this.page.main.find('#td-scio-hint')
+            .text(__('Select a Subcontracting Inward Order above to see deliverable items.'))
+            .show();
+        this.page.main.find('#td-scio-item-rows').empty();
+        this._scio_deliverable_items = null;
+        this._scio_delivery_preview = null;
     }
 
     async on_return_against_change() {
@@ -1401,9 +1490,26 @@ class TransactionDesk {
             });
         }
 
+        // SCIO Delivery: SCIO selector (no party field, no items — items come from SCIO)
+        if (cfg.is_scio_delivery) {
+            fields.push({
+                fieldname: 'scio_name',
+                fieldtype: 'Link',
+                options: 'Subcontracting Inward Order',
+                label: __('Subcontracting Inward Order'),
+                reqd: 1,
+                get_query: () => ({
+                    filters: {
+                        docstatus: 1,
+                        status: ['in', ['Produced', 'Ongoing']],
+                    }
+                }),
+            });
+        }
+
         // Transport / e-Way Bill fields for dispatch and receipt types
         // For stock-entry, initially hidden — shown only when purpose = "Send to Subcontractor"
-        if (['delivery-note', 'purchase-receipt'].includes(this.current_type) || cfg.is_stock_entry) {
+        if (['delivery-note', 'purchase-receipt'].includes(this.current_type) || cfg.is_stock_entry || cfg.is_scio_delivery) {
             const hide_for_se = cfg.is_stock_entry;
             fields.push({ fieldtype: 'Section Break', label: __('Transport Details'), collapsible: 1,
                 fieldname: 'transport_section', td_initially_hidden: hide_for_se });
@@ -1596,7 +1702,32 @@ class TransactionDesk {
         `;
     }
 
-    // ─── Job Work Item Table ─────────────────────────────────
+    // ─── SCIO Delivery Items Table (read-only, populated from SCIO) ──
+    render_scio_delivery_table_html() {
+        return `
+            <div class="td-item-table mt-4" id="td-scio-items-section">
+                <h6 class="mb-2"><i class="fa fa-cube mr-1"></i>${__('Deliverable Items')}</h6>
+                <div class="text-muted small mb-2" id="td-scio-hint">
+                    ${__('Select a Subcontracting Inward Order above to see deliverable items.')}
+                </div>
+                <table class="table table-bordered td-items-table" id="td-scio-items-table" style="display: none;">
+                    <thead>
+                        <tr>
+                            <th style="width: 5%">#</th>
+                            <th style="width: 35%">${__('Item')}</th>
+                            <th style="width: 15%">${__('Deliverable Qty')}</th>
+                            <th style="width: 15%">${__('Produced')}</th>
+                            <th style="width: 15%">${__('Already Delivered')}</th>
+                            <th style="width: 15%">${__('Warehouse')}</th>
+                        </tr>
+                    </thead>
+                    <tbody id="td-scio-item-rows"></tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    // ─── Job Work Item Table ───────────────────���─────────────
     render_job_work_table_html() {
         return `
             <div class="td-item-table mt-4">
@@ -2826,6 +2957,13 @@ class TransactionDesk {
             }
         }
 
+        // SCIO Delivery: must have deliverable items
+        if (cfg.is_scio_delivery) {
+            if (!this._scio_deliverable_items || !this._scio_deliverable_items.length) {
+                errors.push(__('No deliverable items found. Select a valid SCIO with produced goods.'));
+            }
+        }
+
         // Items validation
         if (cfg.has_items) {
             const valid_items = this.item_rows.filter(r => r && r.item_ctrl.get_value());
@@ -2876,6 +3014,13 @@ class TransactionDesk {
             return;
         }
 
+        // SCIO Delivery with batch items — show batch/package dialog first
+        const cfg = this.current_config;
+        if (cfg.is_scio_delivery && this._scio_delivery_preview && this._scio_delivery_preview.has_batch_items) {
+            this._show_td_scio_batch_dialog();
+            return;
+        }
+
         // Ask: Submit or Draft?
         const d = new frappe.ui.Dialog({
             title: __('Create {0}', [this.current_config.label]),
@@ -2897,6 +3042,190 @@ class TransactionDesk {
             },
         });
         d.show();
+    }
+
+    _show_td_scio_batch_dialog() {
+        const self = this;
+        const preview = this._scio_delivery_preview;
+
+        // Build per-item batch tables + package fields (same structure as PW)
+        let items_html = '';
+        preview.items.forEach((item, idx) => {
+            items_html += `
+                <div class="mb-3" data-idx="${idx}" data-scio-detail="${item.scio_detail}"
+                     style="border:1px solid var(--border-color); border-radius:6px; padding:12px;">
+                    <div class="d-flex justify-content-between align-items-start mb-2">
+                        <div>
+                            <strong>${frappe.utils.escape_html(item.item_code)}</strong>
+                            <div class="text-muted small">${frappe.utils.escape_html(item.item_name)}</div>
+                        </div>
+                    </div>
+                    <div class="d-flex flex-wrap mb-2" style="gap:12px; font-size:12px; color:var(--text-muted);">
+                        <span><strong>${__('To Deliver')}:</strong> ${flt(item.qty, 3)} ${item.uom}</span>
+                    </div>`;
+
+            if (item.has_batch_no && item.batches && item.batches.length) {
+                items_html += `
+                    <table class="table table-bordered table-sm mb-2">
+                        <thead class="thead-light">
+                            <tr>
+                                <th>${__('Batch')}</th>
+                                <th style="width:100px">${__('Available')}</th>
+                                <th style="width:120px">${__('Deliver Qty')}</th>
+                            </tr>
+                        </thead>
+                        <tbody>`;
+                let remaining_to_fill = flt(item.qty, 3);
+                let initial_total = 0;
+                item.batches.forEach((b, bidx) => {
+                    let prefill_qty = 0;
+                    if (remaining_to_fill > 0) {
+                        prefill_qty = Math.min(remaining_to_fill, flt(b.qty, 3));
+                        remaining_to_fill -= prefill_qty;
+                        initial_total += prefill_qty;
+                    }
+                    items_html += `
+                            <tr>
+                                <td><strong>${frappe.utils.escape_html(b.batch_no)}</strong></td>
+                                <td class="text-muted">${flt(b.qty, 3)} ${item.uom}</td>
+                                <td><input type="number" class="form-control form-control-sm td-scio-batch-qty"
+                                    data-idx="${idx}" data-bidx="${bidx}"
+                                    min="0" max="${flt(b.qty, 3)}" step="any" value="${prefill_qty}"></td>
+                            </tr>`;
+                });
+                items_html += `
+                        </tbody>
+                    </table>
+                    <div class="td-scio-batch-total text-right text-muted small" data-idx="${idx}">
+                        ${__('Selected')}: <strong class="td-scio-batch-total-qty">${flt(initial_total, 3)}</strong> / ${flt(item.qty, 3)} ${item.uom}
+                    </div>`;
+            }
+
+            // Package fields
+            items_html += `
+                    <hr class="my-2">
+                    <div class="d-flex align-items-center flex-wrap" style="gap:10px;">
+                        <div>
+                            <label class="small mb-0">${__('No. of Pkgs')}</label>
+                            <input type="number" class="form-control form-control-sm td-scio-pkgs-no" data-idx="${idx}"
+                                min="0" step="1" style="width:80px;">
+                        </div>
+                        <div>
+                            <label class="small mb-0">${__('Kind')}</label>
+                            <select class="form-control form-control-sm td-scio-pkgs-kind" data-idx="${idx}" style="width:110px;">
+                                <option value=""></option>
+                                <option value="Rolls">${__('Rolls')}</option>
+                                <option value="Bags">${__('Bags')}</option>
+                                <option value="Boxes">${__('Boxes')}</option>
+                                <option value="Other">${__('Other')}</option>
+                            </select>
+                        </div>
+                        <div class="td-scio-pkgs-other-wrap" data-idx="${idx}" style="display:none;">
+                            <label class="small mb-0">${__('Other Kind')}</label>
+                            <input type="text" class="form-control form-control-sm td-scio-pkgs-other" data-idx="${idx}" style="width:120px;">
+                        </div>
+                    </div>`;
+
+            items_html += `</div>`;
+        });
+
+        const context_html = `
+            <div class="mb-3" style="background:var(--control-bg); border:1px solid var(--border-color); border-radius:6px; padding:10px 14px;">
+                <div style="font-size:14px; font-weight:600;">${frappe.utils.escape_html(preview.customer_name)}</div>
+                <div class="text-muted small">
+                    <strong>${__('SCIO')}:</strong> ${preview.scio_name}&emsp;
+                    <strong>${__('SO')}:</strong> ${preview.sales_order}
+                </div>
+                ${preview.shipping_address_name
+                    ? `<div class="text-muted small mt-1"><strong>${__('Ship To')}:</strong> ${frappe.utils.escape_html(preview.shipping_address_name)}</div>`
+                    : ''}
+            </div>`;
+
+        const d = new frappe.ui.Dialog({
+            title: __('Select Batches & Packages'),
+            size: 'large',
+            fields: [
+                { fieldtype: 'HTML', fieldname: 'context_html', options: context_html },
+                { fieldtype: 'HTML', fieldname: 'items_html', options: items_html },
+            ],
+            primary_action_label: __('Create & Submit'),
+            primary_action: () => {
+                const delivery_items = self._collect_td_scio_batch_data(d, preview);
+                if (!delivery_items) return;
+                d.hide();
+                self._td_scio_delivery_items = delivery_items;
+                self.do_create(true);
+            },
+            secondary_action_label: __('Save as Draft'),
+            secondary_action: () => {
+                const delivery_items = self._collect_td_scio_batch_data(d, preview);
+                if (!delivery_items) return;
+                d.hide();
+                self._td_scio_delivery_items = delivery_items;
+                self.do_create(false);
+            },
+        });
+
+        d.show();
+
+        // Live total update
+        d.$wrapper.on('input', '.td-scio-batch-qty', function () {
+            const idx = $(this).data('idx');
+            let total = 0;
+            d.$wrapper.find(`.td-scio-batch-qty[data-idx="${idx}"]`).each(function () {
+                total += flt($(this).val());
+            });
+            d.$wrapper.find(`.td-scio-batch-total[data-idx="${idx}"] .td-scio-batch-total-qty`).text(flt(total, 3));
+        });
+
+        d.$wrapper.on('change', '.td-scio-pkgs-kind', function () {
+            const idx = $(this).data('idx');
+            d.$wrapper.find(`.td-scio-pkgs-other-wrap[data-idx="${idx}"]`)
+                .toggle($(this).val() === 'Other');
+        });
+    }
+
+    _collect_td_scio_batch_data(dialog, preview) {
+        const delivery_items = [];
+        let has_error = false;
+
+        preview.items.forEach((item, idx) => {
+            const entry = {
+                scio_detail: item.scio_detail,
+                item_code: item.item_code,
+                batches: [],
+                no_of_pkgs: cint(dialog.$wrapper.find(`.td-scio-pkgs-no[data-idx="${idx}"]`).val()),
+                kind_of_pkgs: dialog.$wrapper.find(`.td-scio-pkgs-kind[data-idx="${idx}"]`).val() || '',
+                kind_of_pkgs_other: dialog.$wrapper.find(`.td-scio-pkgs-other[data-idx="${idx}"]`).val() || '',
+            };
+
+            if (item.has_batch_no && item.batches && item.batches.length) {
+                let total = 0;
+                item.batches.forEach((b, bidx) => {
+                    const qty = flt(dialog.$wrapper.find(`.td-scio-batch-qty[data-idx="${idx}"][data-bidx="${bidx}"]`).val());
+                    if (qty > 0) {
+                        if (qty > flt(b.qty, 3) + 0.001) {
+                            frappe.msgprint(__('Batch {0}: qty {1} exceeds available {2}', [b.batch_no, qty, flt(b.qty, 3)]));
+                            has_error = true;
+                        }
+                        entry.batches.push({ batch_no: b.batch_no, qty: qty });
+                        total += qty;
+                    }
+                });
+                if (total <= 0 && !has_error) {
+                    frappe.msgprint(__('Please select at least one batch for {0}', [item.item_code]));
+                    has_error = true;
+                }
+                if (total > flt(item.qty, 3) + 0.001 && !has_error) {
+                    frappe.msgprint(__('Item {0}: total batch qty {1} exceeds deliverable {2}', [item.item_code, total, item.qty]));
+                    has_error = true;
+                }
+            }
+
+            delivery_items.push(entry);
+        });
+
+        return has_error ? null : delivery_items;
     }
 
     async do_create(submit) {
@@ -2999,6 +3328,12 @@ class TransactionDesk {
                     credit: flt(row.credit_ctrl.get_value()),
                 });
             });
+        }
+
+        // SCIO delivery: attach batch/package selections from dialog
+        if (cfg.is_scio_delivery && this._td_scio_delivery_items) {
+            data.delivery_items = this._td_scio_delivery_items;
+            this._td_scio_delivery_items = null;
         }
 
         return data;

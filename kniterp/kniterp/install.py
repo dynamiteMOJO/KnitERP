@@ -5,6 +5,7 @@ def after_migrate():
     setup_property_setters()
     setup_service_items()
     setup_salary_components()
+    setup_virtual_goods_warehouse()
     hide_unwanted_workspaces()
 
 
@@ -145,6 +146,33 @@ def setup_salary_components():
             comp.update(comp_data)
             comp.insert(ignore_permissions=True)
 
+    frappe.db.commit()
+
+
+def setup_virtual_goods_warehouse():
+    """Create Virtual Goods warehouse for direct delivery flows if not already configured."""
+    settings = frappe.get_single("KnitERP Settings")
+    if settings.virtual_goods_warehouse:
+        return
+
+    company = frappe.db.get_single_value("Global Defaults", "default_company")
+    if not company:
+        return
+
+    abbr = frappe.db.get_value("Company", company, "abbr")
+    wh_name = f"Virtual Goods - {abbr}"
+
+    if not frappe.db.exists("Warehouse", wh_name):
+        parent_wh = frappe.db.get_value("Warehouse", {"company": company, "is_group": 1, "parent_warehouse": ""}, "name")
+        wh = frappe.new_doc("Warehouse")
+        wh.warehouse_name = "Virtual Goods"
+        wh.company = company
+        wh.parent_warehouse = parent_wh
+        wh.insert(ignore_permissions=True)
+        wh_name = wh.name
+
+    settings.virtual_goods_warehouse = wh_name
+    settings.save(ignore_permissions=True)
     frappe.db.commit()
 
 

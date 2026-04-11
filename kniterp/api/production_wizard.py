@@ -518,7 +518,15 @@ def get_production_details(sales_order_item):
             sio_qty = flt(sio_item.qty)
             sio_delivered_qty = flt(sio_item.delivered_qty, 3)
             sio_status = frappe.db.get_value("Subcontracting Inward Order", sio_name, "status")
-            
+
+            # Fetch existing SCIO delivery notes (draft + submitted)
+            scio_delivery_notes = frappe.get_all(
+                "Delivery Note",
+                filters={"custom_subcontracting_inward_order": sio_name, "docstatus": ["!=", 2]},
+                fields=["name", "docstatus", "posting_date"],
+                order_by="creation asc"
+            )
+
             # Fetch SIO received items (Customer Provided Items)
             sio_received_items = frappe.get_all(
                 "Subcontracting Inward Order Received Item",
@@ -1080,6 +1088,7 @@ def get_production_details(sales_order_item):
         "sio_status": sio_status,
         "sio_qty": sio_qty,
         "sio_delivered_qty": sio_delivered_qty,
+        "scio_delivery_notes": scio_delivery_notes if sio_name else [],
         "bom_scio_compatible": bom_scio_compatible,
         "uom": soi.stock_uom,
         "billed_amt": soi.billed_amt,
@@ -2684,19 +2693,21 @@ def receive_subcontracted_goods(purchase_order, rate=None, supplier_delivery_not
 
 
 @frappe.whitelist()
-def create_direct_purchase_invoice(purchase_order, received_batches, rate=None, supplier_delivery_note=None):
+def create_direct_purchase_invoice(purchase_order, qty, rate=None, bill_no=None, bill_date=None,
+                                   posting_date=None, supplier_delivery_note=None, submit=False):
     """
-    Direct delivery path: create Purchase Invoice with update_stock=1.
-    Used when supplier ships FG directly to customer — no Subcontracting Receipt.
-    Mirrors batch/SABB logic from receive_subcontracted_goods.
+    Direct delivery path — job worker ships FG directly to our customer.
+    Step 1: Create + submit SCR to consume RM from JW Out and receive FG into
+            Virtual Goods warehouse (goods never physically came to us).
+    Step 2: Create PI for the service item (job work charge, no stock).
+    SCR on_submit hook auto-updates JC manufactured_qty/consumed_qty.
+    SCR also provides ITC-04 Table 5A source data for manual Table 5C reporting.
     """
     require_production_write_access("create direct delivery purchase invoice")
 
-    if isinstance(received_batches, str):
-        received_batches = json.loads(received_batches)
-
-    if not received_batches:
-        frappe.throw(_("No received batches provided"))
+    qty = flt(qty, 3)
+    if not qty:
+        frappe.throw(_("Qty is required"))
 
     po = frappe.get_doc("Purchase Order", purchase_order)
     if po.docstatus != 1:
@@ -2714,84 +2725,126 @@ def create_direct_purchase_invoice(purchase_order, received_batches, rate=None, 
         frappe.msgprint(_("Opening existing Draft Purchase Invoice {0}").format(existing_draft))
         return existing_draft
 
-    # Get FG warehouse from Job Card → Work Order
-    job_card = frappe.db.get_value("Purchase Order Item", {"parent": purchase_order}, "job_card")
-    fg_warehouse = None
-    if job_card:
-        wo_name = frappe.db.get_value("Job Card", job_card, "work_order")
-        if wo_name:
-            fg_warehouse = frappe.db.get_value("Work Order", wo_name, "fg_warehouse")
-    if not fg_warehouse:
-        frappe.throw(_("Could not determine FG warehouse from Job Card / Work Order"))
+    sco_name = frappe.db.get_value(
+        "Subcontracting Order", {"purchase_order": purchase_order, "docstatus": 1}, "name"
+    )
+    if not sco_name:
+        frappe.throw(_("No submitted Subcontracting Order found for Purchase Order {0}").format(purchase_order))
 
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+    settings = KnitERPSettings.get_settings()
+    virtual_wh = settings.get("virtual_goods_warehouse")
+    if not virtual_wh:
+        frappe.throw(_("Virtual Goods Warehouse not configured in KnitERP Settings"))
+
+    # --- Step 1: SCR to consume RM and receive FG into Virtual Goods warehouse ---
+    existing_scr = frappe.db.get_value(
+        "Subcontracting Receipt Item",
+        {"subcontracting_order": sco_name, "docstatus": ["!=", 2]},
+        "parent"
+    )
+    if not existing_scr:
+        from erpnext.subcontracting.doctype.subcontracting_order.subcontracting_order import (
+            make_subcontracting_receipt
+        )
+        scr_dict = make_subcontracting_receipt(sco_name)
+        scr = frappe.get_doc(scr_dict)
+
+        if supplier_delivery_note:
+            scr.supplier_delivery_note = supplier_delivery_note
+
+        # Compute scale ratio: dialog qty vs full SCO FG qty
+        # Used to proportionally scale RM consumed_qty in supplied_items
+        original_fg_qty = flt(scr.items[0].qty) if scr.items else qty
+        scale_ratio = flt(qty / original_fg_qty, 9) if original_fg_qty else 1.0
+
+        created_batches = []
+        try:
+            for row in scr.items:
+                if row.is_scrap_item:
+                    continue
+
+                has_batch = frappe.db.get_value("Item", row.item_code, "has_batch_no")
+                if has_batch:
+                    batch_no = f"DIRECT-{purchase_order}"
+                    if ensure_batch_exists(batch_no=batch_no, item_code=row.item_code, source_type="Supplier"):
+                        created_batches.append(batch_no)
+
+                    sabb = frappe.new_doc("Serial and Batch Bundle")
+                    sabb.item_code = row.item_code
+                    sabb.warehouse = virtual_wh
+                    sabb.type_of_transaction = "Inward"
+                    sabb.voucher_type = "Subcontracting Receipt"
+                    sabb.has_batch_no = 1
+                    sabb.company = scr.company
+                    sabb.append("entries", {"batch_no": batch_no, "qty": qty, "warehouse": virtual_wh})
+                    sabb.insert(ignore_permissions=True)
+
+                    row.use_serial_batch_fields = 0
+                    row.serial_and_batch_bundle = sabb.name
+                    row.serial_no = None
+                    row.batch_no = None
+
+                row.qty = qty
+                row.warehouse = virtual_wh
+
+            # Scale RM consumed_qty proportionally so it doesn't exceed what was actually sent
+            for rm in scr.supplied_items:
+                rm.consumed_qty = flt(flt(rm.consumed_qty, 3) * scale_ratio, 3)
+
+            scr.set_missing_values()
+
+            # Populate doc_references for ITC-04 original challan linkage
+            sent_stes = frappe.get_all("Stock Entry", filters={
+                "purpose": "Send to Subcontractor",
+                "subcontracting_order": sco_name,
+                "docstatus": 1
+            }, pluck="name")
+            for ste_name in sent_stes:
+                scr.append("doc_references", {"link_doctype": "Stock Entry", "link_name": ste_name})
+
+            scr.insert()
+
+            for row in scr.items:
+                if row.serial_and_batch_bundle:
+                    frappe.db.set_value(
+                        "Serial and Batch Bundle", row.serial_and_batch_bundle,
+                        {"voucher_no": scr.name, "voucher_detail_no": row.name}
+                    )
+
+            scr.submit()
+
+        except Exception:
+            for b in created_batches:
+                try:
+                    frappe.delete_doc("Batch", b, ignore_permissions=True, force=1)
+                except Exception:
+                    pass
+            raise
+
+    # --- Step 2: PI for the job work service charge ---
     from erpnext.buying.doctype.purchase_order.purchase_order import make_purchase_invoice
     pi = make_purchase_invoice(purchase_order)
-    pi.update_stock = 1
+    pi.update_stock = 0
     pi.is_return = 0
-    if supplier_delivery_note:
-        pi.supplier_delivery_note = supplier_delivery_note
+    if bill_no:
+        pi.bill_no = bill_no
+    if bill_date:
+        pi.bill_date = bill_date
+    if posting_date:
+        pi.posting_date = posting_date
 
-    created_batches = []
-    try:
-        fg_items = [item for item in pi.items if not getattr(item, 'is_fixed_asset', False)]
-        if len(fg_items) != 1:
-            frappe.throw(_("Expected exactly one item in Purchase Invoice for subcontracting PO {0}, got {1}").format(
-                purchase_order, len(fg_items)))
-        item = fg_items[0]
-
-        total_qty = 0
-        sabb = frappe.new_doc("Serial and Batch Bundle")
-        sabb.item_code = item.item_code
-        sabb.warehouse = fg_warehouse
-        sabb.type_of_transaction = "Inward"
-        sabb.voucher_type = "Purchase Invoice"
-        sabb.has_batch_no = 1
-        sabb.company = pi.company
-
-        for batch in received_batches:
-            batch_no = batch.get("batch_no")
-            qty = flt(batch.get("qty"), 3)
-            if ensure_batch_exists(batch_no=batch_no, item_code=item.item_code, source_type="Supplier"):
-                created_batches.append(batch_no)
-            sabb.append("entries", {"batch_no": batch_no, "qty": qty, "warehouse": fg_warehouse})
-            total_qty += qty
-
-        sabb.insert(ignore_permissions=True)
-
-        item.qty = total_qty
-        item.warehouse = fg_warehouse
-        item.use_serial_batch_fields = 0
-        item.serial_and_batch_bundle = sabb.name
+    for item in pi.items:
+        item.qty = qty
         if rate and flt(rate) > 0:
             item.rate = flt(rate, 2)
 
-        pi.set_missing_values()
-        pi.insert()
+    pi.set_missing_values()
+    pi.insert()
 
-        # Update SABB with assigned voucher references
-        for pi_item in pi.items:
-            if pi_item.serial_and_batch_bundle:
-                frappe.db.set_value(
-                    "Serial and Batch Bundle",
-                    pi_item.serial_and_batch_bundle,
-                    {"voucher_no": pi.name, "voucher_detail_no": pi_item.name}
-                )
+    if frappe.utils.cint(submit):
+        pi.submit()
 
-        # Update Job Card manufactured_qty to mirror what SCR doc_event would do
-        if job_card:
-            total_received = sum(flt(b.get("qty"), 3) for b in received_batches)
-            jc_doc = frappe.get_doc("Job Card", job_card)
-            jc_doc.db_set("manufactured_qty", flt(total_received, 3), update_modified=False)
-
-    except Exception:
-        for b in created_batches:
-            try:
-                frappe.delete_doc("Batch", b, ignore_permissions=True, force=1)
-            except Exception:
-                pass
-        raise
-
-    frappe.msgprint(_("Purchase Invoice {0} created (direct delivery)").format(pi.name))
     return pi.name
 
 
@@ -2814,14 +2867,16 @@ def create_direct_sales_invoice(job_card):
     if not wo.sales_order:
         frappe.throw(_("Work Order {0} has no linked Sales Order").format(wo.name))
 
-    # manufactured_qty set by create_direct_purchase_invoice
+    # manufactured_qty set by SCR on_submit hook (triggered by create_direct_purchase_invoice)
     received_qty = flt(jc.manufactured_qty, 3)
     if received_qty <= 0:
         frappe.throw(_("No received quantity on Job Card {0}. Create Purchase Invoice first.").format(job_card))
 
-    fg_warehouse = wo.fg_warehouse
-    if not fg_warehouse:
-        frappe.throw(_("FG Warehouse not set on Work Order {0}").format(wo.name))
+    from kniterp.kniterp.doctype.kniterp_settings.kniterp_settings import KnitERPSettings
+    settings = KnitERPSettings.get_settings()
+    virtual_wh = settings.get("virtual_goods_warehouse")
+    if not virtual_wh:
+        frappe.throw(_("Virtual Goods Warehouse not configured in KnitERP Settings"))
 
     # Check for existing draft SI (direct path — no dn_detail)
     existing_draft = frappe.db.get_value(
@@ -2854,7 +2909,7 @@ def create_direct_sales_invoice(job_card):
     for item in si.items:
         if item.so_detail == wo.sales_order_item:
             item.qty = pending_qty
-            item.warehouse = fg_warehouse
+            item.warehouse = virtual_wh
             item.dn_detail = None
             item.delivery_note = None
         else:
@@ -3619,6 +3674,314 @@ def create_delivery_note(sales_order, items=None, transport_args=None):
 
 
 @frappe.whitelist()
+def get_scio_delivery_preview(scio_name):
+    """Return preview data for the SCIO delivery dialog.
+
+    Returns deliverable items with available batches, quantities, and
+    addresses from the linked subcontracted Sales Order so the user can
+    choose which batches to deliver and enter package details.
+    """
+    require_production_write_access("view SCIO delivery preview")
+
+    scio = frappe.get_doc("Subcontracting Inward Order", scio_name)
+
+    so_data = frappe.db.get_value(
+        "Sales Order", scio.sales_order,
+        ["customer", "customer_name", "company",
+         "shipping_address_name", "customer_address", "company_address"],
+        as_dict=True,
+    )
+    if not so_data:
+        frappe.throw(_("Sales Order {0} not found for SCIO {1}").format(
+            scio.sales_order, scio_name))
+
+    allow_over = frappe.get_single_value(
+        "Selling Settings", "allow_delivery_of_overproduced_qty"
+    )
+
+    items = []
+    has_batch_items = False
+    for fg_item in scio.items:
+        produced_limit = flt(fg_item.produced_qty, 3)
+        if not allow_over:
+            produced_limit = flt(min(flt(fg_item.qty, 3), produced_limit), 3)
+
+        deliverable_qty = flt(produced_limit - flt(fg_item.delivered_qty, 3), 3)
+        if deliverable_qty <= 0:
+            continue
+
+        has_batch = cint(frappe.get_cached_value("Item", fg_item.item_code, "has_batch_no"))
+        item_name = frappe.get_cached_value("Item", fg_item.item_code, "item_name") or fg_item.item_code
+
+        batches = []
+        if has_batch:
+            has_batch_items = True
+            warehouse = fg_item.delivery_warehouse
+            if warehouse:
+                batches = [
+                    b for b in get_available_batches(fg_item.item_code, warehouse=warehouse)
+                    if flt(b.get("qty"), 3) > 0
+                ]
+
+        items.append({
+            "item_code": fg_item.item_code,
+            "item_name": item_name,
+            "qty": deliverable_qty,
+            "produced_qty": flt(fg_item.produced_qty, 3),
+            "delivered_qty": flt(fg_item.delivered_qty, 3),
+            "warehouse": fg_item.delivery_warehouse,
+            "uom": fg_item.stock_uom,
+            "has_batch_no": has_batch,
+            "scio_detail": fg_item.name,
+            "batches": batches,
+        })
+
+    if not items:
+        frappe.throw(_("No items ready for delivery in SCIO {0}. Produce goods first.").format(scio_name))
+
+    return {
+        "scio_name": scio_name,
+        "sales_order": scio.sales_order,
+        "customer": so_data.customer,
+        "customer_name": so_data.customer_name,
+        "company": so_data.company,
+        "shipping_address_name": so_data.shipping_address_name or "",
+        "customer_address": so_data.customer_address or "",
+        "company_address": so_data.company_address or "",
+        "has_batch_items": has_batch_items,
+        "items": items,
+    }
+
+
+@frappe.whitelist()
+def create_scio_delivery_note(scio_name, transport_args=None, delivery_items=None):
+    """Create a Delivery Note to dispatch finished goods back to the customer
+    for a Subcontracting Inward Order (SCIO).
+
+    When *delivery_items* is provided (from the delivery dialog), uses the
+    user-specified batch allocations and package details instead of FIFO
+    auto-pick.  Addresses are sourced from the linked Sales Order.
+    """
+    require_production_write_access("create SCIO delivery notes")
+
+    if isinstance(delivery_items, str):
+        delivery_items = json.loads(delivery_items)
+
+    # Check for existing draft DN for this SCIO
+    existing_draft = frappe.db.get_value(
+        "Delivery Note",
+        {"custom_subcontracting_inward_order": scio_name, "docstatus": 0},
+        "name",
+    )
+    if existing_draft:
+        frappe.msgprint(_("Opening existing Draft Delivery Note {0}").format(existing_draft))
+        return existing_draft
+
+    scio = frappe.get_doc("Subcontracting Inward Order", scio_name)
+
+    # Get customer, company, and addresses from linked Sales Order
+    so_data = frappe.db.get_value(
+        "Sales Order", scio.sales_order,
+        ["customer", "company",
+         "shipping_address_name", "customer_address", "company_address", "custom_shipping_party"],
+        as_dict=True,
+    )
+    if not so_data:
+        frappe.throw(_("Sales Order {0} not found for SCIO {1}").format(
+            scio.sales_order, scio_name))
+
+    customer = so_data.customer
+    company = so_data.company
+
+    default_expense_account = frappe.get_value("Company", company, "default_expense_account")
+
+    # Build a map of user-specified items keyed by scio_detail
+    user_item_map = {}
+    if delivery_items:
+        for di in delivery_items:
+            user_item_map[di["scio_detail"]] = di
+
+    # Calculate deliverable quantities
+    allow_over = frappe.get_single_value("Selling Settings", "allow_delivery_of_overproduced_qty")
+
+    items_to_deliver = []
+    for fg_item in scio.items:
+        user_item = user_item_map.get(fg_item.name)
+
+        if delivery_items and not user_item:
+            # User specified items but this one wasn't included — skip
+            continue
+
+        produced_limit = flt(fg_item.produced_qty, 3)
+        if not allow_over:
+            produced_limit = flt(min(flt(fg_item.qty, 3), produced_limit), 3)
+
+        max_qty = flt(produced_limit - flt(fg_item.delivered_qty, 3), 3)
+        if max_qty <= 0:
+            continue
+
+        if user_item and user_item.get("batches"):
+            # User-specified batch allocations — qty is sum of batch qtys
+            qty = flt(sum(flt(b.get("qty", 0), 3) for b in user_item["batches"]), 3)
+            if qty <= 0:
+                continue
+            if qty > max_qty + 0.001:
+                frappe.throw(
+                    _("Item {0}: requested qty {1} exceeds deliverable qty {2}").format(
+                        fg_item.item_code, qty, max_qty
+                    )
+                )
+        elif user_item:
+            # User specified item but no batches — use max available
+            qty = max_qty
+        else:
+            qty = max_qty
+
+        items_to_deliver.append({
+            "item_code": fg_item.item_code,
+            "qty": qty,
+            "warehouse": fg_item.delivery_warehouse,
+            "stock_uom": fg_item.stock_uom,
+            "scio_detail": fg_item.name,
+            "sales_order": scio.sales_order,
+            "sales_order_item": fg_item.sales_order_item,
+            "expense_account": default_expense_account,
+            "user_batches": (user_item or {}).get("batches"),
+            "no_of_pkgs": cint((user_item or {}).get("no_of_pkgs")),
+            "kind_of_pkgs": (user_item or {}).get("kind_of_pkgs", ""),
+            "kind_of_pkgs_other": (user_item or {}).get("kind_of_pkgs_other", ""),
+        })
+
+    if not items_to_deliver:
+        frappe.throw(_("No items ready for delivery in SCIO {0}. Produce goods first.").format(scio_name))
+
+    # Create Delivery Note
+    dn = frappe.new_doc("Delivery Note")
+    dn.customer = customer
+    dn.company = company
+    if so_data.get("custom_shipping_party"):
+        dn.custom_shipping_party = so_data.custom_shipping_party
+    dn.custom_subcontracting_inward_order = scio_name
+    dn.posting_date = nowdate()
+
+    # Addresses from linked SO
+    if so_data.shipping_address_name:
+        dn.shipping_address_name = so_data.shipping_address_name
+    if so_data.customer_address:
+        dn.customer_address = so_data.customer_address
+    if so_data.company_address:
+        dn.company_address = so_data.company_address
+        dn.dispatch_address_name = so_data.company_address
+
+    for item_data in items_to_deliver:
+        dn.append("items", {
+            "item_code": item_data["item_code"],
+            "qty": item_data["qty"],
+            "warehouse": item_data["warehouse"],
+            "uom": item_data["stock_uom"],
+            "stock_uom": item_data["stock_uom"],
+            "custom_scio_detail": item_data["scio_detail"],
+            "custom_is_scio_delivery": 1,
+            "expense_account": item_data["expense_account"],
+            "custom_no_of_pkgs": item_data["no_of_pkgs"],
+            "custom_kind_of_pkgs": item_data["kind_of_pkgs"],
+            "custom_kind_of_pkgs_other": item_data["kind_of_pkgs_other"],
+        })
+
+    dn.run_method("set_missing_values")
+    dn.run_method("calculate_taxes_and_totals")
+
+    # Assign batches via SABB
+    for item in dn.items:
+        has_batch = frappe.get_cached_value("Item", item.item_code, "has_batch_no")
+        if not has_batch:
+            continue
+
+        warehouse = item.warehouse
+        if not warehouse:
+            continue
+
+        # Find matching item_data for user-specified batches
+        matched_data = next(
+            (d for d in items_to_deliver if d["scio_detail"] == item.custom_scio_detail),
+            None,
+        )
+        user_batches = (matched_data or {}).get("user_batches")
+
+        if user_batches:
+            # User-specified batch allocations
+            sabb = frappe.new_doc("Serial and Batch Bundle")
+            sabb.item_code = item.item_code
+            sabb.warehouse = warehouse
+            sabb.type_of_transaction = "Outward"
+            sabb.voucher_type = "Delivery Note"
+            sabb.has_batch_no = 1
+            sabb.company = dn.company
+
+            for b in user_batches:
+                b_qty = flt(b.get("qty", 0), 3)
+                if b_qty <= 0:
+                    continue
+                sabb.append("entries", {
+                    "batch_no": b["batch_no"],
+                    "qty": -abs(b_qty),
+                    "warehouse": warehouse,
+                })
+
+            if sabb.entries:
+                sabb.flags.ignore_permissions = True
+                sabb.insert()
+                item.serial_and_batch_bundle = sabb.name
+                item.use_serial_batch_fields = 0
+        else:
+            # Fallback: FIFO auto-pick
+            available_batches = get_available_batches(item.item_code, warehouse=warehouse)
+            valid_batches = [b for b in available_batches if flt(b.get("qty"), 3) > 0]
+            if not valid_batches:
+                continue
+
+            sabb = frappe.new_doc("Serial and Batch Bundle")
+            sabb.item_code = item.item_code
+            sabb.warehouse = warehouse
+            sabb.type_of_transaction = "Outward"
+            sabb.voucher_type = "Delivery Note"
+            sabb.has_batch_no = 1
+            sabb.company = dn.company
+
+            remaining = flt(item.qty, 3)
+            for batch in valid_batches:
+                if remaining <= 0:
+                    break
+                pick_qty = min(remaining, flt(batch["qty"], 3))
+                sabb.append("entries", {
+                    "batch_no": batch["batch_no"],
+                    "qty": -abs(pick_qty),
+                    "warehouse": warehouse,
+                })
+                remaining -= pick_qty
+
+            if sabb.entries:
+                sabb.flags.ignore_permissions = True
+                sabb.insert()
+                item.serial_and_batch_bundle = sabb.name
+                item.use_serial_batch_fields = 0
+
+    # Set transport/e-way bill fields
+    _set_transport_fields(dn, transport_args)
+
+    dn.insert()
+    
+    frappe.get_doc("Subcontracting Inward Order", scio_name).add_comment(
+        "Info", 
+        _("Created Delivery Note {0}").format(frappe.utils.get_link_to_form("Delivery Note", dn.name))
+    )
+
+    frappe.msgprint(_("Delivery Note {0} created for SCIO {1}").format(dn.name, scio_name))
+
+    return dn.name
+
+
+@frappe.whitelist()
 def get_consolidated_shortages(filters=None):
     """
     Get aggregated raw material shortages for multiple Sales Orders based on filters.
@@ -4275,7 +4638,7 @@ def create_scio_sales_invoice(sales_order_item):
     return si.name
 
 @frappe.whitelist()
-def create_subcontracting_inward_order(sales_order, sales_order_item):
+def create_subcontracting_inward_order(sales_order, sales_order_item, submit=0):
     """
     Create Subcontracting Inward Order for a Sales Order item.
     """
@@ -4401,7 +4764,10 @@ def create_subcontracting_inward_order(sales_order, sales_order_item):
             item.delivery_warehouse = delivery_wh_name
 
     sio.insert(ignore_permissions=True)
-    
+
+    if frappe.utils.cint(submit):
+        sio.submit()
+
     return sio.name
 @frappe.whitelist()
 def get_notes(sales_order_item):
@@ -5099,16 +5465,33 @@ def get_order_activity_log(sales_order_item):
             )
 
     # ── 9. Delivery Notes ──
+    # Standard DN: linked via so_detail
     dn_data = frappe.db.sql("""
         SELECT
-            dni.parent as dn_name, dn.posting_date, dni.qty,
+            dn.name as dn_name, dn.posting_date, SUM(dni.qty) as qty,
             dn.creation, dn.owner
         FROM `tabDelivery Note Item` dni
         INNER JOIN `tabDelivery Note` dn ON dn.name = dni.parent
         WHERE dni.so_detail = %s
         AND dn.docstatus != 2
+        GROUP BY dn.name
         ORDER BY dn.creation ASC
     """, sales_order_item, as_dict=True)
+
+    # SCIO DN: linked via custom_subcontracting_inward_order on the DN header
+    if sio_item:
+        scio_dn_data = frappe.db.sql("""
+            SELECT
+                dn.name as dn_name, dn.posting_date, SUM(dni.qty) as qty,
+                dn.creation, dn.owner
+            FROM `tabDelivery Note` dn
+            INNER JOIN `tabDelivery Note Item` dni ON dni.parent = dn.name
+            WHERE dn.custom_subcontracting_inward_order = %s
+            AND dn.docstatus != 2
+            GROUP BY dn.name
+            ORDER BY dn.creation ASC
+        """, sio_item.parent, as_dict=True)
+        dn_data = dn_data + scio_dn_data
 
     for dn in dn_data:
         _add(
@@ -6162,6 +6545,87 @@ def create_consolidated_receive_goods(supplier, items, supplier_delivery_note=No
             raise
 
     return created
+
+
+@frappe.whitelist()
+def get_receive_customer_rm_items(sio_name, rm_item_code=None):
+    """
+    Return pending RM receipt items for a SCIO, enriched with batch/serial tracking flags.
+    Pass rm_item_code to filter to a single RM item; omit for all pending items.
+    """
+    sio = frappe.get_doc("Subcontracting Inward Order", sio_name)
+    se_dict = sio.make_rm_stock_entry_inward()
+
+    items = se_dict.get("items", [])
+    if rm_item_code:
+        items = [item for item in items if item.get("item_code") == rm_item_code]
+
+    if not items:
+        frappe.throw(_("No pending RM items found for receipt"))
+
+    for item in items:
+        tracking = frappe.get_cached_value(
+            "Item", item["item_code"],
+            ["has_batch_no", "has_serial_no", "item_name"],
+            as_dict=True
+        ) or {}
+        item["has_batch_no"] = cint(tracking.get("has_batch_no"))
+        item["has_serial_no"] = cint(tracking.get("has_serial_no"))
+        item["item_name"] = tracking.get("item_name") or item["item_code"]
+
+    return items
+
+
+@frappe.whitelist()
+def create_receive_customer_rm_se(sio_name, items_data, posting_date=None, submit=False):
+    """
+    Create (and optionally submit) a 'Receive from Customer' Stock Entry.
+    items_data is a list of {scio_detail, item_code, qty, batch_no, serial_no}.
+    """
+    require_production_write_access("receive customer raw materials")
+
+    if isinstance(items_data, str):
+        items_data = frappe.parse_json(items_data)
+
+    sio = frappe.get_doc("Subcontracting Inward Order", sio_name)
+    se_dict = sio.make_rm_stock_entry_inward()
+    if posting_date:
+        se_dict["posting_date"] = posting_date
+
+    # Keep only items the user is receiving (matched by scio_detail)
+    scio_details = {d["scio_detail"] for d in items_data}
+    se_dict["items"] = [
+        i for i in se_dict.get("items", [])
+        if i.get("scio_detail") in scio_details
+    ]
+
+    ste = frappe.get_doc(se_dict)
+
+    # Apply user-provided qty, batch_no, serial_no (matched by scio_detail)
+    user_map = {d["scio_detail"]: d for d in items_data}
+    for row in ste.get("items"):
+        ud = user_map.get(row.get("scio_detail"))
+        if not ud:
+            continue
+        if ud.get("qty"):
+            row.qty = flt(ud["qty"])
+        if ud.get("batch_no"):
+            batch_no = ud["batch_no"]
+            if not frappe.db.exists("Batch", batch_no):
+                batch = frappe.new_doc("Batch")
+                batch.batch_id = batch_no
+                batch.item = row.item_code
+                batch.source_type = "Customer"
+                batch.insert(ignore_permissions=True)
+            row.batch_no = batch_no
+        if ud.get("serial_no"):
+            row.serial_no = ud["serial_no"]
+
+    ste.insert(ignore_permissions=True)
+    if frappe.utils.cint(submit):
+        ste.submit()
+
+    return ste.name
 
 
 # ── Consolidated Subcontracting: Receive Customer RM (SCIO) ─────────────────

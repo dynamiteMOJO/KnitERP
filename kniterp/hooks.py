@@ -79,7 +79,10 @@ doc_events = {
         "on_update_after_submit": "kniterp.api.transaction_parameters.sync_so_params"
     },
     "Delivery Note": {
-        "before_validate": "kniterp.api.shipping_party.validate_shipping_party"
+        "before_validate": "kniterp.api.shipping_party.validate_shipping_party",
+        "before_submit": "kniterp.subcontracting.on_dn_before_submit_clear_scio_sre",
+        "on_submit": "kniterp.subcontracting.on_dn_submit_update_scio_delivered",
+        "on_cancel": "kniterp.subcontracting.on_dn_cancel_update_scio_delivered",
     },
     "Sales Invoice": {
         "before_validate": "kniterp.api.shipping_party.validate_shipping_party"
@@ -165,7 +168,9 @@ web_include_css = "/assets/kniterp/css/kniterp.css"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {
+    "Subcontracting Inward Order": "public/js/subcontracting_inward_order.js"
+}
 doctype_list_js = {
     "Sales Order": "public/js/sales_order_list.js",
     "Purchase Order": "public/js/purchase_order_list.js",
@@ -310,9 +315,9 @@ after_migrate = "kniterp.kniterp.install.after_migrate"
 # each overriding function accepts a `data` argument;
 # generated from the base implementation of the doctype dashboard,
 # along with any modifications made in other Frappe apps
-# override_doctype_dashboards = {
-# 	"Task": "kniterp.task.get_dashboard_data"
-# }
+override_doctype_dashboards = {
+    "Subcontracting Inward Order": "kniterp.overrides.subcontracting_inward_order_dashboard.get_data"
+}
 
 # exempt linked doctypes from being automatically cancelled
 #

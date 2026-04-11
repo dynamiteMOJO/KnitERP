@@ -10,7 +10,7 @@ from frappe.utils import cint
 TRANSPORT_FIELDS = ('transporter', 'transporter_name', 'gst_transporter_id',
                     'vehicle_no', 'lr_no', 'lr_date', 'distance')
 
-SALES_TYPES = ("sales-order", "sales-invoice", "delivery-note", "credit-note", "job-work-in")
+SALES_TYPES = ("sales-order", "sales-invoice", "delivery-note", "credit-note", "job-work-in", "scio-delivery")
 PURCHASE_TYPES = ("purchase-order", "purchase-invoice", "purchase-receipt", "debit-note", "job-work-out")
 ITEM_TYPES = SALES_TYPES + PURCHASE_TYPES + ("stock-entry",)
 PAYMENT_TYPES = ("payment-receive", "payment-pay")
@@ -126,6 +126,38 @@ def get_defaults(voucher_type: str) -> dict:
 
 
 @frappe.whitelist()
+def get_scio_deliverable_items(scio_name: str) -> list:
+    """Return deliverable FG items for a Subcontracting Inward Order."""
+    from frappe.utils import flt
+
+    scio = frappe.get_doc("Subcontracting Inward Order", scio_name)
+    allow_over = frappe.get_single_value("Selling Settings", "allow_delivery_of_overproduced_qty")
+
+    items = []
+    for fg in scio.items:
+        produced_limit = flt(fg.produced_qty)
+        if not allow_over:
+            produced_limit = flt(min(flt(fg.qty, 3), flt(fg.produced_qty, 3)), 3)
+
+        deliverable = flt(produced_limit - flt(fg.delivered_qty, 3), 3)
+        if deliverable <= 0:
+            continue
+
+        items.append({
+            "item_code": fg.item_code,
+            "item_name": frappe.get_cached_value("Item", fg.item_code, "item_name") or fg.item_code,
+            "qty": deliverable,
+            "produced_qty": flt(fg.produced_qty, 3),
+            "delivered_qty": flt(fg.delivered_qty, 3),
+            "warehouse": fg.delivery_warehouse,
+            "uom": fg.stock_uom,
+            "scio_detail": fg.name,
+        })
+
+    return items
+
+
+@frappe.whitelist()
 def create_transaction(voucher_type: str, data, submit: bool = False) -> dict:
     """Create an ERPNext document from simplified payload. Optionally submit."""
     if isinstance(data, str):
@@ -149,14 +181,15 @@ def create_transaction(voucher_type: str, data, submit: bool = False) -> dict:
         "stock-entry": _create_stock_entry,
         "job-work-in": _create_job_work_in,
         "job-work-out": _create_job_work_out,
+        "scio-delivery": _create_scio_delivery,
     }
 
     creator = creators.get(voucher_type)
     if not creator:
         frappe.throw(_("Unknown voucher type: {0}").format(voucher_type))
 
-    # Job work creators return a dict result directly (multi-doc)
-    if voucher_type in ("job-work-in", "job-work-out"):
+    # Job work / SCIO delivery creators return a dict result directly
+    if voucher_type in ("job-work-in", "job-work-out", "scio-delivery"):
         result = creator(data, submit)
         frappe.db.commit()
         return result
@@ -298,6 +331,7 @@ def get_recent_transactions(voucher_type: str = None, limit: int = 10) -> list:
         "stock-entry": "Stock Entry",
         "job-work-in": "Subcontracting Inward Order",
         "job-work-out": "Subcontracting Order",
+        "scio-delivery": "Delivery Note",
     }
 
     if voucher_type and voucher_type in type_map:
@@ -314,6 +348,8 @@ def get_recent_transactions(voucher_type: str = None, limit: int = 10) -> list:
         elif voucher_type == "credit-note":
             doctype = "Sales Invoice"
             filters["is_return"] = 1
+        elif voucher_type == "scio-delivery":
+            filters["custom_subcontracting_inward_order"] = ["is", "set"]
 
         fields = ["name", "creation", "docstatus"]
 
@@ -1570,3 +1606,35 @@ def _get_or_create_customer_jw_warehouse(customer: str, company: str) -> str:
     new_wh.insert(ignore_permissions=True)
     frappe.msgprint(_("Created warehouse {0} for customer raw materials.").format(new_wh_name))
     return new_wh_name
+
+
+def _create_scio_delivery(data: dict, submit: bool = False):
+    """SCIO Delivery: Create a Delivery Note for dispatching SCIO finished goods to customer."""
+    from kniterp.api.production_wizard import create_scio_delivery_note
+
+    scio_name = data.get("scio_name")
+    if not scio_name:
+        frappe.throw(_("Subcontracting Inward Order is required for SCIO Delivery."))
+
+    transport_args = {
+        k: data.get(k)
+        for k in ('transporter', 'transporter_name', 'gst_transporter_id',
+                   'vehicle_no', 'lr_no', 'lr_date', 'distance')
+        if data.get(k)
+    } or None
+
+    delivery_items = data.get("delivery_items") or None
+
+    dn_name = create_scio_delivery_note(
+        scio_name, transport_args=transport_args, delivery_items=delivery_items
+    )
+
+    if submit:
+        dn = frappe.get_doc("Delivery Note", dn_name)
+        dn.submit()
+
+    return {
+        "name": dn_name,
+        "doctype": "Delivery Note",
+    }
+
